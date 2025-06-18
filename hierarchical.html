@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Game of Life - Hierarchical Layers</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #statusOverlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            display: flex;
+        }
+        #statusOverlay .status-item {
+            cursor: pointer;
+            margin-right: 10px;
+            user-select: none;
+        }
+        #statusOverlay .status-value {
+            font-weight: bold;
+        }
+        #speedControls {
+            position: absolute;
+            top: 40px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+        }
+        #speedControls span {
+            cursor: pointer;
+            margin: 0 5px;
+            user-select: none;
+        }
+        #speedControls .speed-value {
+            width: 20px;
+            text-align: center;
+        }
+        #speedControls .selected {
+            color: #00ff00;
+            font-weight: bold;
+        }
+        #layerControls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+        }
+        #layerControls .layer-toggle {
+            cursor: pointer;
+            margin: 0 5px;
+            user-select: none;
+            transition: all 0.2s ease;
+        }
+        #layerControls .layer-toggle.visible {
+            font-weight: bold;
+        }
+        #layerControls .layer-toggle:hover {
+            color: #00ff00;
+        }
+        #layerControls .hover-hint {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="statusOverlay">
+        <div class="status-item hierarchy-status">Hierarchy: <span class="status-value">OFF</span></div>
+        <div class="status-item running-status">Running: <span class="status-value">ON</span></div>
+    </div>
+    <div id="speedControls">
+        <span>Speed:</span>
+        <span class="speed-prev">&lt;</span>
+        <span class="speed-value selected">M</span>
+        <span class="speed-next">&gt;</span>
+    </div>
+    <div id="layerControls">
+        <div class="layer-label">Layers:</div>
+        <div class="hover-hint">(Hover to view)</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // RequestAnimationFrame polyfill
+        window.requestAnimationFrame = (function(){
+            return window.requestAnimationFrame ||
+                window.webkitRequestAnimationFrame ||
+                window.mozRequestAnimationFrame ||
+                window.oRequestAnimationFrame ||
+                window.msRequestAnimationFrame ||
+                function(callback) {
+                    window.setTimeout(callback, 1000/60);
+                };
+        })();
+        
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(100, 100, 100); // Pulled back to show the whole grid
+        
+        // Renderer setup
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        // Layer visibility settings
+        const layerVisibility = [];
+        let isHovering = false;
+        let hoverLayer = -1;
+        
+        // Speed settings
+        const speedSettings = {
+            'S': 2500,  // Slow - 1/5 normal speed (2500ms)
+            'M': 250,   // Medium - normal speed (250ms)
+            'F': 0      // Fast - as fast as possible
+        };
+        let currentSpeed = 'M';
+        let updateInterval = speedSettings[currentSpeed]; // milliseconds
+        
+        // Speed control elements
+        const speedValue = document.querySelector('.speed-value');
+        const speedPrev = document.querySelector('.speed-prev');
+        const speedNext = document.querySelector('.speed-next');
+        
+        // Speed control handlers
+        speedPrev.addEventListener('click', () => {
+            if (currentSpeed === 'M') {
+                setSpeed('S');
+            } else if (currentSpeed === 'F') {
+                setSpeed('M');
+            }
+        });
+        
+        speedNext.addEventListener('click', () => {
+            if (currentSpeed === 'S') {
+                setSpeed('M');
+            } else if (currentSpeed === 'M') {
+                setSpeed('F');
+            }
+        });
+        
+        function setSpeed(speed) {
+            currentSpeed = speed;
+            updateInterval = speedSettings[speed];
+            speedValue.textContent = speed;
+            
+            // Update selected state
+            speedValue.className = 'speed-value selected';
+        }
+        
+        // Hierarchy mode - initially OFF
+        let hierarchyEnabled = false;
+        // Simulation running state - initially ON
+        let simulationRunning = true;
+        
+        // Status control elements
+        const hierarchyStatus = document.querySelector('.hierarchy-status');
+        const runningStatus = document.querySelector('.running-status');
+        
+        // Status control handlers
+        hierarchyStatus.addEventListener('click', () => {
+            hierarchyEnabled = !hierarchyEnabled;
+            updateStatusDisplay();
+        });
+        
+        runningStatus.addEventListener('click', () => {
+            simulationRunning = !simulationRunning;
+            updateStatusDisplay();
+        });
+        
+        function updateStatusDisplay() {
+            const hierarchyValue = hierarchyStatus.querySelector('.status-value');
+            const runningValue = runningStatus.querySelector('.status-value');
+            
+            hierarchyValue.textContent = hierarchyEnabled ? 'ON' : 'OFF';
+            runningValue.textContent = simulationRunning ? 'ON' : 'OFF';
+        }
+        
+        // Raycaster for cell selection
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let shiftPressed = false;
+        
+        // Grid parameters
+        const baseGridSize = 128; // Doubled from 64 to 128 (highest resolution layer)
+        const cellSize = 1;
+        const layerGap = cellSize * 1.5; // Gap between layers
+        
+        // Calculate number of layers based on log2(baseGridSize)
+        const numLayers = Math.log2(baseGridSize);
+        console.log(`Creating ${numLayers} layers based on grid size ${baseGridSize}`);
+        
+        // Create array of grids, cells, and their properties
+        const layers = [];
+        
+        // Initialize layers
+        for (let i = 0; i < numLayers; i++) {
+            const layerSize = baseGridSize / Math.pow(2, i);
+            const yOffset = i * layerGap;
+            const cellScale = Math.pow(2, i);
+            
+            // Use same green color for all layers
+            const aliveColor = 0x00FF00; // Bright green
+            const deadColor = 0x444444;
+            
+            // Create grid for this layer
+            const grid = createEmptyGrid(layerSize);
+            randomizeGrid(grid);
+            
+            // Create cell meshes
+            const isTranslucent = i > 0; // All but base layer are translucent
+            const cells = createCellMeshes(grid, yOffset, cellSize * cellScale, isTranslucent, aliveColor, deadColor);
+            
+            // Add to layers array
+            layers.push({
+                grid: grid,
+                cells: cells,
+                size: layerSize,
+                yOffset: yOffset,
+                cellScale: cellScale,
+                aliveColor: aliveColor,
+                deadColor: deadColor,
+                isTranslucent: isTranslucent
+            });
+            
+            // Default all layers to visible
+            layerVisibility.push(true);
+        }
+        
+        // Create layer toggle controls
+        const layerControls = document.getElementById('layerControls');
+        for (let i = 0; i < numLayers; i++) {
+            const layerToggle = document.createElement('div');
+            layerToggle.className = 'layer-toggle visible';
+            layerToggle.textContent = i + 1;
+            layerToggle.dataset.layer = i;
+            
+            // Click to toggle visibility
+            layerToggle.addEventListener('click', (event) => {
+                const layerIndex = parseInt(event.target.dataset.layer);
+                layerVisibility[layerIndex] = !layerVisibility[layerIndex];
+                updateLayerToggles();
+                updateLayerVisibility();
+            });
+            
+            // Hover to show only that layer
+            layerToggle.addEventListener('mouseenter', (event) => {
+                isHovering = true;
+                hoverLayer = parseInt(event.target.dataset.layer);
+                updateLayerVisibility();
+            });
+            
+            layerToggle.addEventListener('mouseleave', () => {
+                isHovering = false;
+                hoverLayer = -1;
+                updateLayerVisibility();
+            });
+            
+            layerControls.appendChild(layerToggle);
+        }
+        
+        // Update layer toggle UI based on visibility state
+        function updateLayerToggles() {
+            const toggles = document.querySelectorAll('.layer-toggle');
+            for (let i = 0; i < toggles.length; i++) {
+                if (layerVisibility[i]) {
+                    toggles[i].classList.add('visible');
+                } else {
+                    toggles[i].classList.remove('visible');
+                }
+            }
+        }
+        
+        // Update Three.js mesh visibility based on layer settings
+        function updateLayerVisibility() {
+            for (let i = 0; i < layers.length; i++) {
+                const layer = layers[i];
+                // If hovering, only show the hover layer
+                // Otherwise, show based on toggle state
+                const isVisible = isHovering ? (i === hoverLayer) : layerVisibility[i];
+                
+                for (let x = 0; x < layer.size; x++) {
+                    for (let y = 0; y < layer.size; y++) {
+                        layer.cells[x][y].visible = isVisible;
+                        
+                        // When hovering, make the selected layer fully opaque
+                        if (isHovering && i === hoverLayer && layer.isTranslucent) {
+                            layer.cells[x][y].material.opacity = 1.0;
+                        } else if (layer.isTranslucent) {
+                            // Otherwise restore default opacity for translucent layers
+                            layer.cells[x][y].material.opacity = 0.7;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Add lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 15);
+        scene.add(directionalLight);
+        
+        // Animation loop
+        let lastUpdateTime = 0;
+        
+        // Orbit controls - moved before animate is called
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        
+        function animate(time) {
+            requestAnimationFrame(animate);
+            
+            // Update simulation at intervals
+            if (simulationRunning) {
+                if (currentSpeed === 'F') {
+                    // Fast mode: update every frame
+                    updateSimulation();
+                } else if (time - lastUpdateTime > updateInterval) {
+                    // Normal or slow mode: update at interval
+                    updateSimulation();
+                    lastUpdateTime = time;
+                }
+            }
+            
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        // Start animation
+        animate(0);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Track shift key state
+        window.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                // Randomize all grids
+                for (let i = 0; i < layers.length; i++) {
+                    randomizeGrid(layers[i].grid);
+                    updateCellMeshes(i);
+                }
+            }
+            if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+                shiftPressed = true;
+            }
+            if (event.code === 'KeyH') {
+                hierarchyEnabled = !hierarchyEnabled;
+                updateStatusDisplay();
+            }
+            if (event.code === 'KeyR') {
+                simulationRunning = !simulationRunning;
+                updateStatusDisplay();
+            }
+        });
+        
+        window.addEventListener('keyup', (event) => {
+            if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+                shiftPressed = false;
+            }
+        });
+        
+        // Handle mouse click to toggle cell state
+        window.addEventListener('click', (event) => {
+            if (shiftPressed) {
+                // Calculate mouse position in normalized device coordinates (-1 to +1)
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                // Update the picking ray with the camera and mouse position
+                raycaster.setFromCamera(mouse, camera);
+                
+                // Calculate objects intersecting the picking ray
+                const allCells = [];
+                
+                // Create array of all cell meshes to check for intersection
+                for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                    // Only include visible layers
+                    if (isHovering ? (layerIndex === hoverLayer) : layerVisibility[layerIndex]) {
+                        const layer = layers[layerIndex];
+                        for (let x = 0; x < layer.size; x++) {
+                            for (let y = 0; y < layer.size; y++) {
+                                allCells.push(layer.cells[x][y]);
+                            }
+                        }
+                    }
+                }
+                
+                const intersects = raycaster.intersectObjects(allCells);
+                
+                if (intersects.length > 0) {
+                    const selectedObject = intersects[0].object;
+                    
+                    // Find which cell was clicked
+                    let foundCell = false;
+                    
+                    for (let layerIndex = 0; layerIndex < layers.length && !foundCell; layerIndex++) {
+                        const layer = layers[layerIndex];
+                        for (let x = 0; x < layer.size && !foundCell; x++) {
+                            for (let y = 0; y < layer.size && !foundCell; y++) {
+                                if (layer.cells[x][y] === selectedObject) {
+                                    // Toggle the cell state
+                                    layer.grid[x][y] = layer.grid[x][y] ? 0 : 1;
+                                    updateCellMeshes(layerIndex);
+                                    foundCell = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Helper functions
+        function createEmptyGrid(size) {
+            const grid = [];
+            for (let x = 0; x < size; x++) {
+                grid[x] = [];
+                for (let y = 0; y < size; y++) {
+                    grid[x][y] = 0;
+                }
+            }
+            return grid;
+        }
+        
+        function randomizeGrid(grid) {
+            const size = grid.length;
+            for (let x = 0; x < size; x++) {
+                for (let y = 0; y < size; y++) {
+                    grid[x][y] = Math.random() > 0.7 ? 1 : 0;
+                }
+            }
+        }
+        
+        function createCellMeshes(grid, yOffset, size, isTranslucent, aliveColor, deadColor) {
+            const cells = [];
+            const gridSize = grid.length;
+            // Make each box 99% of its full size to create visible gaps between cells
+            const scaleFactor = 0.99;
+            const geometry = new THREE.BoxGeometry(
+                size * scaleFactor, 
+                cellSize * scaleFactor, 
+                size * scaleFactor
+            );
+            
+            // Calculate offset to center the grid
+            const offset = (gridSize * size) / 2;
+            
+            // For translucent layers, add a position offset in x and z to center over the corresponding lower cells
+            const positionOffset = size / 2;
+            
+            for (let x = 0; x < gridSize; x++) {
+                cells[x] = [];
+                for (let y = 0; y < gridSize; y++) {
+                    const material = new THREE.MeshLambertMaterial({
+                        color: grid[x][y] ? aliveColor : deadColor,
+                        transparent: isTranslucent,
+                        opacity: isTranslucent ? 0.7 : 1.0
+                    });
+                    
+                    const cube = new THREE.Mesh(geometry, material);
+                    cube.position.set(
+                        x * size - offset + positionOffset,
+                        yOffset,
+                        y * size - offset + positionOffset
+                    );
+                    
+                    scene.add(cube);
+                    cells[x][y] = cube;
+                }
+            }
+            
+            return cells;
+        }
+        
+        function updateCellMeshes(layerIndex) {
+            const layer = layers[layerIndex];
+            const grid = layer.grid;
+            const cells = layer.cells;
+            const gridSize = grid.length;
+            
+            for (let x = 0; x < gridSize; x++) {
+                for (let y = 0; y < gridSize; y++) {
+                    const color = grid[x][y] ? layer.aliveColor : layer.deadColor;
+                    cells[x][y].material.color.setHex(color);
+                }
+            }
+        }
+        
+        function updateSimulation() {
+            // Create new grids for each layer
+            const newGrids = layers.map(layer => createEmptyGrid(layer.size));
+            
+            // Update each layer starting from highest resolution (index 0)
+            for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                const layer = layers[layerIndex];
+                const grid = layer.grid;
+                const newGrid = newGrids[layerIndex];
+                const gridSize = layer.size;
+                
+                for (let x = 0; x < gridSize; x++) {
+                    for (let y = 0; y < gridSize; y++) {
+                        // Count neighbors in the same layer
+                        let neighbors = 0;
+                        for (let dx = -1; dx <= 1; dx++) {
+                            for (let dy = -1; dy <= 1; dy++) {
+                                if (dx === 0 && dy === 0) continue;
+                                
+                                const nx = (x + dx + gridSize) % gridSize;
+                                const ny = (y + dy + gridSize) % gridSize;
+                                
+                                neighbors += grid[nx][ny];
+                            }
+                        }
+                        
+                        if (hierarchyEnabled) {
+                            // Add parent influence if this isn't the top layer
+                            if (layerIndex < layers.length - 1) {
+                                const parentLayer = layers[layerIndex + 1];
+                                const parentSize = parentLayer.size;
+                                const px = Math.floor(x / (gridSize / parentSize));
+                                const py = Math.floor(y / (gridSize / parentSize));
+                                
+                                neighbors += parentLayer.grid[px][py];
+                            }
+                            
+                            // Add children influence if this isn't the bottom layer
+                            if (layerIndex > 0) {
+                                const childLayer = layers[layerIndex - 1];
+                                const childSize = childLayer.size;
+                                const ratio = childSize / gridSize; // How many child cells per this cell
+                                
+                                // Count alive cells in the corresponding block of child cells
+                                let aliveChildren = 0;
+                                
+                                for (let dx = 0; dx < ratio; dx++) {
+                                    for (let dy = 0; dy < ratio; dy++) {
+                                        const cx = x * ratio + dx;
+                                        const cy = y * ratio + dy;
+                                        
+                                        if (cx < childSize && cy < childSize) {
+                                            aliveChildren += childLayer.grid[cx][cy];
+                                        }
+                                    }
+                                }
+                                
+                                // Add children influence as one additional neighbor if 2+ children are active
+                                if (aliveChildren >= 2) {
+                                    neighbors += 1;
+                                }
+                            }
+                        }
+                        
+                        // Apply standard Game of Life rules
+                        const currentState = grid[x][y];
+                        if (currentState === 1) {
+                            // Survive with 2-3 neighbors
+                            newGrid[x][y] = (neighbors === 2 || neighbors === 3) ? 1 : 0;
+                        } else {
+                            // Born with exactly 3 neighbors
+                            newGrid[x][y] = (neighbors === 3) ? 1 : 0;
+                        }
+                    }
+                }
+            }
+            
+            // Copy new grids to the current grids and update visuals
+            for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                const layer = layers[layerIndex];
+                const newGrid = newGrids[layerIndex];
+                
+                // Copy grid data
+                for (let x = 0; x < layer.size; x++) {
+                    for (let y = 0; y < layer.size; y++) {
+                        layer.grid[x][y] = newGrid[x][y];
+                    }
+                }
+                
+                // Update visuals
+                updateCellMeshes(layerIndex);
+            }
+        }
+    </script>
+</body>
+</html>

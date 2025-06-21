@@ -366,6 +366,22 @@ main {
     margin-bottom: 1rem;
 }
 
+.patent-link {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    background-color: var(--primary-color);
+    color: var(--white);
+    border-radius: 4px;
+    font-weight: 500;
+    transition: var(--transition);
+}
+
+.patent-link:hover {
+    background-color: var(--accent-color);
+    color: var(--white);
+}
+
 /* Footer */
 footer {
     background-color: var(--accent-color);

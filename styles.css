@@ -223,6 +223,67 @@ main {
     gap: 2rem;
 }
 
+.service-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-bottom: 3rem;
+    flex-wrap: wrap;
+}
+
+.service-button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.5rem;
+    border-radius: 50px;
+    text-decoration: none;
+    font-weight: 600;
+    transition: var(--transition);
+    border: 2px solid transparent;
+}
+
+.service-button.substack {
+    background-color: #ff6719;
+    color: white;
+}
+
+.service-button.substack:hover {
+    background-color: #e55a15;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255, 103, 25, 0.3);
+}
+
+.service-button.medium {
+    background-color: #00ab6c;
+    color: white;
+}
+
+.service-button.medium:hover {
+    background-color: #009a5f;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 171, 108, 0.3);
+}
+
+.service-button.twitter {
+    background-color: #1da1f2;
+    color: white;
+}
+
+.service-button.twitter:hover {
+    background-color: #1a91da;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(29, 161, 242, 0.3);
+}
+
+.service-button i {
+    font-size: 1.2rem;
+}
+
+.service-button span {
+    font-size: 1rem;
+}
+
 .writing-card {
     background-color: var(--light-gray);
     padding: 1.5rem;

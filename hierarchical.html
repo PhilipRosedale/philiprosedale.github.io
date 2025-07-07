@@ -570,10 +570,7 @@
                                     }
                                 }
                                 
-                                // Add children influence as one additional neighbor if 2+ children are active
-                                if (aliveChildren >= 2) {
-                                    neighbors += 1;
-                                }
+                                neighbors += aliveChildren;
                             }
                         }
                         

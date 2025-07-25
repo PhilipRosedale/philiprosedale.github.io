@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Run Tracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    body { font-family: sans-serif; padding: 1em; background: #f7f7f7; }
+    h1 { font-size: 1.5em; }
+    #metrics p { font-size: 1.2em; margin: 0.5em 0; }
+    button { padding: 0.5em 1em; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h1>🏃‍♂️ Run Tracker</h1>
+  <div id="metrics">
+    <p>Distance: <span id="distance">0.00</span> km</p>
+    <p>Speed: <span id="speed">0.00</span> km/h</p>
+  </div>
+  <button onclick="startTracking()">Start Run</button>
+
+  <script>
+    let watchId, lastPos, totalDistance = 0, startTime;
+    let wakeLock = null;
+
+    // Haversine distance calculation
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371; // Earth radius in km
+      const toRad = deg => deg * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock was released');
+          });
+          console.log('Wake Lock is active');
+        }
+      } catch (err) {
+        console.warn('Wake Lock failed:', err);
+      }
+    }
+
+    function startTracking() {
+      if (!navigator.geolocation) {
+        alert("Geolocation not supported.");
+        return;
+      }
+
+      requestWakeLock();
+      startTime = Date.now();
+      totalDistance = 0;
+      lastPos = null;
+
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        if (lastPos) {
+          const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
+          totalDistance += d;
+          const elapsed = (Date.now() - startTime) / 3600000;
+          document.getElementById('distance').textContent = totalDistance.toFixed(2);
+          document.getElementById('speed').textContent = (totalDistance / elapsed).toFixed(2);
+        }
+        lastPos = { lat: latitude, lon: longitude };
+      }, err => {
+        console.error(err);
+        alert("Error getting location.");
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000
+      });
+    }
+
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</body>
+</html>

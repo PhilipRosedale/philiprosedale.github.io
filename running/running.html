@@ -52,7 +52,13 @@
 
     function startTracking() {
       if (!navigator.geolocation) {
-        alert("Geolocation not supported.");
+        alert("Geolocation not supported by this browser.");
+        return;
+      }
+
+      // Check if we're running on HTTPS or localhost
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        alert("Geolocation requires HTTPS or localhost. Please run this app on a local server (e.g., python -m http.server 8000) or deploy it to HTTPS.");
         return;
       }
 
@@ -72,8 +78,22 @@
         }
         lastPos = { lat: latitude, lon: longitude };
       }, err => {
-        console.error(err);
-        alert("Error getting location.");
+        console.error('Geolocation error:', err);
+        let errorMessage = "Error getting location: ";
+        switch(err.code) {
+          case err.PERMISSION_DENIED:
+            errorMessage += "Location permission denied. Please allow location access in your browser settings.";
+            break;
+          case err.POSITION_UNAVAILABLE:
+            errorMessage += "Location information unavailable. Please check your GPS/network connection.";
+            break;
+          case err.TIMEOUT:
+            errorMessage += "Location request timed out. Please try again.";
+            break;
+          default:
+            errorMessage += "Unknown error occurred.";
+        }
+        alert(errorMessage);
       }, {
         enableHighAccuracy: true,
         maximumAge: 1000,

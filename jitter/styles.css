@@ -63,7 +63,7 @@ h1 {
 }
 
 .controls {
-    flex: 0 0 450px;
+    flex: 0 0 500px;
     background: white;
     border-radius: 15px;
     padding: 25px;
@@ -252,8 +252,11 @@ h1 {
 }
 
 .info-section {
-    border-top: 2px solid #f0f0f0;
-    padding-top: 20px;
+    margin-top: 30px;
+    background: white;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
 }
 
 .info-section h3 {

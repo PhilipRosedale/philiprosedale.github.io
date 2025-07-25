@@ -59,19 +59,22 @@
                         </label>
                     </div>
                 </div>
-                
-                <div class="info-section">
-                    <h3>Instructions</h3>
-                    <p>This tool helps explore the perceptual threshold for detecting jitter in animated displays.</p>
-                    <ul>
-                        <li>The white dot rotates smoothly in a circle at the specified angular velocity</li>
-                        <li>When the frame number matches a "Frame Number" entry, the dot pauses for the specified "Delay" frames</li>
-                        <li>Adjust the frame numbers and delays to find the threshold where jitter becomes noticeable</li>
-                        <li>Use "Add Row" to add more jitter events</li>
-                        <li>Adjust angular velocity to change rotation speed (1.0 rad/s = ~1/6 rotation per second)</li>
-                    </ul>
-                </div>
             </div>
+        </div>
+        
+        <div class="info-section">
+            <h3>Instructions</h3>
+            <p>This tool helps explore the perceptual threshold for detecting jitter in animated displays.</p>
+            <ul>
+                <li>The white dot rotates smoothly in a circle at the specified angular velocity</li>
+                <li>When the frame number matches a "Frame Number" entry, the dot pauses for the specified "Delay" frames</li>
+                <li>Adjust the frame numbers and delays to find the threshold where jitter becomes noticeable</li>
+                <li>Use "Add Row" to add more jitter events</li>
+                <li>Adjust angular velocity to change rotation speed (1.0 rad/s = ~1/6 rotation per second)</li>
+                <li><strong>Normalized Jitter</strong> is calculated as: sum(abs(frame-to-frame difference)) / sum(frametimes)</li>
+                <li><strong>NFTV (Normalized Frame Time Variance)</strong> is calculated as: stdev(frametime) / mean(frametime)</li>
+                <li>Which statistic is a better fit for how jarring you find the experience?</li>
+            </ul>
         </div>
     </div>
     

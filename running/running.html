@@ -6,25 +6,181 @@
   <title>Run Tracker</title>
   <link rel="manifest" href="manifest.json" />
   <style>
-    body { font-family: sans-serif; padding: 1em; background: #f7f7f7; }
-    h1 { font-size: 1.5em; }
-    #metrics p { font-size: 1.2em; margin: 0.5em 0; }
-    button { padding: 0.5em 1em; font-size: 1em; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      padding: 2em; 
+      background: #f7f7f7; 
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { 
+      font-size: 2.5em; 
+      text-align: center;
+      margin-bottom: 1em;
+    }
+    .unit-toggle {
+      text-align: center;
+      margin-bottom: 1em;
+      padding: 1em;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 34px;
+      margin: 0 1em;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 34px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: #4CAF50;
+    }
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+    .unit-label {
+      font-size: 1.2em;
+      font-weight: 600;
+      color: #333;
+    }
+    #metrics { 
+      background: white;
+      padding: 2em;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      margin-bottom: 2em;
+    }
+    .metric {
+      font-size: 1.8em; 
+      margin: 1em 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5em 0;
+      border-bottom: 1px solid #eee;
+    }
+    .metric:last-child {
+      border-bottom: none;
+    }
+    .metric-label {
+      font-weight: 600;
+      color: #333;
+    }
+    .metric-value {
+      font-weight: 700;
+      color: #4CAF50;
+    }
+    .button-group {
+      display: flex;
+      gap: 1em;
+      justify-content: center;
+    }
+    button { 
+      padding: 1em 2em; 
+      font-size: 1.2em;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .start-btn {
+      background-color: #4CAF50;
+      color: white;
+    }
+    .start-btn:hover {
+      background-color: #45a049;
+      transform: translateY(-2px);
+    }
+    .stop-btn {
+      background-color: #f44336;
+      color: white;
+    }
+    .stop-btn:hover {
+      background-color: #da190b;
+      transform: translateY(-2px);
+    }
+    .stop-btn:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
   </style>
 </head>
 <body>
   <h1>🏃‍♂️ Run Tracker</h1>
-  <div id="metrics">
-    <p>Distance: <span id="distance">0.00</span> km</p>
-    <p>Speed: <span id="speed">0.00</span> km/h</p>
+  
+  <div class="unit-toggle">
+    <span class="unit-label">Kilometers</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="unitToggle" onchange="toggleUnit()" checked>
+      <span class="slider"></span>
+    </label>
+    <span class="unit-label">Miles</span>
   </div>
-  <button onclick="startTracking()">Start Run</button>
+  
+  <div id="metrics">
+    <div class="metric">
+      <span class="metric-label">Distance</span>
+      <span class="metric-value" id="distance">0.00 km</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Time</span>
+      <span class="metric-value" id="time">00:00:00</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Pace</span>
+      <span class="metric-value" id="pace">--:-- /km</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Current Pace</span>
+      <span class="metric-value" id="currentPace">--:-- /km</span>
+    </div>
+  </div>
+  <div class="button-group">
+    <button id="startBtn" class="start-btn" onclick="startTracking()">Start Run</button>
+    <button id="stopBtn" class="stop-btn" onclick="stopTracking()" disabled>Stop Run</button>
+  </div>
 
   <script>
-    let watchId, lastPos, totalDistance = 0, startTime;
+    let watchId, lastPos, totalDistance = 0, startTime, isTracking = false;
     let wakeLock = null;
+    let positionHistory = []; // Store recent positions for current pace calculation
+    let useMiles = true; // Track current unit - default to miles
 
-    // Haversine distance calculation
+    // Conversion constants
+    const KM_TO_MILES = 0.621371;
+    const MILES_TO_KM = 1.60934;
+
+    // Haversine distance calculation (returns km)
     function haversine(lat1, lon1, lat2, lon2) {
       const R = 6371; // Earth radius in km
       const toRad = deg => deg * Math.PI / 180;
@@ -34,6 +190,71 @@
                 Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
                 Math.sin(dLon/2)**2;
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // Convert distance to current unit
+    function convertDistance(km) {
+      return useMiles ? km * KM_TO_MILES : km;
+    }
+
+    // Convert speed to current unit
+    function convertSpeed(kmPerHour) {
+      return useMiles ? kmPerHour * KM_TO_MILES : kmPerHour;
+    }
+
+    // Get current unit label
+    function getUnitLabel() {
+      return useMiles ? 'mi' : 'km';
+    }
+
+    // Get current pace unit
+    function getPaceUnit() {
+      return useMiles ? '/mi' : '/km';
+    }
+
+    // Format time as HH:MM:SS
+    function formatTime(seconds) {
+      const hrs = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // Format pace as MM:SS /unit
+    function formatPace(speedInCurrentUnit) {
+      if (speedInCurrentUnit <= 0) return '--:--';
+      const minutesPerUnit = 60 / speedInCurrentUnit;
+      const mins = Math.floor(minutesPerUnit);
+      const secs = Math.floor((minutesPerUnit - mins) * 60);
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // Calculate current pace based on last 15 seconds
+    function calculateCurrentPace() {
+      const now = Date.now();
+      const fifteenSecondsAgo = now - 15000;
+      
+      // Filter positions from last 15 seconds
+      const recentPositions = positionHistory.filter(pos => pos.timestamp >= fifteenSecondsAgo);
+      
+      if (recentPositions.length < 2) return 0;
+      
+      // Calculate total distance in last 15 seconds (in km)
+      let recentDistance = 0;
+      for (let i = 1; i < recentPositions.length; i++) {
+        const prev = recentPositions[i-1];
+        const curr = recentPositions[i];
+        recentDistance += haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+      }
+      
+      // Convert to speed in current unit (15 seconds = 0.004167 hours)
+      const speedKmPerHour = recentDistance / 0.004167;
+      return convertSpeed(speedKmPerHour);
+    }
+
+    function toggleUnit() {
+      useMiles = document.getElementById('unitToggle').checked;
+      updateDisplay();
     }
 
     async function requestWakeLock() {
@@ -48,6 +269,24 @@
       } catch (err) {
         console.warn('Wake Lock failed:', err);
       }
+    }
+
+    function updateDisplay() {
+      if (!isTracking) return;
+      
+      const elapsed = (Date.now() - startTime) / 1000; // seconds
+      const avgSpeedKmPerHour = totalDistance / (elapsed / 3600); // km/h
+      const avgSpeedInCurrentUnit = convertSpeed(avgSpeedKmPerHour);
+      const currentSpeedInCurrentUnit = calculateCurrentPace();
+      
+      const distanceInCurrentUnit = convertDistance(totalDistance);
+      const unitLabel = getUnitLabel();
+      const paceUnit = getPaceUnit();
+      
+      document.getElementById('distance').textContent = distanceInCurrentUnit.toFixed(2) + ' ' + unitLabel;
+      document.getElementById('time').textContent = formatTime(elapsed);
+      document.getElementById('pace').textContent = formatPace(avgSpeedInCurrentUnit) + ' ' + paceUnit;
+      document.getElementById('currentPace').textContent = formatPace(currentSpeedInCurrentUnit) + ' ' + paceUnit;
     }
 
     function startTracking() {
@@ -66,15 +305,30 @@
       startTime = Date.now();
       totalDistance = 0;
       lastPos = null;
+      positionHistory = [];
+      isTracking = true;
+
+      // Update button states
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+
+      // Start display updates
+      const displayInterval = setInterval(updateDisplay, 1000);
 
       watchId = navigator.geolocation.watchPosition(pos => {
         const { latitude, longitude } = pos.coords;
+        const timestamp = Date.now();
+        
+        // Add to position history
+        positionHistory.push({ lat: latitude, lon: longitude, timestamp });
+        
+        // Keep only last 30 seconds of history
+        const thirtySecondsAgo = timestamp - 30000;
+        positionHistory = positionHistory.filter(pos => pos.timestamp >= thirtySecondsAgo);
+        
         if (lastPos) {
           const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
           totalDistance += d;
-          const elapsed = (Date.now() - startTime) / 3600000;
-          document.getElementById('distance').textContent = totalDistance.toFixed(2);
-          document.getElementById('speed').textContent = (totalDistance / elapsed).toFixed(2);
         }
         lastPos = { lat: latitude, lon: longitude };
       }, err => {
@@ -94,11 +348,38 @@
             errorMessage += "Unknown error occurred.";
         }
         alert(errorMessage);
+        stopTracking();
       }, {
         enableHighAccuracy: true,
         maximumAge: 1000,
         timeout: 10000
       });
+
+      // Store interval ID for cleanup
+      window.displayInterval = displayInterval;
+    }
+
+    function stopTracking() {
+      if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+      }
+      
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      
+      if (window.displayInterval) {
+        clearInterval(window.displayInterval);
+        window.displayInterval = null;
+      }
+      
+      isTracking = false;
+      
+      // Update button states
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
     }
 
     // Register service worker

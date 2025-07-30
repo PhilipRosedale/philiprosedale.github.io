@@ -8,7 +8,7 @@
   <style>
     body { 
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-      padding: 2em; 
+      padding: 1em; 
       background: #f7f7f7; 
       max-width: 600px;
       margin: 0 auto;
@@ -16,12 +16,12 @@
     h1 { 
       font-size: 2.5em; 
       text-align: center;
-      margin-bottom: 1em;
+      margin-bottom: 0.5em;
     }
     .unit-toggle {
       text-align: center;
-      margin-bottom: 1em;
-      padding: 1em;
+      margin-top: 1em;
+      padding: 0.5em;
       background: white;
       border-radius: 8px;
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -73,18 +73,18 @@
     }
     #metrics { 
       background: white;
-      padding: 2em;
+      padding: 0.75em;
       border-radius: 12px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      margin-bottom: 2em;
+      margin-bottom: 0.75em;
     }
     .metric {
       font-size: 1.8em; 
-      margin: 1em 0;
+      margin: 0.5em 0;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 0.5em 0;
+      padding: 0.25em 0;
       border-bottom: 1px solid #eee;
     }
     .metric:last-child {
@@ -138,15 +138,6 @@
 <body>
   <h1>🏃‍♂️ Run Tracker</h1>
   
-  <div class="unit-toggle">
-    <span class="unit-label">Kilometers</span>
-    <label class="toggle-switch">
-      <input type="checkbox" id="unitToggle" onchange="toggleUnit()" checked>
-      <span class="slider"></span>
-    </label>
-    <span class="unit-label">Miles</span>
-  </div>
-  
   <div id="metrics">
     <div class="metric">
       <span class="metric-label">Distance</span>
@@ -168,6 +159,15 @@
   <div class="button-group">
     <button id="startBtn" class="start-btn" onclick="startTracking()">Start Run</button>
     <button id="stopBtn" class="stop-btn" onclick="stopTracking()" disabled>Stop Run</button>
+  </div>
+  
+  <div class="unit-toggle">
+    <span class="unit-label">Kilometers</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="unitToggle" onchange="toggleUnit()" checked>
+      <span class="slider"></span>
+    </label>
+    <span class="unit-label">Miles</span>
   </div>
 
   <script>

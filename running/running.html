@@ -120,6 +120,22 @@
       background-color: #45a049;
       transform: translateY(-2px);
     }
+    .pause-btn {
+      background-color: #ff9800;
+      color: white;
+    }
+    .pause-btn:hover {
+      background-color: #f57c00;
+      transform: translateY(-2px);
+    }
+    .resume-btn {
+      background-color: #2196F3;
+      color: white;
+    }
+    .resume-btn:hover {
+      background-color: #1976D2;
+      transform: translateY(-2px);
+    }
     .stop-btn {
       background-color: #f44336;
       color: white;
@@ -157,8 +173,10 @@
     </div>
   </div>
   <div class="button-group">
-    <button id="startBtn" class="start-btn" onclick="startTracking()">Start Run</button>
-    <button id="stopBtn" class="stop-btn" onclick="stopTracking()" disabled>Stop Run</button>
+    <button id="startBtn" class="start-btn" onclick="startTracking()">Start</button>
+    <button id="pauseBtn" class="pause-btn" onclick="pauseTracking()" style="display: none;">Pause</button>
+    <button id="resumeBtn" class="resume-btn" onclick="resumeTracking()" style="display: none;">Resume</button>
+    <button id="stopBtn" class="stop-btn" onclick="stopTracking()" style="display: none;">Stop</button>
   </div>
   
   <div class="unit-toggle">
@@ -309,8 +327,96 @@
       isTracking = true;
 
       // Update button states
-      document.getElementById('startBtn').disabled = true;
-      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('pauseBtn').style.display = 'inline-block';
+      document.getElementById('resumeBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = 'inline-block';
+
+      // Start display updates
+      const displayInterval = setInterval(updateDisplay, 1000);
+
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        const timestamp = Date.now();
+        
+        // Add to position history
+        positionHistory.push({ lat: latitude, lon: longitude, timestamp });
+        
+        // Keep only last 30 seconds of history
+        const thirtySecondsAgo = timestamp - 30000;
+        positionHistory = positionHistory.filter(pos => pos.timestamp >= thirtySecondsAgo);
+        
+        if (lastPos) {
+          const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
+          totalDistance += d;
+        }
+        lastPos = { lat: latitude, lon: longitude };
+      }, err => {
+        console.error('Geolocation error:', err);
+        let errorMessage = "Error getting location: ";
+        switch(err.code) {
+          case err.PERMISSION_DENIED:
+            errorMessage += "Location permission denied. Please allow location access in your browser settings.";
+            break;
+          case err.POSITION_UNAVAILABLE:
+            errorMessage += "Location information unavailable. Please check your GPS/network connection.";
+            break;
+          case err.TIMEOUT:
+            errorMessage += "Location request timed out. Please try again.";
+            break;
+          default:
+            errorMessage += "Unknown error occurred.";
+        }
+        alert(errorMessage);
+        stopTracking();
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000
+      });
+
+      // Store interval ID for cleanup
+      window.displayInterval = displayInterval;
+    }
+
+    function pauseTracking() {
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      if (window.displayInterval) {
+        clearInterval(window.displayInterval);
+        window.displayInterval = null;
+      }
+      isTracking = false;
+      
+      // Update button states
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('pauseBtn').style.display = 'none';
+      document.getElementById('resumeBtn').style.display = 'inline-block';
+      document.getElementById('stopBtn').style.display = 'inline-block';
+    }
+
+    function resumeTracking() {
+      if (!navigator.geolocation) {
+        alert("Geolocation not supported by this browser.");
+        return;
+      }
+
+      // Check if we're running on HTTPS or localhost
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        alert("Geolocation requires HTTPS or localhost. Please run this app on a local server (e.g., python -m http.server 8000) or deploy it to HTTPS.");
+        return;
+      }
+
+      requestWakeLock();
+      isTracking = true;
+
+      // Update button states
+      document.getElementById('startBtn').style.display = 'none';
+      document.getElementById('pauseBtn').style.display = 'inline-block';
+      document.getElementById('resumeBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = 'inline-block';
 
       // Start display updates
       const displayInterval = setInterval(updateDisplay, 1000);
@@ -377,9 +483,11 @@
       
       isTracking = false;
       
-      // Update button states
-      document.getElementById('startBtn').disabled = false;
-      document.getElementById('stopBtn').disabled = true;
+      // Reset to initial state
+      document.getElementById('startBtn').style.display = 'inline-block';
+      document.getElementById('pauseBtn').style.display = 'none';
+      document.getElementById('resumeBtn').style.display = 'none';
+      document.getElementById('stopBtn').style.display = 'none';
     }
 
     // Register service worker

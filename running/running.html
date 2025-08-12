@@ -358,17 +358,22 @@
       return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
 
-    // Calculate current pace based on last 30 seconds
+    // Calculate current pace based on last 30 seconds or all available data if less than 30 seconds
     function calculateCurrentPace() {
       const now = Date.now();
-      const thirtySecondsAgo = now - 30000;
+      const elapsed = (now - startTime) / 1000; // seconds since start
       
-      // Filter positions from last 30 seconds
-      const recentPositions = positionHistory.filter(pos => pos.timestamp >= thirtySecondsAgo);
+      // If less than 30 seconds have elapsed, use all available data
+      const timeWindow = Math.min(30, elapsed);
+      const timeWindowMs = timeWindow * 1000;
+      const windowStart = now - timeWindowMs;
+      
+      // Filter positions from the time window
+      const recentPositions = positionHistory.filter(pos => pos.timestamp >= windowStart);
       
       if (recentPositions.length < 2) return 0;
       
-      // Calculate total distance in last 30 seconds (in km)
+      // Calculate total distance in the time window (in km)
       let recentDistance = 0;
       for (let i = 1; i < recentPositions.length; i++) {
         const prev = recentPositions[i-1];
@@ -376,8 +381,8 @@
         recentDistance += haversine(prev.lat, prev.lon, curr.lat, curr.lon);
       }
       
-      // Convert to speed in current unit (30 seconds = 0.008333 hours)
-      const speedKmPerHour = recentDistance / 0.008333;
+      // Convert to speed in current unit (timeWindow seconds = timeWindow/3600 hours)
+      const speedKmPerHour = recentDistance / (timeWindow / 3600);
       return convertSpeed(speedKmPerHour);
     }
 

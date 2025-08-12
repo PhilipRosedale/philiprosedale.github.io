@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Run Tracker</title>
   <link rel="manifest" href="manifest.json" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     body { 
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
@@ -149,6 +150,45 @@
       cursor: not-allowed;
       transform: none;
     }
+    .login-section {
+      margin-top: 2em;
+      padding: 1em;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+    .user-info {
+      display: none;
+      color: #4CAF50;
+      font-weight: 600;
+    }
+    .login-button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .login-button:hover {
+      background-color: #357ae8;
+    }
+    .logout-button {
+      background-color: #dc3545;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-left: 10px;
+    }
+    .logout-button:hover {
+      background-color: #c82333;
+    }
   </style>
 </head>
 <body>
@@ -188,7 +228,78 @@
     <span class="unit-label">Miles</span>
   </div>
 
+  <div class="login-section">
+    <div id="loginButton">
+      <button class="login-button" onclick="signIn()">Login with Google</button>
+    </div>
+    <div id="userInfo" class="user-info">
+      <span>Logged in as: </span>
+      <span id="userEmail"></span>
+      <button class="logout-button" onclick="signOut()">Logout</button>
+    </div>
+  </div>
+
   <script>
+    // Google Sign-In configuration and functions
+    let gapi;
+    
+    // Initialize Google Sign-In when the page loads
+    window.onload = function() {
+      google.accounts.id.initialize({
+        client_id: '750994363443-t24js1sl18mn0032u2t7l6mkmsppfvtc.apps.googleusercontent.com', // You'll need to replace this with your actual client ID
+        callback: handleCredentialResponse
+      });
+      
+      // Check if user is already signed in
+      checkSignInStatus();
+    };
+    
+    function handleCredentialResponse(response) {
+      // Decode the JWT token to get user info
+      const responsePayload = decodeJwtResponse(response.credential);
+      
+      document.getElementById('userEmail').textContent = responsePayload.email;
+      document.getElementById('loginButton').style.display = 'none';
+      document.getElementById('userInfo').style.display = 'block';
+      
+      // Store the user info in localStorage for persistence
+      localStorage.setItem('userEmail', responsePayload.email);
+      localStorage.setItem('userName', responsePayload.name);
+    }
+    
+    function decodeJwtResponse(token) {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      return JSON.parse(jsonPayload);
+    }
+    
+    function signIn() {
+      google.accounts.id.prompt();
+    }
+    
+    function signOut() {
+      // Clear stored user info
+      localStorage.removeItem('userEmail');
+      localStorage.removeItem('userName');
+      
+      // Update UI
+      document.getElementById('loginButton').style.display = 'block';
+      document.getElementById('userInfo').style.display = 'none';
+      document.getElementById('userEmail').textContent = '';
+    }
+    
+    function checkSignInStatus() {
+      const userEmail = localStorage.getItem('userEmail');
+      if (userEmail) {
+        document.getElementById('userEmail').textContent = userEmail;
+        document.getElementById('loginButton').style.display = 'none';
+        document.getElementById('userInfo').style.display = 'block';
+      }
+    }
+
     let watchId, lastPos, totalDistance = 0, startTime, isTracking = false;
     let wakeLock = null;
     let positionHistory = []; // Store recent positions for current pace calculation

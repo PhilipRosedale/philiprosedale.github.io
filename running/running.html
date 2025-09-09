@@ -258,6 +258,7 @@
 
   <div class="debug-section">
     <span id="debugInfo">0 GPS reads, 0 feet</span>
+    <span style="margin-left: 1em;">v1.2.0</span>
   </div>
 
   <script>
@@ -386,6 +387,18 @@
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
+    // Check if a GPS reading is realistic based on speed
+    function isRealisticGPSReading(newPos, lastPos, timeDiff) {
+      if (!lastPos || timeDiff <= 0) return true;
+      
+      const distance = haversine(lastPos.lat, lastPos.lon, newPos.lat, newPos.lon);
+      const speedKmh = distance / (timeDiff / 3600); // km/h
+      
+      // Filter out readings that suggest speeds > 50 km/h (about 31 mph)
+      // This is reasonable for running/walking
+      return speedKmh <= 50;
+    }
+
     // Convert distance to current unit
     function convertDistance(km) {
       return useMiles ? km * KM_TO_MILES : km;
@@ -488,29 +501,26 @@
       document.getElementById('currentPace').textContent = formatPace(currentSpeedInCurrentUnit) + ' ' + paceUnit;
     }
 
-    function startTracking() {
+    // Common validation and setup for tracking functions
+    function validateTrackingEnvironment() {
       if (!navigator.geolocation) {
         alert("Geolocation not supported by this browser.");
-        return;
+        return false;
       }
 
       // Check if we're running on HTTPS or localhost
       if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
         alert("Geolocation requires HTTPS or localhost. Please run this app on a local server (e.g., python -m http.server 8000) or deploy it to HTTPS.");
-        return;
+        return false;
       }
 
+      return true;
+    }
+
+    // Common GPS watching logic
+    function startGPSWatching() {
       requestWakeLock();
-      startTime = Date.now();
-      totalDistance = 0;
-      lastPos = null;
-      positionHistory = [];
-      gpsReadCount = 0;
-      lastDistanceFeet = 0;
       isTracking = true;
-      
-      // Reset debug info
-      document.getElementById('debugInfo').textContent = '0 GPS reads, 0 feet';
 
       // Update button states
       document.getElementById('startBtn').style.display = 'none';
@@ -528,22 +538,28 @@
         // Increment GPS read count
         gpsReadCount++;
         
-        // Add to position history
-        positionHistory.push({ lat: latitude, lon: longitude, timestamp });
+        const newPos = { lat: latitude, lon: longitude, timestamp };
+        const timeDiff = lastPos ? (timestamp - lastPos.timestamp) / 1000 : 0; // seconds
         
-        // Keep last 60 seconds of history to support rolling 30-second window calculation
-        const sixtySecondsAgo = timestamp - 60000;
-        positionHistory = positionHistory.filter(pos => pos.timestamp >= sixtySecondsAgo);
-        
-        if (lastPos) {
-          const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
-          totalDistance += d;
-          // Convert distance to feet (1 km = 3280.84 feet)
-          lastDistanceFeet = Math.round(d * 3280.84);
-        } else {
-          lastDistanceFeet = 0;
+        // Only process realistic GPS readings
+        if (isRealisticGPSReading(newPos, lastPos, timeDiff)) {
+          // Add to position history
+          positionHistory.push(newPos);
+          
+          // Keep last 60 seconds of history to support rolling 30-second window calculation
+          const sixtySecondsAgo = timestamp - 60000;
+          positionHistory = positionHistory.filter(pos => pos.timestamp >= sixtySecondsAgo);
+          
+          if (lastPos) {
+            const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
+            totalDistance += d;
+            // Convert distance to feet (1 km = 3280.84 feet)
+            lastDistanceFeet = Math.round(d * 3280.84);
+          } else {
+            lastDistanceFeet = 0;
+          }
+          lastPos = newPos;
         }
-        lastPos = { lat: latitude, lon: longitude };
         
         // Update debug info
         document.getElementById('debugInfo').textContent = `${gpsReadCount} GPS reads, ${lastDistanceFeet} feet`;
@@ -573,6 +589,24 @@
 
       // Store interval ID for cleanup
       window.displayInterval = displayInterval;
+    }
+
+    function startTracking() {
+      if (!validateTrackingEnvironment()) return;
+
+      // Initialize tracking state
+      startTime = Date.now();
+      totalDistance = 0;
+      lastPos = null;
+      positionHistory = [];
+      gpsReadCount = 0;
+      lastDistanceFeet = 0;
+      
+      // Reset debug info
+      document.getElementById('debugInfo').textContent = '0 GPS reads, 0 feet';
+
+      // Start GPS watching
+      startGPSWatching();
     }
 
     function pauseTracking() {
@@ -594,81 +628,10 @@
     }
 
     function resumeTracking() {
-      if (!navigator.geolocation) {
-        alert("Geolocation not supported by this browser.");
-        return;
-      }
+      if (!validateTrackingEnvironment()) return;
 
-      // Check if we're running on HTTPS or localhost
-      if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        alert("Geolocation requires HTTPS or localhost. Please run this app on a local server (e.g., python -m http.server 8000) or deploy it to HTTPS.");
-        return;
-      }
-
-      requestWakeLock();
-      isTracking = true;
-
-      // Update button states
-      document.getElementById('startBtn').style.display = 'none';
-      document.getElementById('pauseBtn').style.display = 'inline-block';
-      document.getElementById('resumeBtn').style.display = 'none';
-      document.getElementById('stopBtn').style.display = 'inline-block';
-
-      // Start display updates
-      const displayInterval = setInterval(updateDisplay, 1000);
-
-      watchId = navigator.geolocation.watchPosition(pos => {
-        const { latitude, longitude } = pos.coords;
-        const timestamp = Date.now();
-        
-        // Increment GPS read count
-        gpsReadCount++;
-        
-        // Add to position history
-        positionHistory.push({ lat: latitude, lon: longitude, timestamp });
-        
-        // Keep last 60 seconds of history to support rolling 30-second window calculation
-        const sixtySecondsAgo = timestamp - 60000;
-        positionHistory = positionHistory.filter(pos => pos.timestamp >= sixtySecondsAgo);
-        
-        if (lastPos) {
-          const d = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
-          totalDistance += d;
-          // Convert distance to feet (1 km = 3280.84 feet)
-          lastDistanceFeet = Math.round(d * 3280.84);
-        } else {
-          lastDistanceFeet = 0;
-        }
-        lastPos = { lat: latitude, lon: longitude };
-        
-        // Update debug info
-        document.getElementById('debugInfo').textContent = `${gpsReadCount} GPS reads, ${lastDistanceFeet} feet`;
-      }, err => {
-        console.error('Geolocation error:', err);
-        let errorMessage = "Error getting location: ";
-        switch(err.code) {
-          case err.PERMISSION_DENIED:
-            errorMessage += "Location permission denied. Please allow location access in your browser settings.";
-            break;
-          case err.POSITION_UNAVAILABLE:
-            errorMessage += "Location information unavailable. Please check your GPS/network connection.";
-            break;
-          case err.TIMEOUT:
-            errorMessage += "Location request timed out. Please try again.";
-            break;
-          default:
-            errorMessage += "Unknown error occurred.";
-        }
-        alert(errorMessage);
-        stopTracking();
-      }, {
-        enableHighAccuracy: true,
-        maximumAge: 1000,
-        timeout: 10000
-      });
-
-      // Store interval ID for cleanup
-      window.displayInterval = displayInterval;
+      // Resume GPS watching (preserves existing tracking state)
+      startGPSWatching();
     }
 
     function stopTracking() {

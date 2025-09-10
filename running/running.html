@@ -431,6 +431,20 @@
       // Convert GPS position to meters
       const gpsMeters = latLonToMeters(gpsLat, gpsLon);
       
+      // Initialize Kalman filter with first GPS reading
+      if (kalmanState.x === 0 && kalmanState.y === 0) {
+        kalmanState.x = gpsMeters.x;
+        kalmanState.y = gpsMeters.y;
+        kalmanState.vx = 0;
+        kalmanState.vy = 0;
+        return {
+          lat: gpsLat,
+          lon: gpsLon,
+          velocity: 0,
+          timestamp: timestamp
+        };
+      }
+      
       // State transition matrix (constant velocity model)
       const F = [
         [1, 0, dt, 0],
@@ -509,6 +523,7 @@
         [-S[1][0] / detS, S[0][0] / detS]
       ];
 
+      // Calculate Kalman gain: K = P * H^T * S^(-1)
       const K = [
         [0, 0], [0, 0], [0, 0], [0, 0]
       ];
@@ -535,7 +550,7 @@
           for (let k = 0; k < 2; k++) {
             sum += K[i][k] * H[k][j];
           }
-          kalmanState.P[i][j] = (I[i][j] - sum) * kalmanState.P[i][j];
+          kalmanState.P[i][j] = P_pred[i][j] - sum;
         }
       }
 

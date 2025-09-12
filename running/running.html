@@ -258,7 +258,12 @@
 
   <div class="debug-section">
     <span id="debugInfo">0 GPS reads, 0 feet</span>
-    <span style="margin-left: 1em;">v1.6.0</span>
+    <span style="margin-left: 1em;">v1.7.0</span>
+    <br>
+    <label style="margin-top: 0.5em; display: inline-block;">
+      <input type="checkbox" id="kalmanDebugToggle" onchange="toggleKalmanFilter()" checked>
+      Enable Kalman Filter
+    </label>
   </div>
 
   <script>
@@ -371,6 +376,7 @@
     let useMiles = true; // Track current unit - default to miles
     let gpsReadCount = 0; // Track number of successful GPS reads
     let lastDistanceFeet = 0; // Track distance between last two GPS reads in feet
+    let kalmanFilterEnabled = true; // Debug variable to enable/disable Kalman filter
     
     // Kalman filter state
     let kalmanState = {
@@ -655,6 +661,11 @@
       updateDisplay();
     }
 
+    function toggleKalmanFilter() {
+      kalmanFilterEnabled = document.getElementById('kalmanDebugToggle').checked;
+      console.log('Kalman filter', kalmanFilterEnabled ? 'enabled' : 'disabled');
+    }
+
     async function requestWakeLock() {
       try {
         if ('wakeLock' in navigator) {
@@ -729,20 +740,39 @@
         
         // Only process realistic GPS readings
         if (isRealisticGPSReading(newPos, lastPos, timeDiff)) {
-          // Apply Kalman filter to smooth GPS data
-          const filteredData = kalmanFilter(latitude, longitude, timestamp);
+          let processedPos, processedVelocity;
           
-          // Add filtered position to history
-          const filteredPos = { 
-            lat: filteredData.lat, 
-            lon: filteredData.lon, 
-            timestamp: timestamp 
-          };
-          positionHistory.push(filteredPos);
+          if (kalmanFilterEnabled) {
+            // Apply Kalman filter to smooth GPS data
+            const filteredData = kalmanFilter(latitude, longitude, timestamp);
+            processedPos = { 
+              lat: filteredData.lat, 
+              lon: filteredData.lon, 
+              timestamp: timestamp 
+            };
+            processedVelocity = filteredData.velocity;
+          } else {
+            // Use raw GPS data without filtering
+            processedPos = { 
+              lat: latitude, 
+              lon: longitude, 
+              timestamp: timestamp 
+            };
+            // Calculate velocity from raw GPS data
+            if (lastPos && timeDiff > 0) {
+              const distance = haversine(lastPos.lat, lastPos.lon, latitude, longitude);
+              processedVelocity = distance / (timeDiff / 3600); // km/h
+            } else {
+              processedVelocity = 0;
+            }
+          }
+          
+          // Add processed position to history
+          positionHistory.push(processedPos);
           
           // Add velocity to history
           velocityHistory.push({
-            velocity: filteredData.velocity,
+            velocity: processedVelocity,
             timestamp: timestamp
           });
           
@@ -752,15 +782,15 @@
           velocityHistory = velocityHistory.filter(vel => vel.timestamp >= sixtySecondsAgo);
           
           if (lastPos) {
-            // Use filtered position for distance calculation
-            const d = haversine(lastPos.lat, lastPos.lon, filteredPos.lat, filteredPos.lon);
+            // Use processed position for distance calculation
+            const d = haversine(lastPos.lat, lastPos.lon, processedPos.lat, processedPos.lon);
             totalDistance += d;
             // Convert distance to feet (1 km = 3280.84 feet)
             lastDistanceFeet = Math.round(d * 3280.84);
           } else {
             lastDistanceFeet = 0;
           }
-          lastPos = filteredPos;
+          lastPos = processedPos;
         }
         
         // Update debug info

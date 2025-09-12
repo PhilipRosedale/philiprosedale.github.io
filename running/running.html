@@ -258,7 +258,7 @@
 
   <div class="debug-section">
     <span id="debugInfo">0 GPS reads, 0 feet</span>
-    <span style="margin-left: 1em;">v1.5.0</span>
+    <span style="margin-left: 1em;">v1.6.0</span>
   </div>
 
   <script>
@@ -475,36 +475,45 @@
         [0, r*r]
       ];
 
-      // Predict step
+      // Predict step: x_pred = F * x
       const x_pred = [
-        F[0][0] * kalmanState.x + F[0][2] * kalmanState.vx,
-        F[1][1] * kalmanState.y + F[1][3] * kalmanState.vy,
-        F[2][2] * kalmanState.vx,
-        F[3][3] * kalmanState.vy
+        F[0][0] * kalmanState.x + F[0][1] * kalmanState.y + F[0][2] * kalmanState.vx + F[0][3] * kalmanState.vy,
+        F[1][0] * kalmanState.x + F[1][1] * kalmanState.y + F[1][2] * kalmanState.vx + F[1][3] * kalmanState.vy,
+        F[2][0] * kalmanState.x + F[2][1] * kalmanState.y + F[2][2] * kalmanState.vx + F[2][3] * kalmanState.vy,
+        F[3][0] * kalmanState.x + F[3][1] * kalmanState.y + F[3][2] * kalmanState.vx + F[3][3] * kalmanState.vy
       ];
 
+      // P_pred = F * P * F^T + Q
       const P_pred = [
         [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]
       ];
       
+      // First calculate F * P
+      const FP = [
+        [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]
+      ];
       for (let i = 0; i < 4; i++) {
         for (let j = 0; j < 4; j++) {
-          P_pred[i][j] = 0;
           for (let k = 0; k < 4; k++) {
-            P_pred[i][j] += F[i][k] * kalmanState.P[k][j];
+            FP[i][j] += F[i][k] * kalmanState.P[k][j];
           }
         }
       }
       
+      // Then calculate (F * P) * F^T
       for (let i = 0; i < 4; i++) {
         for (let j = 0; j < 4; j++) {
-          kalmanState.P[i][j] = P_pred[i][j] + Q[i][j];
+          for (let k = 0; k < 4; k++) {
+            P_pred[i][j] += FP[i][k] * F[j][k];
+          }
+          P_pred[i][j] += Q[i][j];
         }
       }
 
       // Update step
       const y = [gpsMeters.x - x_pred[0], gpsMeters.y - x_pred[1]]; // Innovation
       
+      // S = H * P_pred * H^T + R
       const S = [
         [0, 0], [0, 0]
       ];
@@ -512,38 +521,46 @@
         for (let j = 0; j < 2; j++) {
           S[i][j] = R[i][j];
           for (let k = 0; k < 4; k++) {
-            S[i][j] += H[i][k] * kalmanState.P[k][j];
+            S[i][j] += H[i][k] * P_pred[k][j];
           }
         }
       }
 
       const detS = S[0][0] * S[1][1] - S[0][1] * S[1][0];
+      if (Math.abs(detS) < 1e-10) {
+        // If determinant is too small, skip update
+        return {
+          lat: gpsLat,
+          lon: gpsLon,
+          velocity: Math.sqrt(kalmanState.vx * kalmanState.vx + kalmanState.vy * kalmanState.vy),
+          timestamp: timestamp
+        };
+      }
+      
       const S_inv = [
         [S[1][1] / detS, -S[0][1] / detS],
         [-S[1][0] / detS, S[0][0] / detS]
       ];
 
-      // Calculate Kalman gain: K = P * H^T * S^(-1)
+      // Calculate Kalman gain: K = P_pred * H^T * S^(-1)
       const K = [
         [0, 0], [0, 0], [0, 0], [0, 0]
       ];
       for (let i = 0; i < 4; i++) {
         for (let j = 0; j < 2; j++) {
-          K[i][j] = 0;
           for (let k = 0; k < 2; k++) {
-            K[i][j] += kalmanState.P[i][k] * H[k][j] * S_inv[j][k];
+            K[i][j] += P_pred[i][k] * H[j][k] * S_inv[j][k];
           }
         }
       }
 
-      // Update state
+      // Update state: x = x_pred + K * y
       kalmanState.x = x_pred[0] + K[0][0] * y[0] + K[0][1] * y[1];
       kalmanState.y = x_pred[1] + K[1][0] * y[0] + K[1][1] * y[1];
       kalmanState.vx = x_pred[2] + K[2][0] * y[0] + K[2][1] * y[1];
       kalmanState.vy = x_pred[3] + K[3][0] * y[0] + K[3][1] * y[1];
 
-      // Update covariance
-      const I = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+      // Update covariance: P = P_pred - K * H * P_pred
       for (let i = 0; i < 4; i++) {
         for (let j = 0; j < 4; j++) {
           let sum = 0;

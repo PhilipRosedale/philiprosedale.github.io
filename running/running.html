@@ -262,7 +262,7 @@
     <br>
     <label style="margin-top: 0.5em; display: inline-block;">
       <input type="checkbox" id="kalmanDebugToggle" onchange="toggleKalmanFilter()" checked>
-      Enable Kalman Filter
+      Enable GPS Filter
     </label>
   </div>
 
@@ -413,34 +413,12 @@
       return speedKmh <= 50;
     }
 
-    // Convert lat/lon to meters (approximate)
-    function latLonToMeters(lat, lon) {
-      const R = 6371000; // Earth radius in meters
-      const x = R * Math.cos(lat * Math.PI / 180) * Math.sin(lon * Math.PI / 180);
-      const y = R * Math.sin(lat * Math.PI / 180);
-      return { x, y };
-    }
-
-    // Convert meters back to lat/lon
-    function metersToLatLon(x, y) {
-      const R = 6371000; // Earth radius in meters
-      const lat = Math.asin(y / R) * 180 / Math.PI;
-      const lon = Math.asin(x / (R * Math.cos(lat * Math.PI / 180))) * 180 / Math.PI;
-      return { lat, lon };
-    }
-
-    // Kalman filter implementation for GPS smoothing
-    function kalmanFilter(gpsLat, gpsLon, timestamp) {
-      const dt = lastKalmanTime > 0 ? (timestamp - lastKalmanTime) / 1000 : 0.1; // seconds
-      lastKalmanTime = timestamp;
-
-      // Convert GPS position to meters
-      const gpsMeters = latLonToMeters(gpsLat, gpsLon);
-      
-      // Initialize Kalman filter with first GPS reading
+    // Simple moving average filter for GPS smoothing
+    function simpleGPSFilter(gpsLat, gpsLon, timestamp) {
+      // Initialize filter with first GPS reading
       if (kalmanState.x === 0 && kalmanState.y === 0) {
-        kalmanState.x = gpsMeters.x;
-        kalmanState.y = gpsMeters.y;
+        kalmanState.x = gpsLat;
+        kalmanState.y = gpsLon;
         kalmanState.vx = 0;
         kalmanState.vy = 0;
         return {
@@ -451,141 +429,34 @@
         };
       }
       
-      // State transition matrix (constant velocity model)
-      const F = [
-        [1, 0, dt, 0],
-        [0, 1, 0, dt],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
-      ];
-
-      // Process noise covariance matrix
-      const q = 0.1; // Process noise parameter
-      const Q = [
-        [dt*dt*dt*dt/4, 0, dt*dt*dt/2, 0],
-        [0, dt*dt*dt*dt/4, 0, dt*dt*dt/2],
-        [dt*dt*dt/2, 0, dt*dt, 0],
-        [0, dt*dt*dt/2, 0, dt*dt]
-      ].map(row => row.map(val => val * q));
-
-      // Measurement matrix (we only observe position)
-      const H = [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0]
-      ];
-
-      // Measurement noise covariance matrix
-      const r = 10; // GPS noise parameter (meters)
-      const R = [
-        [r*r, 0],
-        [0, r*r]
-      ];
-
-      // Predict step: x_pred = F * x
-      const x_pred = [
-        F[0][0] * kalmanState.x + F[0][1] * kalmanState.y + F[0][2] * kalmanState.vx + F[0][3] * kalmanState.vy,
-        F[1][0] * kalmanState.x + F[1][1] * kalmanState.y + F[1][2] * kalmanState.vx + F[1][3] * kalmanState.vy,
-        F[2][0] * kalmanState.x + F[2][1] * kalmanState.y + F[2][2] * kalmanState.vx + F[2][3] * kalmanState.vy,
-        F[3][0] * kalmanState.x + F[3][1] * kalmanState.y + F[3][2] * kalmanState.vx + F[3][3] * kalmanState.vy
-      ];
-
-      // P_pred = F * P * F^T + Q
-      const P_pred = [
-        [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]
-      ];
+      const dt = lastKalmanTime > 0 ? (timestamp - lastKalmanTime) / 1000 : 0.1; // seconds
+      lastKalmanTime = timestamp;
       
-      // First calculate F * P
-      const FP = [
-        [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]
-      ];
-      for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 4; j++) {
-          for (let k = 0; k < 4; k++) {
-            FP[i][j] += F[i][k] * kalmanState.P[k][j];
-          }
-        }
-      }
+      // Simple exponential smoothing
+      const alpha = 0.3; // Smoothing factor (0 = no smoothing, 1 = no filtering)
       
-      // Then calculate (F * P) * F^T
-      for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 4; j++) {
-          for (let k = 0; k < 4; k++) {
-            P_pred[i][j] += FP[i][k] * F[j][k];
-          }
-          P_pred[i][j] += Q[i][j];
-        }
-      }
-
-      // Update step
-      const y = [gpsMeters.x - x_pred[0], gpsMeters.y - x_pred[1]]; // Innovation
+      // Smooth the position
+      const filteredLat = alpha * gpsLat + (1 - alpha) * kalmanState.x;
+      const filteredLon = alpha * gpsLon + (1 - alpha) * kalmanState.y;
       
-      // S = H * P_pred * H^T + R
-      const S = [
-        [0, 0], [0, 0]
-      ];
-      for (let i = 0; i < 2; i++) {
-        for (let j = 0; j < 2; j++) {
-          S[i][j] = R[i][j];
-          for (let k = 0; k < 4; k++) {
-            S[i][j] += H[i][k] * P_pred[k][j];
-          }
-        }
-      }
-
-      const detS = S[0][0] * S[1][1] - S[0][1] * S[1][0];
-      if (Math.abs(detS) < 1e-10) {
-        // If determinant is too small, skip update
-        return {
-          lat: gpsLat,
-          lon: gpsLon,
-          velocity: Math.sqrt(kalmanState.vx * kalmanState.vx + kalmanState.vy * kalmanState.vy),
-          timestamp: timestamp
-        };
-      }
+      // Calculate velocity from position change
+      const vx = (filteredLat - kalmanState.x) / dt;
+      const vy = (filteredLon - kalmanState.y) / dt;
       
-      const S_inv = [
-        [S[1][1] / detS, -S[0][1] / detS],
-        [-S[1][0] / detS, S[0][0] / detS]
-      ];
-
-      // Calculate Kalman gain: K = P_pred * H^T * S^(-1)
-      const K = [
-        [0, 0], [0, 0], [0, 0], [0, 0]
-      ];
-      for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 2; j++) {
-          for (let k = 0; k < 2; k++) {
-            K[i][j] += P_pred[i][k] * H[j][k] * S_inv[j][k];
-          }
-        }
-      }
-
-      // Update state: x = x_pred + K * y
-      kalmanState.x = x_pred[0] + K[0][0] * y[0] + K[0][1] * y[1];
-      kalmanState.y = x_pred[1] + K[1][0] * y[0] + K[1][1] * y[1];
-      kalmanState.vx = x_pred[2] + K[2][0] * y[0] + K[2][1] * y[1];
-      kalmanState.vy = x_pred[3] + K[3][0] * y[0] + K[3][1] * y[1];
-
-      // Update covariance: P = P_pred - K * H * P_pred
-      for (let i = 0; i < 4; i++) {
-        for (let j = 0; j < 4; j++) {
-          let sum = 0;
-          for (let k = 0; k < 2; k++) {
-            sum += K[i][k] * H[k][j];
-          }
-          kalmanState.P[i][j] = P_pred[i][j] - sum;
-        }
-      }
-
-      // Convert back to lat/lon
-      const filteredPos = metersToLatLon(kalmanState.x, kalmanState.y);
+      // Smooth the velocity
+      kalmanState.vx = alpha * vx + (1 - alpha) * kalmanState.vx;
+      kalmanState.vy = alpha * vy + (1 - alpha) * kalmanState.vy;
+      
+      // Update state
+      kalmanState.x = filteredLat;
+      kalmanState.y = filteredLon;
       
       // Calculate velocity magnitude
       const velocity = Math.sqrt(kalmanState.vx * kalmanState.vx + kalmanState.vy * kalmanState.vy);
       
       return {
-        lat: filteredPos.lat,
-        lon: filteredPos.lon,
+        lat: filteredLat,
+        lon: filteredLon,
         velocity: velocity,
         timestamp: timestamp
       };
@@ -663,7 +534,7 @@
 
     function toggleKalmanFilter() {
       kalmanFilterEnabled = document.getElementById('kalmanDebugToggle').checked;
-      console.log('Kalman filter', kalmanFilterEnabled ? 'enabled' : 'disabled');
+      console.log('GPS filter', kalmanFilterEnabled ? 'enabled' : 'disabled');
     }
 
     async function requestWakeLock() {
@@ -743,8 +614,8 @@
           let processedPos, processedVelocity;
           
           if (kalmanFilterEnabled) {
-            // Apply Kalman filter to smooth GPS data
-            const filteredData = kalmanFilter(latitude, longitude, timestamp);
+            // Apply simple GPS filter to smooth data
+            const filteredData = simpleGPSFilter(latitude, longitude, timestamp);
             processedPos = { 
               lat: filteredData.lat, 
               lon: filteredData.lon, 

@@ -258,7 +258,7 @@
 
   <div class="debug-section">
     <span id="debugInfo">0 GPS reads, 0 feet</span>
-    <span style="margin-left: 1em;">v1.7.0</span>
+    <span style="margin-left: 1em;">v1.7.1</span>
     <br>
     <label style="margin-top: 0.5em; display: inline-block;">
       <input type="checkbox" id="kalmanDebugToggle" onchange="toggleKalmanFilter()" checked>
@@ -502,9 +502,9 @@
     function calculateCurrentPace() {
       if (positionHistory.length < 2) return 0;
       
-      // Use the last 10 GPS readings for current pace calculation
+      // Use the last 25 GPS readings for current pace calculation
       // This provides a more stable measurement than a fixed time window
-      const recentCount = Math.min(10, positionHistory.length);
+      const recentCount = Math.min(25, positionHistory.length);
       const recentPositions = positionHistory.slice(-recentCount);
       
       if (recentPositions.length < 2) return 0;

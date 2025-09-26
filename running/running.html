@@ -278,7 +278,6 @@
         document.getElementById('loginButton').innerHTML = '<button class="login-button" disabled>Google Sign-In Unavailable</button>';
         return;
       }
-
       try {
         google.accounts.id.initialize({
           // TODO: Replace with your actual Google Cloud Console OAuth 2.0 Client ID
@@ -499,22 +498,18 @@
       return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
 
-    // Calculate current pace based on last 30 seconds or all available data if less than 30 seconds
+    // Calculate current pace based on recent GPS readings
     function calculateCurrentPace() {
-      const now = Date.now();
-      const elapsed = (now - startTime) / 1000; // seconds since start
+      if (positionHistory.length < 2) return 0;
       
-      // If less than 30 seconds have elapsed, use all available data
-      const timeWindow = Math.min(30, elapsed);
-      const timeWindowMs = timeWindow * 1000;
-      const windowStart = now - timeWindowMs;
-      
-      // Filter positions from the time window
-      const recentPositions = positionHistory.filter(pos => pos.timestamp >= windowStart);
+      // Use the last 10 GPS readings for current pace calculation
+      // This provides a more stable measurement than a fixed time window
+      const recentCount = Math.min(10, positionHistory.length);
+      const recentPositions = positionHistory.slice(-recentCount);
       
       if (recentPositions.length < 2) return 0;
       
-      // Calculate total distance in the time window (in km)
+      // Calculate total distance in the recent positions (in km)
       let recentDistance = 0;
       for (let i = 1; i < recentPositions.length; i++) {
         const prev = recentPositions[i-1];
@@ -522,8 +517,14 @@
         recentDistance += haversine(prev.lat, prev.lon, curr.lat, curr.lon);
       }
       
-      // Convert to speed in current unit (timeWindow seconds = timeWindow/3600 hours)
-      const speedKmPerHour = recentDistance / (timeWindow / 3600);
+      // Calculate actual time span of the recent positions
+      const timeSpan = (recentPositions[recentPositions.length - 1].timestamp - recentPositions[0].timestamp) / 1000;
+      
+      // Avoid division by zero and ensure we have a reasonable time span
+      if (timeSpan <= 0) return 0;
+      
+      // Convert to speed in current unit (timeSpan seconds = timeSpan/3600 hours)
+      const speedKmPerHour = recentDistance / (timeSpan / 3600);
       return convertSpeed(speedKmPerHour);
     }
 

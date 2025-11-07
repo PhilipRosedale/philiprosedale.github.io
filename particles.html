@@ -67,10 +67,14 @@
 <div id="control-panel">
   <h3>Controls</h3>
   <div class="control-group">
-    <label for="decay-factor">Decay Factor</label>
-    <input type="range" id="decay-factor" min="0.9" max="1.0" step="0.001" value="0.99">
-    <input type="number" id="decay-factor-value" min="0.9" max="1.0" step="0.001" value="0.99">
-    <div class="value-display">Multiplies particle velocity each frame</div>
+    <label for="num-particles">Number of Particles</label>
+    <input type="number" id="num-particles" min="1000" max="10000000" step="1000" value="1000000">
+    <div class="value-display">Press Enter to restart simulation</div>
+  </div>
+  <div class="control-group">
+    <label for="decay-factor">Decay Strength</label>
+    <input type="number" id="decay-factor" min="0.0" max="10.0" step="0.01" value="0.1">
+    <div class="value-display">Decay proportional to velocity² (Press Enter)</div>
   </div>
 </div>
 <canvas id="gfx" width="1000" height="1000"></canvas>
@@ -88,31 +92,60 @@ console.log('Got Got WebGPU context');
 const format = navigator.gpu.getPreferredCanvasFormat();
 context.configure({ device, format });
 
-const numParticles = 100000;
+let numParticles = 1000000;
+let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
+let frameId = null;
 
 
 
-// JS-side data
-const particleData = new Float32Array(numParticles * 4); // x, y, vx, vy
-for (let i = 0; i < numParticles; i++) {
-  particleData[i * 4 + 0] = (Math.random() * 2 - 1) * 0.9;  // x
-  particleData[i * 4 + 1] = (Math.random() * 2 - 1) * 0.9;  // y
-  particleData[i * 4 + 2] = (Math.random() * 2 - 1) * 0.1;  // vx
-  particleData[i * 4 + 3] = (Math.random() * 2 - 1) * 0.1;  // vy
+function initializeParticles() {
+  // JS-side data
+  const particleData = new Float32Array(numParticles * 4); // x, y, vx, vy
+  for (let i = 0; i < numParticles; i++) {
+    particleData[i * 4 + 0] = (Math.random() * 2 - 1) * 0.9;  // x
+    particleData[i * 4 + 1] = (Math.random() * 2 - 1) * 0.9;  // y
+    particleData[i * 4 + 2] = (Math.random() * 2 - 1) * 0.1;  // vx
+    particleData[i * 4 + 3] = (Math.random() * 2 - 1) * 0.1;  // vy
+  }
+
+  // GPU buffers
+  if (particleBuffer) {
+    particleBuffer.destroy();
+  }
+  particleBuffer = device.createBuffer({
+    size: particleData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(particleBuffer, 0, particleData);
+  console.log('Wrote particle buffer to GPU');
+
+  if (cellIndexBuffer) {
+    cellIndexBuffer.destroy();
+  }
+  cellIndexBuffer = device.createBuffer({
+    size: numParticles * 4, // one u32 per particle
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  
+  // Recreate bind groups with new buffers
+  computeBindGroup = device.createBindGroup({
+    layout: computePipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+      { binding: 2, resource: { buffer: uniformBuffer } },
+      { binding: 3, resource: { buffer: gridVelocityBuffer } },
+    ],
+  });
+  
+  renderBindGroup = device.createBindGroup({
+    layout: renderPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+    ],
+  });
 }
-
-// GPU buffers
-const particleBuffer = device.createBuffer({
-  size: particleData.byteLength,
-  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-});
-device.queue.writeBuffer(particleBuffer, 0, particleData);
-console.log('Wrote particle buffer to GPU');
-
-const cellIndexBuffer = device.createBuffer({
-  size: numParticles * 4, // one u32 per particle
-  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-});
 
 // Grid velocity buffer: 10x10 = 100 cells, each with vec2<f32> (8 bytes)
 const numCells = 100;
@@ -125,7 +158,7 @@ device.queue.writeBuffer(gridVelocityBuffer, 0, gridVelocityData);
 console.log('Created grid velocity buffer');
 
 
-let decayFactor = 0.99;
+let decayFactor = 0.1;
 const uniformData = new Float32Array([
   0.016, 0, 0, 0,     // dt + pad (16 bytes)
   0, 0, 0, 0,         // pad (16 bytes)
@@ -139,29 +172,6 @@ const uniformBuffer = device.createBuffer({
 });
 device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 console.log('Wrote uniform buffer to GPU');
-
-// Control panel setup
-const decayFactorSlider = document.getElementById('decay-factor');
-const decayFactorInput = document.getElementById('decay-factor-value');
-
-function updateDecayFactor(value) {
-  decayFactor = parseFloat(value);
-  decayFactorSlider.value = decayFactor;
-  decayFactorInput.value = decayFactor;
-  
-  // Update uniform buffer
-  uniformData[12] = decayFactor; // Index 12 is where decayFactor is stored
-  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
-}
-
-decayFactorSlider.addEventListener('input', (e) => {
-  updateDecayFactor(e.target.value);
-});
-
-decayFactorInput.addEventListener('input', (e) => {
-  const val = Math.max(0.9, Math.min(1.0, parseFloat(e.target.value) || 0.99));
-  updateDecayFactor(val);
-});
 
 //
 // === Compute Shader (WGSL) ===
@@ -225,12 +235,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     p.vel += normalize(gridVel) * (0.01 * gridVelMagnitude);
   }
   
-  // Update grid velocity by adding 1/100th of particle velocity (before grid interaction)
+  // Update grid velocity by adding 1/1000th of particle velocity (before grid interaction)
   gridVelocities[cellIndex] = gridVel + particleVelBefore * 0.01;
 
-  // Apply decay factor to particle velocity
-  p.vel *= params.decayFactor;
-
+  // Apply decay proportional to square of velocity
+  let velSquared = dot(p.vel, p.vel);
+  // let decayAmount = params.decayFactor * velSquared;
+  //p.vel *= (1.0 - velSquared/50.0); // Clamp to prevent negative or excessive decay
+    p.vel *= 0.99;
   particles[i] = p;
 }
 
@@ -241,15 +253,49 @@ const computePipeline = device.createComputePipeline({
   layout: 'auto',
   compute: { module: computeModule, entryPoint: 'main' },
 });
-const computeBindGroup = device.createBindGroup({
-  layout: computePipeline.getBindGroupLayout(0),
+
+//
+// === Grid Decay Compute Shader (WGSL) ===
+//
+const gridDecayShaderCode = /* wgsl */`
+@group(0) @binding(3)
+var<storage, read_write> gridVelocities: array<vec2<f32>>;
+
+struct Params {
+  dt: f32,
+  _pad1: vec3<f32>,
+  gravity: vec2<f32>,
+  _pad2: vec2<f32>,
+  decayFactor: f32,
+  _pad3: vec3<f32>,
+};
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= arrayLength(&gridVelocities)) { return; }
+  
+  // Apply decay factor to grid velocity
+  gridVelocities[i] *= params.decayFactor;
+}
+
+`;
+
+const gridDecayModule = device.createShaderModule({ code: gridDecayShaderCode });
+const gridDecayPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: gridDecayModule, entryPoint: 'main' },
+});
+const gridDecayBindGroup = device.createBindGroup({
+  layout: gridDecayPipeline.getBindGroupLayout(0),
   entries: [
-    { binding: 0, resource: { buffer: particleBuffer } },
-    { binding: 1, resource: { buffer: cellIndexBuffer } },
     { binding: 2, resource: { buffer: uniformBuffer } },
     { binding: 3, resource: { buffer: gridVelocityBuffer } },
   ],
 });
+// computeBindGroup will be created in initializeParticles()
 
 //
 // === Render Shader (WGSL) ===
@@ -304,12 +350,57 @@ const renderPipeline = device.createRenderPipeline({
   },
   primitive: { topology: 'point-list' },
 });
-const renderBindGroup = device.createBindGroup({
-  layout: renderPipeline.getBindGroupLayout(0),
-  entries: [
-    { binding: 0, resource: { buffer: particleBuffer } },
-    { binding: 1, resource: { buffer: cellIndexBuffer } },
-  ],
+
+// Initialize particles (after pipelines are created)
+initializeParticles();
+
+// Control panel setup
+const numParticlesInput = document.getElementById('num-particles');
+const decayFactorInput = document.getElementById('decay-factor');
+
+function updateDecayFactor(value) {
+  decayFactor = parseFloat(value);
+  decayFactorInput.value = decayFactor;
+  
+  // Update uniform buffer
+  uniformData[12] = decayFactor; // Index 12 is where decayFactor is stored
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+}
+
+decayFactorInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const val = Math.max(0.0, Math.min(10.0, parseFloat(e.target.value) || 0.1));
+    updateDecayFactor(val);
+  }
+});
+
+function restartSimulation() {
+  // Stop current animation
+  if (frameId !== null) {
+    cancelAnimationFrame(frameId);
+    frameId = null;
+  }
+  
+  // Reset grid velocities
+  const gridVelocityData = new Float32Array(numCells * 2);
+  device.queue.writeBuffer(gridVelocityBuffer, 0, gridVelocityData);
+  
+  // Reinitialize particles with new count
+  initializeParticles();
+  
+  // Restart animation
+  frame();
+}
+
+numParticlesInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const newCount = Math.max(1000, Math.min(10000000, parseInt(e.target.value) || 1000000));
+    if (newCount !== numParticles) {
+      numParticles = newCount;
+      numParticlesInput.value = numParticles;
+      restartSimulation();
+    }
+  }
 });
 
 //
@@ -335,7 +426,16 @@ function frame() {
   
   const encoder = device.createCommandEncoder();
 
-  // 1️⃣ Compute pass
+  // 0️⃣ Grid decay compute pass (runs once per frame)
+  {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(gridDecayPipeline);
+    pass.setBindGroup(0, gridDecayBindGroup);
+    pass.dispatchWorkgroups(Math.ceil(numCells / 64)); // 100 cells, so 2 workgroups
+    pass.end();
+  }
+
+  // 1️⃣ Particle compute pass
   {
     const pass = encoder.beginComputePass();
     pass.setPipeline(computePipeline);
@@ -360,7 +460,7 @@ function frame() {
   renderPass.end();
 
   device.queue.submit([encoder.finish()]);
-  requestAnimationFrame(frame);
+  frameId = requestAnimationFrame(frame);
 }
 
 frame();

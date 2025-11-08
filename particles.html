@@ -52,6 +52,14 @@
   canvas { width: 1000px; height: 1000px; display: block; background: black; }
   #fps-counter {
     position: fixed;
+    bottom: 30px;
+    right: 10px;
+    color: white;
+    font-family: monospace;
+    font-size: 12px;
+  }
+  #energy-counter {
+    position: fixed;
     bottom: 10px;
     right: 10px;
     color: white;
@@ -76,9 +84,16 @@
     <input type="number" id="decay-factor" min="0.0" max="10.0" step="0.01" value="0.1">
     <div class="value-display">Decay proportional to velocity² (Press Enter)</div>
   </div>
+  <div class="control-group">
+    <label for="show-grid">
+      <input type="checkbox" id="show-grid">
+      Show Grid
+    </label>
+  </div>
 </div>
 <canvas id="gfx" width="1000" height="1000"></canvas>
 <div id="fps-counter">FPS: --</div>
+<div id="energy-counter">Energy: --</div>
 <script type="module">
 console.log('Startup');
 const adapter = await navigator.gpu.requestAdapter();
@@ -135,6 +150,8 @@ function initializeParticles() {
       { binding: 1, resource: { buffer: cellIndexBuffer } },
       { binding: 2, resource: { buffer: uniformBuffer } },
       { binding: 3, resource: { buffer: gridVelocityBuffer } },
+      { binding: 4, resource: { buffer: energySumBuffer } },
+      { binding: 5, resource: { buffer: particleCountBuffer } },
     ],
   });
   
@@ -147,8 +164,9 @@ function initializeParticles() {
   });
 }
 
-// Grid velocity buffer: 10x10 = 100 cells, each with vec2<f32> (8 bytes)
-const numCells = 100;
+// Grid configuration: cells per direction
+const cellsPerDirection = 20;
+const numCells = cellsPerDirection * cellsPerDirection;
 const gridVelocityData = new Float32Array(numCells * 2); // Initialize to zero
 const gridVelocityBuffer = device.createBuffer({
   size: gridVelocityData.byteLength,
@@ -156,6 +174,15 @@ const gridVelocityBuffer = device.createBuffer({
 });
 device.queue.writeBuffer(gridVelocityBuffer, 0, gridVelocityData);
 console.log('Created grid velocity buffer');
+
+// Particle count buffer: one u32 per cell
+const particleCountBuffer = device.createBuffer({
+  size: numCells * 4, // one u32 (4 bytes) per cell
+  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+});
+// Initialize to zero
+device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
+console.log('Created particle count buffer');
 
 
 let decayFactor = 0.1;
@@ -173,10 +200,30 @@ const uniformBuffer = device.createBuffer({
 device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 console.log('Wrote uniform buffer to GPU');
 
+// Energy sum buffer (atomic u32)
+const energySumBuffer = device.createBuffer({
+  size: 4, // single u32
+  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+});
+
+// Staging buffer to read back energy
+const energyStagingBuffer = device.createBuffer({
+  size: 4,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+});
+
+// Initialize energy buffer to zero
+device.queue.writeBuffer(energySumBuffer, 0, new Uint32Array([0]));
+console.log('Created energy sum buffer');
+
 //
 // === Compute Shader (WGSL) ===
 //
 const computeShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+const CELL_SIZE = 2.0 / f32(CELLS_PER_DIRECTION);
+const MAX_CELL_INDEX = ${cellsPerDirection - 1}u;
+
 struct Particle {
   pos: vec2<f32>,
   vel: vec2<f32>,
@@ -190,6 +237,12 @@ var<storage, read_write> cellIndices: array<u32>;
 
 @group(0) @binding(3)
 var<storage, read_write> gridVelocities: array<vec2<f32>>;
+
+@group(0) @binding(4)
+var<storage, read_write> energySum: atomic<u32>;
+
+@group(0) @binding(5)
+var<storage, read_write> particleCounts: array<atomic<u32>>;
 
 struct Params {
   dt: f32,
@@ -218,11 +271,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (abs(p.pos.y) > 1.0) { p.vel.y = -p.vel.y; }
 
   // --- grid assignment ---
-  let cellSize = 0.2;
-  let gx = clamp(floor((p.pos.x + 1.0) / cellSize), 0.0, 9.0);
-  let gy = clamp(floor((p.pos.y + 1.0) / cellSize), 0.0, 9.0);
-  let cellIndex = u32(gy * 10.0 + gx);
+  let gx = clamp(floor((p.pos.x + 1.0) / CELL_SIZE), 0.0, f32(MAX_CELL_INDEX));
+  let gy = clamp(floor((p.pos.y + 1.0) / CELL_SIZE), 0.0, f32(MAX_CELL_INDEX));
+  let cellIndex = u32(gy * f32(CELLS_PER_DIRECTION) + gx);
   cellIndices[i] = cellIndex;
+
+  // Count particle in this cell (atomic increment)
+  atomicAdd(&particleCounts[cellIndex], 1u);
 
   // --- grid-particle interaction ---
   let gridVel = gridVelocities[cellIndex];
@@ -232,17 +287,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // (in the direction of the grid velocity)
   let gridVelMagnitude = length(gridVel);
   if (gridVelMagnitude > 0.0) {
-    p.vel += normalize(gridVel) * (0.01 * gridVelMagnitude);
+    p.vel += normalize(gridVel) * (0.001 * gridVelMagnitude);
   }
   
-  // Update grid velocity by adding 1/1000th of particle velocity (before grid interaction)
-  gridVelocities[cellIndex] = gridVel + particleVelBefore * 0.01;
+  // Accumulate particle velocity contribution to grid (will be normalized by count later)
+  gridVelocities[cellIndex] = gridVel + particleVelBefore * 0.1;
 
   // Apply decay proportional to square of velocity
   let velSquared = dot(p.vel, p.vel);
   // let decayAmount = params.decayFactor * velSquared;
-  //p.vel *= (1.0 - velSquared/50.0); // Clamp to prevent negative or excessive decay
-    p.vel *= 0.99;
+  p.vel *= (1.0 - velSquared * params.decayFactor); // Clamp to prevent negative or excessive decay
+  //p.vel.x = clamp(p.vel.x, -1.0, 1.0);
+  //p.vel.y = clamp(p.vel.y, -1.0, 1.0);
+  
+  // Accumulate energy (velocity^2) atomically
+  // Convert velSquared (0.0-1.0) to u32 in range 1-100
+  let energyValue = u32(velSquared * 10000.0);  
+  atomicAdd(&energySum, energyValue);
+  
   particles[i] = p;
 }
 
@@ -278,7 +340,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (i >= arrayLength(&gridVelocities)) { return; }
   
   // Apply decay factor to grid velocity
-  gridVelocities[i] *= params.decayFactor;
+  gridVelocities[i] *= params.decayFactor / params.decayFactor * 0.99;
 }
 
 `;
@@ -295,12 +357,56 @@ const gridDecayBindGroup = device.createBindGroup({
     { binding: 3, resource: { buffer: gridVelocityBuffer } },
   ],
 });
+
+//
+// === Velocity Normalization Compute Shader (WGSL) ===
+//
+const normalizeVelocityShaderCode = /* wgsl */`
+@group(0) @binding(0)
+var<storage, read_write> gridVelocities: array<vec2<f32>>;
+
+@group(0) @binding(1)
+var<storage, read_write> particleCounts: array<atomic<u32>>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x;
+  if (i >= arrayLength(&gridVelocities)) { return; }
+  
+  // Get particle count for this cell
+  let count = f32(atomicLoad(&particleCounts[i]));
+  
+  // Normalize velocity by particle count (avoid division by zero)
+  if (count > 0.0) {
+    gridVelocities[i] = gridVelocities[i] / count;
+  } else {
+    gridVelocities[i] = vec2<f32>(0.0, 0.0);
+  }
+}
+`;
+
+const normalizeVelocityModule = device.createShaderModule({ code: normalizeVelocityShaderCode });
+const normalizeVelocityPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: normalizeVelocityModule, entryPoint: 'main' },
+});
+
+const normalizeVelocityBindGroup = device.createBindGroup({
+  layout: normalizeVelocityPipeline.getBindGroupLayout(0),
+  entries: [
+    { binding: 0, resource: { buffer: gridVelocityBuffer } },
+    { binding: 1, resource: { buffer: particleCountBuffer } },
+  ],
+});
+
 // computeBindGroup will be created in initializeParticles()
 
 //
 // === Render Shader (WGSL) ===
 //
 const renderShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+
 struct VSOut {
   @builtin(position) pos: vec4<f32>,
   @location(0) color: vec4<f32>,
@@ -319,12 +425,14 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
   out.pos = vec4<f32>(p.xy, 0.0, 1.0);
 
   let cell = cellIndices[vid];
-  let gx = cell % 10u;
-  let gy = cell / 10u;
-  // Create distinct colors for each cell using both x and y
-  let r = f32(gx) / 9.0;
-  let g = f32(gy) / 9.0;
-  let b = fract(f32(cell) / 7.0); // Add some variation
+  let gx = cell % CELLS_PER_DIRECTION;
+  let gy = cell / CELLS_PER_DIRECTION;
+  // Create color
+  let v = p.zw;
+  let velSquared = dot(v, v);
+  let r =  clamp(0.5 + v.x * 100.0, 0.0, 1.0);   // f32(gx) / 9.0;
+  let g =  clamp(0.5 + v.y * 100.0, 0.0, 1.0);   //f32(gy) / 9.0;
+  let b =  clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);   // fract(f32(cell) / 7.0); // Add some variation
   out.color = vec4<f32>(r, g, b, 1.0);
   return out;
 }
@@ -349,6 +457,161 @@ const renderPipeline = device.createRenderPipeline({
     targets: [{ format }],
   },
   primitive: { topology: 'point-list' },
+});
+
+//
+// === Grid Rendering Shader (WGSL) ===
+//
+const gridShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+const CELL_SIZE = 2.0 / f32(CELLS_PER_DIRECTION);
+
+struct VSOut {
+  @builtin(position) pos: vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+  var out: VSOut;
+  
+  // Generate grid lines: vertical and horizontal lines
+  // Total vertices: 2 * (cellsPerDirection + 1) vertical lines * 2 vertices + 
+  //                 2 * (cellsPerDirection + 1) horizontal lines * 2 vertices
+  // = 4 * (cellsPerDirection + 1) vertices
+  
+  let totalVerticalVertices = 2u * (CELLS_PER_DIRECTION + 1u);
+  let vertexInLine = vid % 2u;
+  
+  if (vid < totalVerticalVertices) {
+    // Vertical lines
+    let lineIndex = vid / 2u;
+    let x = -1.0 + f32(lineIndex) * CELL_SIZE;
+    var y: f32;
+    if (vertexInLine == 0u) {
+      y = -1.0;
+    } else {
+      y = 1.0;
+    }
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+  } else {
+    // Horizontal lines
+    let horizontalVid = vid - totalVerticalVertices;
+    let lineIndex = horizontalVid / 2u;
+    var x: f32;
+    if (vertexInLine == 0u) {
+      x = -1.0;
+    } else {
+      x = 1.0;
+    }
+    let y = -1.0 + f32(lineIndex) * CELL_SIZE;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+  }
+  
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  // Gray color for grid lines
+  return vec4<f32>(0.3, 0.3, 0.3, 0.5);
+}
+`;
+
+const gridModule = device.createShaderModule({ code: gridShaderCode });
+const gridPipeline = device.createRenderPipeline({
+  layout: 'auto',
+  vertex: {
+    module: gridModule,
+    entryPoint: 'vs_main',
+  },
+  fragment: {
+    module: gridModule,
+    entryPoint: 'fs_main',
+    targets: [{ format }],
+  },
+  primitive: { topology: 'line-list' },
+});
+
+//
+// === Velocity Vector Rendering Shader (WGSL) ===
+//
+const velocityVectorShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+const CELL_SIZE = 2.0 / f32(CELLS_PER_DIRECTION);
+const HALF_CELL = CELL_SIZE * 0.5;
+const VECTOR_SCALE = 0.3; // Scale factor for velocity vectors
+
+struct VSOut {
+  @builtin(position) pos: vec4<f32>,
+};
+
+@group(0) @binding(0)
+var<storage, read> gridVelocities: array<vec2<f32>>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32,
+           @builtin(instance_index) iid: u32) -> VSOut {
+  var out: VSOut;
+  
+  // Get cell center position
+  let gx = iid % CELLS_PER_DIRECTION;
+  let gy = iid / CELLS_PER_DIRECTION;
+  let cellCenterX = -1.0 + f32(gx) * CELL_SIZE + HALF_CELL;
+  let cellCenterY = -1.0 + f32(gy) * CELL_SIZE + HALF_CELL;
+  
+  // Get grid velocity for this cell
+  let vel = gridVelocities[iid];
+  let velMagnitude = length(vel);
+  
+  // Draw line from center to center + velocity (scaled)
+  if (vid == 0u) {
+    // Start point: cell center
+    out.pos = vec4<f32>(cellCenterX, cellCenterY, 0.0, 1.0);
+  } else {
+    // End point: center + velocity * scale
+    let endX = cellCenterX + vel.x * VECTOR_SCALE;
+    let endY = cellCenterY + vel.y * VECTOR_SCALE;
+    out.pos = vec4<f32>(endX, endY, 0.0, 1.0);
+  }
+  
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  // Yellow color for velocity vectors
+  return vec4<f32>(1.0, 1.0, 0.0, 0.8);
+}
+`;
+
+const velocityVectorModule = device.createShaderModule({ code: velocityVectorShaderCode });
+const velocityVectorPipeline = device.createRenderPipeline({
+  layout: 'auto',
+  vertex: {
+    module: velocityVectorModule,
+    entryPoint: 'vs_main',
+  },
+  fragment: {
+    module: velocityVectorModule,
+    entryPoint: 'fs_main',
+    targets: [{ format }],
+  },
+  primitive: { topology: 'line-list' },
+});
+
+// Create bind group for velocity vectors
+const velocityVectorBindGroup = device.createBindGroup({
+  layout: velocityVectorPipeline.getBindGroupLayout(0),
+  entries: [
+    { binding: 0, resource: { buffer: gridVelocityBuffer } },
+  ],
+});
+
+// Track grid visibility
+let showGrid = false;
+const showGridCheckbox = document.getElementById('show-grid');
+showGridCheckbox.addEventListener('change', (e) => {
+  showGrid = e.target.checked;
 });
 
 // Initialize particles (after pipelines are created)
@@ -410,6 +673,9 @@ let lastTime = performance.now();
 let frameCount = 0;
 let fps = 0;
 const fpsCounter = document.getElementById('fps-counter');
+const energyCounter = document.getElementById('energy-counter');
+let energyReadbackPending = false;
+let lastEnergyReadTime = 0;
 
 function frame() {
   const currentTime = performance.now();
@@ -426,12 +692,18 @@ function frame() {
   
   const encoder = device.createCommandEncoder();
 
+  // Reset energy buffer to zero before compute
+  device.queue.writeBuffer(energySumBuffer, 0, new Uint32Array([0]));
+  
+  // Reset particle count buffer to zero before compute
+  device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
+
   // 0️⃣ Grid decay compute pass (runs once per frame)
   {
     const pass = encoder.beginComputePass();
     pass.setPipeline(gridDecayPipeline);
     pass.setBindGroup(0, gridDecayBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(numCells / 64)); // 100 cells, so 2 workgroups
+    pass.dispatchWorkgroups(Math.ceil(numCells / 64)); // numCells workgroups
     pass.end();
   }
 
@@ -442,6 +714,23 @@ function frame() {
     pass.setBindGroup(0, computeBindGroup);
     pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
     pass.end();
+  }
+
+  // 1.5️⃣ Normalize grid velocities by particle count
+  {
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(normalizeVelocityPipeline);
+    pass.setBindGroup(0, normalizeVelocityBindGroup);
+    pass.dispatchWorkgroups(Math.ceil(numCells / 64));
+    pass.end();
+  }
+
+  // Copy energy from GPU to staging buffer for readback (only when ready to read)
+  let shouldReadEnergy = !energyReadbackPending && (currentTime - lastEnergyReadTime >= 1000);
+  if (shouldReadEnergy) {
+    encoder.copyBufferToBuffer(energySumBuffer, 0, energyStagingBuffer, 0, 4);
+    energyReadbackPending = true;
+    lastEnergyReadTime = currentTime;
   }
 
   // 2️⃣ Render pass
@@ -457,9 +746,41 @@ function frame() {
   renderPass.setPipeline(renderPipeline);
   renderPass.setBindGroup(0, renderBindGroup);
   renderPass.draw(numParticles);
+  
+  // Render grid lines and velocity vectors if enabled
+  if (showGrid) {
+    renderPass.setPipeline(gridPipeline);
+    // Draw grid lines: 2 * (cellsPerDirection + 1) lines, each with 2 vertices
+    const gridVertices = 2 * 2 * (cellsPerDirection + 1);
+    renderPass.draw(gridVertices);
+    
+    // Render velocity vectors
+    renderPass.setPipeline(velocityVectorPipeline);
+    renderPass.setBindGroup(0, velocityVectorBindGroup);
+    // Draw one line (2 vertices) per cell, using instancing
+    renderPass.draw(2, numCells, 0, 0);
+  }
+  
   renderPass.end();
 
   device.queue.submit([encoder.finish()]);
+  
+  // Read back energy asynchronously (only once per second to avoid performance hit)
+  if (shouldReadEnergy) {
+    energyStagingBuffer.mapAsync(GPUMapMode.READ).then(() => {
+      const energyArray = new Uint32Array(energyStagingBuffer.getMappedRange());
+      const energySum = energyArray[0];
+      // Each particle contributes 1-100, so sum is total energy
+      // Optionally convert back: averageEnergy = (energySum / numParticles - 1) / 99.0
+      energyCounter.textContent = `Energy: ${energySum}`;
+      energyStagingBuffer.unmap();
+      energyReadbackPending = false;
+    }).catch(err => {
+      console.error('Error reading energy:', err);
+      energyReadbackPending = false;
+    });
+  }
+  
   frameId = requestAnimationFrame(frame);
 }
 

@@ -24,30 +24,26 @@
     font-size: 16px;
   }
   .control-group {
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
   .control-group label {
-    display: block;
-    margin-bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: 12px;
     color: #ccc;
   }
   .control-group input[type="range"] {
     width: 100%;
-    margin-bottom: 5px;
   }
   .control-group input[type="number"] {
-    width: 100%;
+    flex: 1;
     padding: 5px;
     background: #1a1a1a;
     color: white;
     border: 1px solid #444;
     border-radius: 3px;
     font-size: 12px;
-  }
-  .control-group .value-display {
-    font-size: 11px;
-    color: #888;
   }
   canvas { width: 1000px; height: 1000px; display: block; background: black; }
   #fps-counter {
@@ -75,20 +71,25 @@
 <div id="control-panel">
   <h3>Controls</h3>
   <div class="control-group">
-    <label for="num-particles">Number of Particles</label>
-    <input type="number" id="num-particles" min="1000" max="10000000" step="1000" value="1000000">
-    <div class="value-display">Press Enter to restart simulation</div>
+    <label for="num-particles">Number of Particles: <input type="number" id="num-particles" min="1000" max="10000000" step="1000" value="1000000"></label>
   </div>
   <div class="control-group">
-    <label for="decay-factor">Decay Strength</label>
-    <input type="number" id="decay-factor" min="0.0" max="10.0" step="0.01" value="0.1">
-    <div class="value-display">Decay proportional to velocity² (Press Enter)</div>
+    <label for="decay-factor">Decay Strength: <input type="number" id="decay-factor" min="0.0" max="1.0" step="0.01" value="0.99"></label>
+  </div>
+  <div class="control-group">
+    <label for="show-particles">
+      <input type="checkbox" id="show-particles" checked>
+      Show Particles
+    </label>
   </div>
   <div class="control-group">
     <label for="show-grid">
       <input type="checkbox" id="show-grid">
       Show Grid
     </label>
+  </div>
+  <div class="control-group">
+    <button id="start-stop-btn" style="padding: 8px 16px; font-size: 14px; cursor: pointer;">Stop</button>
   </div>
 </div>
 <canvas id="gfx" width="1000" height="1000"></canvas>
@@ -185,14 +186,24 @@ device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
 console.log('Created particle count buffer');
 
 
-let decayFactor = 0.1;
+let drag = 1.0;
+ 
+let dt = 0.016;
+
+/*
 const uniformData = new Float32Array([
-  0.016, 0, 0, 0,     // dt + pad (16 bytes)
-  0, 0, 0, 0,         // pad (16 bytes)
-  0.0, -0.0, 0, 0,    // gravity (x,y) + pad (16 bytes)
-  decayFactor, 0, 0, 0,  // decay factor + pad (16 bytes)
+  dt, 0, 0, 0,     // dt + pad (16 bytes)
+  Gx, Gy, 0, 0,    // gravity (x,y) + pad (16 bytes)
+  drag, 0, 0, 0,  // decay factor + pad (16 bytes)
   0, 0, 0, 0,         // additional pad to reach 80 bytes minimum (16 bytes)
+  0, 0, 0, 0,
+  0, 0, 0, 0,
 ]);
+*/
+const uniformData = new Float32Array(24);
+uniformData[0] = dt;
+uniformData[1] = drag;
+
 const uniformBuffer = device.createBuffer({
   size: uniformData.byteLength,
   usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -246,12 +257,9 @@ var<storage, read_write> particleCounts: array<atomic<u32>>;
 
 struct Params {
   dt: f32,
-  _pad1: vec3<f32>,
-  gravity: vec2<f32>,
-  _pad2: vec2<f32>,
-  decayFactor: f32,
-  _pad3: vec3<f32>,
+  drag: f32,
 };
+
 @group(0) @binding(2)
 var<uniform> params: Params;
 
@@ -263,7 +271,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   var p = particles[i];
 
   // --- physics ---
-  p.vel += params.gravity * params.dt;
   p.pos += p.vel * params.dt;
 
   // bounce
@@ -283,8 +290,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let gridVel = gridVelocities[cellIndex];
   let particleVelBefore = p.vel; // Store original particle velocity
   
-  // Add 1/100 of the magnitude of grid velocity to particle velocity
-  // (in the direction of the grid velocity)
+  // Add grid velocity to particle velocity
   let gridVelMagnitude = length(gridVel);
   if (gridVelMagnitude > 0.0) {
     p.vel += normalize(gridVel) * (0.001 * gridVelMagnitude);
@@ -295,8 +301,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
   // Apply decay proportional to square of velocity
   let velSquared = dot(p.vel, p.vel);
-  // let decayAmount = params.decayFactor * velSquared;
-  p.vel *= (1.0 - velSquared * params.decayFactor); // Clamp to prevent negative or excessive decay
+  
+  p.vel *= (1.0 - velSquared * params.drag); // Clamp to prevent negative or excessive decay
   //p.vel.x = clamp(p.vel.x, -1.0, 1.0);
   //p.vel.y = clamp(p.vel.y, -1.0, 1.0);
   
@@ -325,11 +331,7 @@ var<storage, read_write> gridVelocities: array<vec2<f32>>;
 
 struct Params {
   dt: f32,
-  _pad1: vec3<f32>,
-  gravity: vec2<f32>,
-  _pad2: vec2<f32>,
-  decayFactor: f32,
-  _pad3: vec3<f32>,
+  drag: f32,
 };
 @group(0) @binding(2)
 var<uniform> params: Params;
@@ -340,7 +342,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (i >= arrayLength(&gridVelocities)) { return; }
   
   // Apply decay factor to grid velocity
-  gridVelocities[i] *= params.decayFactor / params.decayFactor * 0.99;
+  gridVelocities[i] *= params.drag;
 }
 
 `;
@@ -539,7 +541,7 @@ const velocityVectorShaderCode = /* wgsl */`
 const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
 const CELL_SIZE = 2.0 / f32(CELLS_PER_DIRECTION);
 const HALF_CELL = CELL_SIZE * 0.5;
-const VECTOR_SCALE = 0.3; // Scale factor for velocity vectors
+const VECTOR_SCALE = 100.0; // Scale factor for velocity vectors
 
 struct VSOut {
   @builtin(position) pos: vec4<f32>,
@@ -607,6 +609,13 @@ const velocityVectorBindGroup = device.createBindGroup({
   ],
 });
 
+// Track particle visibility
+let showParticles = true;
+const showParticlesCheckbox = document.getElementById('show-particles');
+showParticlesCheckbox.addEventListener('change', (e) => {
+  showParticles = e.target.checked;
+});
+
 // Track grid visibility
 let showGrid = false;
 const showGridCheckbox = document.getElementById('show-grid');
@@ -614,26 +623,36 @@ showGridCheckbox.addEventListener('change', (e) => {
   showGrid = e.target.checked;
 });
 
+// Track simulation running state
+let simulationRunning = true;
+const startStopBtn = document.getElementById('start-stop-btn');
+startStopBtn.addEventListener('click', () => {
+  simulationRunning = !simulationRunning;
+  startStopBtn.textContent = simulationRunning ? 'Stop' : 'Start';
+});
+
 // Initialize particles (after pipelines are created)
 initializeParticles();
 
 // Control panel setup
 const numParticlesInput = document.getElementById('num-particles');
-const decayFactorInput = document.getElementById('decay-factor');
+const dragInput = document.getElementById('decay-factor');
+dragInput.value = drag; // Initialize input from JavaScript variable
 
-function updateDecayFactor(value) {
-  decayFactor = parseFloat(value);
-  decayFactorInput.value = decayFactor;
+function updatedrag(value) {
+  drag = parseFloat(value);
+  dragInput.value = drag;
   
   // Update uniform buffer
-  uniformData[12] = decayFactor; // Index 12 is where decayFactor is stored
+  uniformData[2] = drag; // Index 12 is where drag is stored
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated drag to ", drag);
 }
 
-decayFactorInput.addEventListener('keypress', (e) => {
+dragInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
     const val = Math.max(0.0, Math.min(10.0, parseFloat(e.target.value) || 0.1));
-    updateDecayFactor(val);
+    updatedrag(val);
   }
 });
 
@@ -691,46 +710,50 @@ function frame() {
   }
   
   const encoder = device.createCommandEncoder();
+  let shouldReadEnergy = false;
 
-  // Reset energy buffer to zero before compute
-  device.queue.writeBuffer(energySumBuffer, 0, new Uint32Array([0]));
-  
-  // Reset particle count buffer to zero before compute
-  device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
+  // Only run compute passes if simulation is running
+  if (simulationRunning) {
+    // Reset energy buffer to zero before compute
+    device.queue.writeBuffer(energySumBuffer, 0, new Uint32Array([0]));
+    
+    // Reset particle count buffer to zero before compute
+    device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
 
-  // 0️⃣ Grid decay compute pass (runs once per frame)
-  {
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(gridDecayPipeline);
-    pass.setBindGroup(0, gridDecayBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(numCells / 64)); // numCells workgroups
-    pass.end();
-  }
+    // 0️⃣ Grid decay compute pass (runs once per frame)
+    {
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(gridDecayPipeline);
+      pass.setBindGroup(0, gridDecayBindGroup);
+      pass.dispatchWorkgroups(Math.ceil(numCells / 64)); // numCells workgroups
+      pass.end();
+    }
 
-  // 1️⃣ Particle compute pass
-  {
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(computePipeline);
-    pass.setBindGroup(0, computeBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
-    pass.end();
-  }
+    // 1️⃣ Particle compute pass
+    {
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(computePipeline);
+      pass.setBindGroup(0, computeBindGroup);
+      pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
+      pass.end();
+    }
 
-  // 1.5️⃣ Normalize grid velocities by particle count
-  {
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(normalizeVelocityPipeline);
-    pass.setBindGroup(0, normalizeVelocityBindGroup);
-    pass.dispatchWorkgroups(Math.ceil(numCells / 64));
-    pass.end();
-  }
+    // 1.5️⃣ Normalize grid velocities by particle count
+    {
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(normalizeVelocityPipeline);
+      pass.setBindGroup(0, normalizeVelocityBindGroup);
+      pass.dispatchWorkgroups(Math.ceil(numCells / 64));
+      pass.end();
+    }
 
-  // Copy energy from GPU to staging buffer for readback (only when ready to read)
-  let shouldReadEnergy = !energyReadbackPending && (currentTime - lastEnergyReadTime >= 1000);
-  if (shouldReadEnergy) {
-    encoder.copyBufferToBuffer(energySumBuffer, 0, energyStagingBuffer, 0, 4);
-    energyReadbackPending = true;
-    lastEnergyReadTime = currentTime;
+    // Copy energy from GPU to staging buffer for readback (only when ready to read)
+    shouldReadEnergy = !energyReadbackPending && (currentTime - lastEnergyReadTime >= 1000);
+    if (shouldReadEnergy) {
+      encoder.copyBufferToBuffer(energySumBuffer, 0, energyStagingBuffer, 0, 4);
+      energyReadbackPending = true;
+      lastEnergyReadTime = currentTime;
+    }
   }
 
   // 2️⃣ Render pass
@@ -743,9 +766,13 @@ function frame() {
       storeOp: 'store',
     }],
   });
-  renderPass.setPipeline(renderPipeline);
-  renderPass.setBindGroup(0, renderBindGroup);
-  renderPass.draw(numParticles);
+  
+  // Render particles if enabled
+  if (showParticles) {
+    renderPass.setPipeline(renderPipeline);
+    renderPass.setBindGroup(0, renderBindGroup);
+    renderPass.draw(numParticles);
+  }
   
   // Render grid lines and velocity vectors if enabled
   if (showGrid) {
@@ -765,14 +792,15 @@ function frame() {
 
   device.queue.submit([encoder.finish()]);
   
-  // Read back energy asynchronously (only once per second to avoid performance hit)
+  // Read back energy asynchronously after submit (only once per second to avoid performance hit)
   if (shouldReadEnergy) {
+    // Wait for the copy to complete before mapping
     energyStagingBuffer.mapAsync(GPUMapMode.READ).then(() => {
       const energyArray = new Uint32Array(energyStagingBuffer.getMappedRange());
       const energySum = energyArray[0];
-      // Each particle contributes 1-100, so sum is total energy
-      // Optionally convert back: averageEnergy = (energySum / numParticles - 1) / 99.0
-      energyCounter.textContent = `Energy: ${energySum}`;
+      // Energy is stored as velSquared * 10000.0, so normalize by dividing by 10000.0 and numParticles
+      const normalizedEnergy = energySum / (10000.0 * numParticles);
+      energyCounter.textContent = `Energy: ${normalizedEnergy.toFixed(6)}`;
       energyStagingBuffer.unmap();
       energyReadbackPending = false;
     }).catch(err => {

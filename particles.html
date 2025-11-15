@@ -75,13 +75,24 @@
     padding: 4px 8px;
     border-radius: 4px;
   }
+  #timestamp-counter {
+    position: fixed;
+    bottom: 50px;
+    right: 10px;
+    color: white;
+    font-family: monospace;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
 </style>
 </head>
 <body>
 <div id="control-panel">
   <h3>Controls</h3>
   <div class="control-group">
-    <label for="num-particles">Number of Particles: <input type="number" id="num-particles" min="1000" max="10000000" step="1000" value="1000000"></label>
+    <label for="num-particles">Number of Particles: <input type="number" id="num-particles" min="1000" max="10000000" step="1000"></label>
   </div>
   <div class="control-group">
     <label for="drag">Drag: <input type="number" id="drag" step="0.01" value="0.99"></label>
@@ -108,11 +119,22 @@
 <canvas id="gfx" width="1000" height="1000"></canvas>
 <div id="fps-counter">FPS: --</div>
 <div id="energy-counter">Energy: --</div>
+<div id="timestamp-counter">GPU Timing: --</div>
 <script type="module">
 console.log('Startup');
 const adapter = await navigator.gpu.requestAdapter();
 console.log('Got Adapter');
-const device = await adapter.requestDevice();
+
+// Check for timestamp query support
+const requiredFeatures = [];
+if (adapter.features.has('timestamp-query')) {
+  requiredFeatures.push('timestamp-query');
+  console.log('Timestamp queries supported');
+} else {
+  console.warn('Timestamp queries not supported - GPU timing will not be available');
+}
+
+const device = await adapter.requestDevice({ requiredFeatures });
 console.log('Got Device');
 const canvas = document.getElementById('gfx');
 const context = canvas.getContext('webgpu');
@@ -121,11 +143,84 @@ console.log('Got Got WebGPU context');
 const format = navigator.gpu.getPreferredCanvasFormat();
 context.configure({ device, format });
 
-let numParticles = 1000000;
+let numParticles = 250000;
 let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
 let frameId = null;
 
+// Timestamp query infrastructure for GPU timing
+let timestampQuerySet = null;
+let timestampBuffer = null;
+let timestampReadbackPending = false;
+let lastTimestampReadTime = 0;
+const TIMESTAMP_READ_INTERVAL = 1000; // Read timestamps every second
+const timestampCounter = document.getElementById('timestamp-counter');
 
+// Initialize timestamp query set if supported
+if (device.features.has('timestamp-query')) {
+  // Create query set with 4 queries: 
+  // 0-1: particle compute (start, end)
+  // 2-3: findNeighbors (start, end)
+  timestampQuerySet = device.createQuerySet({
+    type: 'timestamp',
+    count: 4,
+  });
+  
+  // Create buffer to read back timestamps (4 u64 values = 32 bytes)
+  timestampBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+  });
+  
+  console.log('Created timestamp query infrastructure');
+}
+
+// Helper function to create a compute pass with timestamp queries
+// queryIndexOffset: 0 for particle compute, 2 for findNeighbors
+function createTimedComputePass(encoder, queryIndexOffset = 0) {
+  if (!timestampQuerySet) {
+    // Timestamp queries not supported, return normal pass
+    return encoder.beginComputePass();
+  }
+  
+  // Create compute pass with timestamp writes
+  return encoder.beginComputePass({
+    timestampWrites: {
+      querySet: timestampQuerySet,
+      beginningOfPassWriteIndex: queryIndexOffset,
+      endOfPassWriteIndex: queryIndexOffset + 1,
+    },
+  });
+}
+
+// Function to resolve and read back timestamps
+function resolveTimestamps(encoder, currentTime) {
+  if (!timestampQuerySet || !timestampBuffer || !timestampStagingBuffer) {
+    return false;
+  }
+  
+  const shouldReadTimestamp = !timestampReadbackPending && 
+                               (currentTime - lastTimestampReadTime >= TIMESTAMP_READ_INTERVAL);
+  
+  if (shouldReadTimestamp) {
+    // Resolve all queries (4 queries) to buffer
+    encoder.resolveQuerySet(timestampQuerySet, 0, 4, timestampBuffer, 0);
+    // Copy from timestamp buffer to staging buffer for readback
+    encoder.copyBufferToBuffer(timestampBuffer, 0, timestampStagingBuffer, 0, 32);
+    timestampReadbackPending = true;
+    lastTimestampReadTime = currentTime;
+    return true;
+  }
+  return false;
+}
+
+// Staging buffer for timestamp readback
+let timestampStagingBuffer = null;
+if (timestampBuffer) {
+  timestampStagingBuffer = device.createBuffer({
+    size: 32, // 4 u64 values
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+}
 
 function initializeParticles() {
   // JS-side data
@@ -644,6 +739,7 @@ initializeParticles();
 
 // Control panel setup
 const numParticlesInput = document.getElementById('num-particles');
+numParticlesInput.value = numParticles; // Initialize input from JavaScript variable
 const dragInput = document.getElementById('drag');
 dragInput.value = drag; // Initialize input from JavaScript variable
 
@@ -732,6 +828,7 @@ function frame() {
   
   const encoder = device.createCommandEncoder();
   let shouldReadEnergy = false;
+  let shouldReadTimestamp = false;
 
   // Only run compute passes if simulation is running
   if (simulationRunning) {
@@ -750,9 +847,9 @@ function frame() {
       pass.end();
     }
 
-    // 1️⃣ Particle compute pass
+    // 1️⃣ Particle compute pass (with GPU timing)
     {
-      const pass = encoder.beginComputePass();
+      const pass = createTimedComputePass(encoder, 0); // Use query indices 0-1
       pass.setPipeline(computePipeline);
       pass.setBindGroup(0, computeBindGroup);
       pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
@@ -768,6 +865,18 @@ function frame() {
       pass.end();
     }
 
+    // 1.75️⃣ Find neighbors compute pass - EXAMPLE: Use createTimedComputePass() to measure GPU time
+    // When you add your findNeighbors pass, use createTimedComputePass() with queryIndexOffset 2:
+    /*
+    {
+      const pass = createTimedComputePass(encoder, 2); // Use query indices 2-3
+      pass.setPipeline(findNeighborsPipeline);
+      pass.setBindGroup(0, findNeighborsBindGroup);
+      pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
+      pass.end();
+    }
+    */
+
     // Copy energy from GPU to staging buffer for readback (only when ready to read)
     shouldReadEnergy = !energyReadbackPending && (currentTime - lastEnergyReadTime >= 1000);
     if (shouldReadEnergy) {
@@ -775,6 +884,9 @@ function frame() {
       energyReadbackPending = true;
       lastEnergyReadTime = currentTime;
     }
+    
+    // Resolve timestamp queries if needed
+    shouldReadTimestamp = resolveTimestamps(encoder, currentTime);
   }
 
   // 2️⃣ Render pass
@@ -812,6 +924,44 @@ function frame() {
   renderPass.end();
 
   device.queue.submit([encoder.finish()]);
+  
+  // Read back timestamps asynchronously after submit
+  if (shouldReadTimestamp && timestampStagingBuffer) {
+    timestampStagingBuffer.mapAsync(GPUMapMode.READ).then(() => {
+      const timestampArray = new BigUint64Array(timestampStagingBuffer.getMappedRange());
+      
+      // Get timestamp period (nanoseconds per tick)
+      // Try different APIs as browser support varies
+      let period = 1.0; // Default: 1 nanosecond per tick
+      if (typeof device.queue.getTimestampPeriod === 'function') {
+        period = device.queue.getTimestampPeriod();
+      } else if (typeof device.getTimestampPeriod === 'function') {
+        period = device.getTimestampPeriod();
+      }
+      // If period is not available, assume 1 nanosecond per tick (common default)
+      
+      // Calculate particle compute duration (queries 0-1)
+      const particleStartTime = Number(timestampArray[0]);
+      const particleEndTime = Number(timestampArray[1]);
+      const particleDurationMs = (particleEndTime - particleStartTime) * period / 1_000_000;
+      
+      // Calculate findNeighbors duration (queries 2-3) if available
+      let timingText = `Particle: ${particleDurationMs.toFixed(3)} ms`;
+      if (timestampArray.length >= 4 && timestampArray[2] > 0 && timestampArray[3] > 0) {
+        const findNeighborsStartTime = Number(timestampArray[2]);
+        const findNeighborsEndTime = Number(timestampArray[3]);
+        const findNeighborsDurationMs = (findNeighborsEndTime - findNeighborsStartTime) * period / 1_000_000;
+        timingText += `<br>findNeighbors: ${findNeighborsDurationMs.toFixed(3)} ms`;
+      }
+      
+      timestampCounter.innerHTML = timingText;
+      timestampStagingBuffer.unmap();
+      timestampReadbackPending = false;
+    }).catch(err => {
+      console.error('Error reading timestamps:', err);
+      timestampReadbackPending = false;
+    });
+  }
   
   // Read back energy asynchronously after submit (only once per second to avoid performance hit)
   if (shouldReadEnergy) {

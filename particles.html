@@ -3,6 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <title>WebGPU Compute Particles</title>
+//
+//  Experiments:
+//  
+//  Add list of neighbors to particle structure
+//  Flocking, with N nearest neighbors rather than grid 
+// 
+//  Add coupling constant between grid and particles to control panel
+//  Add firing state, firing behavior, weights for N neighbors to particle
+//  Add letters i/o capability to particles 
+//   
 <style>
   body {
     display: flex;
@@ -74,7 +84,10 @@
     <label for="num-particles">Number of Particles: <input type="number" id="num-particles" min="1000" max="10000000" step="1000" value="1000000"></label>
   </div>
   <div class="control-group">
-    <label for="decay-factor">Decay Strength: <input type="number" id="decay-factor" min="0.0" max="1.0" step="0.01" value="0.99"></label>
+    <label for="drag">Drag: <input type="number" id="drag" step="0.01" value="0.99"></label>
+  </div>
+  <div class="control-group">
+    <label for="decay">Decay: <input type="number" id="decay" step="0.01" value="0.99"></label>
   </div>
   <div class="control-group">
     <label for="show-particles">
@@ -187,22 +200,13 @@ console.log('Created particle count buffer');
 
 
 let drag = 1.0;
- 
+let decay = 1.0;
 let dt = 0.016;
 
-/*
-const uniformData = new Float32Array([
-  dt, 0, 0, 0,     // dt + pad (16 bytes)
-  Gx, Gy, 0, 0,    // gravity (x,y) + pad (16 bytes)
-  drag, 0, 0, 0,  // decay factor + pad (16 bytes)
-  0, 0, 0, 0,         // additional pad to reach 80 bytes minimum (16 bytes)
-  0, 0, 0, 0,
-  0, 0, 0, 0,
-]);
-*/
 const uniformData = new Float32Array(24);
 uniformData[0] = dt;
 uniformData[1] = drag;
+uniformData[2] = decay;
 
 const uniformBuffer = device.createBuffer({
   size: uniformData.byteLength,
@@ -258,6 +262,7 @@ var<storage, read_write> particleCounts: array<atomic<u32>>;
 struct Params {
   dt: f32,
   drag: f32,
+  decay: f32,
 };
 
 @group(0) @binding(2)
@@ -302,7 +307,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // Apply decay proportional to square of velocity
   let velSquared = dot(p.vel, p.vel);
   
-  p.vel *= (1.0 - velSquared * params.drag); // Clamp to prevent negative or excessive decay
+  p.vel *= (1.0 - velSquared * params.drag); 
+  p.vel *= params.decay;
+
   //p.vel.x = clamp(p.vel.x, -1.0, 1.0);
   //p.vel.y = clamp(p.vel.y, -1.0, 1.0);
   
@@ -332,6 +339,7 @@ var<storage, read_write> gridVelocities: array<vec2<f32>>;
 struct Params {
   dt: f32,
   drag: f32,
+  decay: f32,
 };
 @group(0) @binding(2)
 var<uniform> params: Params;
@@ -342,7 +350,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (i >= arrayLength(&gridVelocities)) { return; }
   
   // Apply decay factor to grid velocity
-  gridVelocities[i] *= params.drag;
+  gridVelocities[i] *= params.decay;
 }
 
 `;
@@ -636,25 +644,38 @@ initializeParticles();
 
 // Control panel setup
 const numParticlesInput = document.getElementById('num-particles');
-const dragInput = document.getElementById('decay-factor');
+const dragInput = document.getElementById('drag');
 dragInput.value = drag; // Initialize input from JavaScript variable
+
+const decayInput = document.getElementById('decay');
+decayInput.value = decay;
 
 function updatedrag(value) {
   drag = parseFloat(value);
   dragInput.value = drag;
   
   // Update uniform buffer
-  uniformData[2] = drag; // Index 12 is where drag is stored
+  uniformData[1] = drag; // Index 12 is where drag is stored
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
   console.log("Updated drag to ", drag);
 }
 
 dragInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
-    const val = Math.max(0.0, Math.min(10.0, parseFloat(e.target.value) || 0.1));
-    updatedrag(val);
+    const val = parseFloat(e.target.value);
+    updatedrag(isNaN(val) ? 0.1 : val);
   }
 });
+
+function updateDecay(value) {
+  drag = parseFloat(value);
+  decayInput.value = decay;
+  
+  // Update uniform buffer
+  uniformData[2] = decay; // Index 12 is where drag is stored
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated decay to ", drag);
+}
 
 function restartSimulation() {
   // Stop current animation

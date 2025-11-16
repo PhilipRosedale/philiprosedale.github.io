@@ -180,7 +180,7 @@ console.log('Got Got WebGPU context');
 const format = navigator.gpu.getPreferredCanvasFormat();
 context.configure({ device, format });
 
-let numParticles = 25000;
+let numParticles = 100000;
 const MAX_NEIGHBORS = 16; // Maximum number of neighbors per particle for flocking
 let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
 let neighborIndicesBuffer, neighborCountBuffer; // Neighbor list buffers
@@ -474,7 +474,7 @@ console.log('Created particle count buffer');
 let drag = 1.0;
 let decay = 1.0;
 let dt = 0.016;
-let cohesion = 0.03;
+let cohesion = 0.5;
 let separationStrength = 0.05;
 let separationDistance = 0.01;
 let alignment = 0.012;

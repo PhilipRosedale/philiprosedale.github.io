@@ -117,9 +117,12 @@
     </label>
   </div>
   <div class="control-group">
-    <label for="monochrome">
-      <input type="checkbox" id="monochrome">
-      Monochrome
+    <label for="color-mode">Color Mode:
+      <select id="color-mode">
+        <option value="0">Monochrome</option>
+        <option value="1" selected>Velocity</option>
+        <option value="2">Cell</option>
+      </select>
     </label>
   </div>
   <div class="control-group">
@@ -177,12 +180,13 @@ console.log('Got Got WebGPU context');
 const format = navigator.gpu.getPreferredCanvasFormat();
 context.configure({ device, format });
 
-let numParticles = 10000;
+let numParticles = 25000;
 const MAX_NEIGHBORS = 16; // Maximum number of neighbors per particle for flocking
 let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
 let neighborIndicesBuffer, neighborCountBuffer; // Neighbor list buffers
 let renderParamsBuffer; // Uniform buffer for render parameters (monochrome flag)
 let edgeBindGroup; // Bind group for edge rendering
+let colorParamsBuffer; // Uniform buffer for color mode
 let cellParticleListsBuffer; // Maps cells to particle indices for fast neighbor lookup
 let frameId = null;
 
@@ -263,13 +267,18 @@ if (timestampBuffer) {
 }
 
 function initializeParticles() {
-  // JS-side data
-  const particleData = new Float32Array(numParticles * 4); // x, y, vx, vy
+  // JS-side data: x, y, vx, vy, r, g, b, _pad (8 floats per particle, 32 bytes)
+  // vec3<f32> is aligned to 16 bytes in WGSL, so we need padding
+  const particleData = new Float32Array(numParticles * 8);
   for (let i = 0; i < numParticles; i++) {
-    particleData[i * 4 + 0] = (Math.random() * 2 - 1) * 0.9;  // x
-    particleData[i * 4 + 1] = (Math.random() * 2 - 1) * 0.9;  // y
-    particleData[i * 4 + 2] = (Math.random() * 2 - 1) * 0.1;  // vx
-    particleData[i * 4 + 3] = (Math.random() * 2 - 1) * 0.1;  // vy
+    particleData[i * 8 + 0] = (Math.random() * 2 - 1) * 0.9;  // x
+    particleData[i * 8 + 1] = (Math.random() * 2 - 1) * 0.9;  // y
+    particleData[i * 8 + 2] = (Math.random() * 2 - 1) * 0.1;  // vx
+    particleData[i * 8 + 3] = (Math.random() * 2 - 1) * 0.1;  // vy
+    particleData[i * 8 + 4] = 1.0;  // r (will be set by color shader)
+    particleData[i * 8 + 5] = 1.0;  // g
+    particleData[i * 8 + 6] = 1.0;  // b
+    particleData[i * 8 + 7] = 0.0;  // _pad (padding)
   }
 
   // GPU buffers
@@ -319,8 +328,9 @@ function initializeParticles() {
   console.log('Created neighbor count buffer');
   
   // Cell-to-particle mapping buffer: for each cell, store indices of particles in that cell
-  // Estimate max particles per cell: numParticles / numCells * safety factor
-  const MAX_PARTICLES_PER_CELL = Math.ceil((numParticles / numCells) * 3); // 3x safety factor
+  // Note: MAX_PARTICLES_PER_CELL is fixed at shader compile time (512), so we use that value
+  // If particles exceed this per cell, they will be dropped (but this should be rare with 512)
+  const MAX_PARTICLES_PER_CELL = window.MAX_PARTICLES_PER_CELL;
   if (cellParticleListsBuffer) {
     cellParticleListsBuffer.destroy();
   }
@@ -363,8 +373,6 @@ function initializeParticles() {
     layout: renderPipeline.getBindGroupLayout(0),
     entries: [
       { binding: 0, resource: { buffer: particleBuffer } },
-      { binding: 1, resource: { buffer: cellIndexBuffer } },
-      { binding: 2, resource: { buffer: renderParamsBuffer } },
     ],
   });
   
@@ -373,10 +381,8 @@ function initializeParticles() {
     layout: edgePipeline.getBindGroupLayout(0),
     entries: [
       { binding: 0, resource: { buffer: particleBuffer } },
-      { binding: 1, resource: { buffer: cellIndexBuffer } },
-      { binding: 2, resource: { buffer: neighborIndicesBuffer } },
-      { binding: 3, resource: { buffer: neighborCountBuffer } },
-      { binding: 4, resource: { buffer: renderParamsBuffer } },
+      { binding: 1, resource: { buffer: neighborIndicesBuffer } },
+      { binding: 2, resource: { buffer: neighborCountBuffer } },
     ],
   });
   
@@ -413,6 +419,28 @@ function initializeParticles() {
       { binding: 3, resource: { buffer: uniformBuffer } },
     ],
   });
+  
+  // Create color params uniform buffer
+  const colorParamsData = new Float32Array(1);
+  colorParamsData[0] = colorMode;
+  if (colorParamsBuffer) {
+    colorParamsBuffer.destroy();
+  }
+  colorParamsBuffer = device.createBuffer({
+    size: colorParamsData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(colorParamsBuffer, 0, colorParamsData);
+  
+  // Create color bind group
+  colorBindGroup = device.createBindGroup({
+    layout: colorPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+      { binding: 2, resource: { buffer: colorParamsBuffer } },
+    ],
+  });
 }
 
 // Grid configuration: cells per direction
@@ -420,8 +448,11 @@ const cellsPerDirection = 50;
 const numCells = cellsPerDirection * cellsPerDirection;
 
 // Calculate MAX_PARTICLES_PER_CELL at top level for shader compilation
-// This will be updated in initializeParticles() if numParticles changes
-window.MAX_PARTICLES_PER_CELL = Math.ceil((numParticles / numCells) * 3);
+// Use a large fixed value to handle all reasonable particle counts (up to 10M particles)
+// This is compiled into shaders, so it can't change at runtime
+// For 10M particles / 2500 cells = 4000 average, with clustering we need much more
+// 512 should handle most cases (can be increased to 1024 or 2048 if needed)
+window.MAX_PARTICLES_PER_CELL = 512; // Fixed value that should handle most cases
 const gridVelocityData = new Float32Array(numCells * 2); // Initialize to zero
 const gridVelocityBuffer = device.createBuffer({
   size: gridVelocityData.byteLength,
@@ -445,10 +476,11 @@ let decay = 1.0;
 let dt = 0.016;
 let cohesion = 0.03;
 let separationStrength = 0.05;
-let separationDistance = 0.02;
-let alignment = 0.009;
+let separationDistance = 0.01;
+let alignment = 0.012;
 let monochrome = false;
 let coupleToGrid = true; // Default to enabled
+let colorMode = 1; // 0 = monochrome, 1 = velocity, 2 = cell
 
 const uniformData = new Float32Array(32); // Increased to accommodate new parameters
 uniformData[0] = dt;
@@ -494,6 +526,8 @@ const MAX_CELL_INDEX = ${cellsPerDirection - 1}u;
 struct Particle {
   pos: vec2<f32>,
   vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
 };
 
 @group(0) @binding(0)
@@ -724,6 +758,8 @@ const MAX_PARTICLES_PER_CELL = ${window.MAX_PARTICLES_PER_CELL}u;
 struct Particle {
   pos: vec2<f32>,
   vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
 };
 
 @group(0) @binding(0)
@@ -742,7 +778,7 @@ var<storage, read_write> neighborCounts: array<u32>;
 var<storage, read> cellParticleLists: array<u32>; // Flattened: numCells * MAX_PARTICLES_PER_CELL
 
 @group(0) @binding(5)
-var<storage, read> particleCounts: array<u32>; // Count of particles per cell
+var<storage, read_write> particleCounts: array<atomic<u32>>; // Count of particles per cell (atomic)
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -784,11 +820,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       let checkCell = u32(checkGy) * CELLS_PER_DIRECTION + u32(checkGx);
       
       // Get the list of particles in this cell from the pre-built mapping
-      let cellParticleCount = particleCounts[checkCell];
+      let cellParticleCountRaw = atomicLoad(&particleCounts[checkCell]);
+      // Clamp to MAX_PARTICLES_PER_CELL because particles beyond capacity are dropped
+      let cellParticleCount = min(cellParticleCountRaw, MAX_PARTICLES_PER_CELL);
       let listBase = checkCell * MAX_PARTICLES_PER_CELL;
       
       // Iterate only through particles in this cell (much faster!)
-      for (var slot = 0u; slot < cellParticleCount && slot < MAX_PARTICLES_PER_CELL; slot++) {
+      for (var slot = 0u; slot < cellParticleCount; slot++) {
         let candidateIdx = cellParticleLists[listBase + slot];
         if (candidateIdx == particleIdx) { continue; } // Skip self
         if (candidateIdx >= arrayLength(&particles)) { continue; } // Skip invalid
@@ -850,6 +888,8 @@ const MAX_NEIGHBORS = ${MAX_NEIGHBORS}u;
 struct Particle {
   pos: vec2<f32>,
   vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
 };
 
 @group(0) @binding(0)
@@ -943,6 +983,74 @@ const flockingPipeline = device.createComputePipeline({
 
 let flockingBindGroup; // Will be created in initializeParticles()
 
+//
+// === Color Compute Shader (WGSL) ===
+// Sets particle colors based on mode: monochrome, velocity, or cell
+//
+const colorShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
+};
+
+@group(0) @binding(0)
+var<storage, read_write> particles: array<Particle>;
+
+@group(0) @binding(1)
+var<storage, read> cellIndices: array<u32>;
+
+struct ColorParams {
+  mode: f32, // 0 = monochrome, 1 = velocity, 2 = cell
+};
+
+@group(0) @binding(2)
+var<uniform> params: ColorParams;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let particleIdx = id.x;
+  if (particleIdx >= arrayLength(&particles)) { return; }
+  
+  var p = particles[particleIdx];
+  
+  if (params.mode < 0.5) {
+    // Mode 0: Monochrome (white)
+    p.color = vec3<f32>(1.0, 1.0, 1.0);
+  } else if (params.mode < 1.5) {
+    // Mode 1: Velocity-based coloring
+    let v = p.vel;
+    let r = clamp(0.5 + v.x * 100.0, 0.0, 1.0);
+    let g = clamp(0.5 + v.y * 100.0, 0.0, 1.0);
+    let b = clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);
+    p.color = vec3<f32>(r, g, b);
+  } else {
+    // Mode 2: Cell-based coloring (for debugging)
+    let cell = cellIndices[particleIdx];
+    let gx = cell % CELLS_PER_DIRECTION;
+    let gy = cell / CELLS_PER_DIRECTION;
+    // Create a color based on grid position
+    let r = fract(f32(gx) / 7.0);
+    let g = fract(f32(gy) / 7.0);
+    let b = fract(f32(cell) / 11.0);
+    p.color = vec3<f32>(r, g, b);
+  }
+  
+  particles[particleIdx] = p;
+}
+`;
+
+const colorModule = device.createShaderModule({ code: colorShaderCode });
+const colorPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: colorModule, entryPoint: 'main' },
+});
+
+let colorBindGroup; // Will be created in initializeParticles()
+
 // computeBindGroup will be created in initializeParticles()
 
 //
@@ -956,40 +1064,23 @@ struct VSOut {
   @location(0) color: vec4<f32>,
 };
 
-@group(0) @binding(0)
-var<storage, read> particles: array<vec4<f32>>; // pos+vel packed
-
-@group(0) @binding(1)
-var<storage, read> cellIndices: array<u32>;
-
-struct RenderParams {
-  monochrome: f32, // 1.0 = true, 0.0 = false
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
 };
 
-@group(0) @binding(2)
-var<uniform> renderParams: RenderParams;
+@group(0) @binding(0)
+var<storage, read> particles: array<Particle>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
   var out: VSOut;
   let p = particles[vid];
-  out.pos = vec4<f32>(p.xy, 0.0, 1.0);
-
-  // Use white color if monochrome is enabled, otherwise use velocity-based coloring
-  if (renderParams.monochrome > 0.5) {
-    out.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); // White
-  } else {
-    let cell = cellIndices[vid];
-    let gx = cell % CELLS_PER_DIRECTION;
-    let gy = cell / CELLS_PER_DIRECTION;
-    // Create color based on velocity
-    let v = p.zw;
-    let velSquared = dot(v, v);
-    let r =  clamp(0.5 + v.x * 100.0, 0.0, 1.0);   // f32(gx) / 9.0;
-    let g =  clamp(0.5 + v.y * 100.0, 0.0, 1.0);   //f32(gy) / 9.0;
-    let b =  clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);   // fract(f32(cell) / 7.0); // Add some variation
-    out.color = vec4<f32>(r, g, b, 1.0);
-  }
+  out.pos = vec4<f32>(p.pos, 0.0, 1.0);
+  // Use the color stored in the particle
+  out.color = vec4<f32>(p.color, 1.0);
   return out;
 }
 
@@ -1176,24 +1267,21 @@ struct VSOut {
   @location(0) color: vec4<f32>,
 };
 
-@group(0) @binding(0)
-var<storage, read> particles: array<vec4<f32>>; // pos+vel packed
-
-@group(0) @binding(1)
-var<storage, read> cellIndices: array<u32>;
-
-@group(0) @binding(2)
-var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX_NEIGHBORS
-
-@group(0) @binding(3)
-var<storage, read> neighborCounts: array<u32>; // One per particle
-
-struct RenderParams {
-  monochrome: f32, // 1.0 = true, 0.0 = false
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+  color: vec3<f32>,
+  _pad: f32, // Padding to align struct to 32 bytes (8 floats)
 };
 
-@group(0) @binding(4)
-var<uniform> renderParams: RenderParams;
+@group(0) @binding(0)
+var<storage, read> particles: array<Particle>;
+
+@group(0) @binding(1)
+var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX_NEIGHBORS
+
+@group(0) @binding(2)
+var<storage, read> neighborCounts: array<u32>; // One per particle
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) instanceIdx: u32) -> VSOut {
@@ -1238,26 +1326,14 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) instanceIdx
   // Determine if this is the start (vid == 0) or end (vid == 1) vertex
   if (vid == 0u) {
     // Start vertex: particle position
-    out.pos = vec4<f32>(particle.xy, 0.0, 1.0);
+    out.pos = vec4<f32>(particle.pos, 0.0, 1.0);
   } else {
     // End vertex: neighbor position
-    out.pos = vec4<f32>(neighbor.xy, 0.0, 1.0);
+    out.pos = vec4<f32>(neighbor.pos, 0.0, 1.0);
   }
   
-  // Use the same color calculation as the particle shader
-  if (renderParams.monochrome > 0.5) {
-    out.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); // White
-  } else {
-    let cell = cellIndices[particleIdx];
-    let gx = cell % CELLS_PER_DIRECTION;
-    let gy = cell / CELLS_PER_DIRECTION;
-    // Create color based on velocity
-    let v = particle.zw;
-    let r = clamp(0.5 + v.x * 100.0, 0.0, 1.0);
-    let g = clamp(0.5 + v.y * 100.0, 0.0, 1.0);
-    let b = clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);
-    out.color = vec4<f32>(r, g, b, 1.0);
-  }
+  // Use the color stored in the particle
+  out.color = vec4<f32>(particle.color, 1.0);
   
   return out;
 }
@@ -1313,16 +1389,6 @@ doFlockingCheckbox.addEventListener('change', (e) => {
   doFlocking = e.target.checked;
 });
 
-// Track monochrome state
-const monochromeCheckbox = document.getElementById('monochrome');
-monochromeCheckbox.addEventListener('change', (e) => {
-  monochrome = e.target.checked;
-  // Update render params buffer
-  const renderParamsData = new Float32Array(1);
-  renderParamsData[0] = monochrome ? 1.0 : 0.0;
-  device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
-});
-
 // Track grid coupling state
 const coupleToGridCheckbox = document.getElementById('couple-to-grid');
 coupleToGridCheckbox.addEventListener('change', (e) => {
@@ -1330,6 +1396,16 @@ coupleToGridCheckbox.addEventListener('change', (e) => {
   // Update uniform buffer
   uniformData[7] = coupleToGrid ? 1.0 : 0.0;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+});
+
+// Track color mode
+const colorModeSelect = document.getElementById('color-mode');
+colorModeSelect.addEventListener('change', (e) => {
+  colorMode = parseInt(e.target.value);
+  // Update color params buffer
+  const colorParamsData = new Float32Array(1);
+  colorParamsData[0] = colorMode;
+  device.queue.writeBuffer(colorParamsBuffer, 0, colorParamsData);
 });
 
 // Track simulation running state
@@ -1591,6 +1667,15 @@ function frame() {
       const pass = createTimedComputePass(encoder, 4); // Use query indices 4-5 for timing
       pass.setPipeline(flockingPipeline);
       pass.setBindGroup(0, flockingBindGroup);
+      pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
+      pass.end();
+    }
+
+    // 1.9️⃣ Color compute pass (updates particle colors based on mode)
+    {
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(colorPipeline);
+      pass.setBindGroup(0, colorBindGroup);
       pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
       pass.end();
     }

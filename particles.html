@@ -123,6 +123,12 @@
     </label>
   </div>
   <div class="control-group">
+    <label for="show-edges">
+      <input type="checkbox" id="show-edges">
+      Show Edges
+    </label>
+  </div>
+  <div class="control-group">
     <label for="couple-to-grid">
       <input type="checkbox" id="couple-to-grid" checked>
       Couple to Grid
@@ -176,6 +182,7 @@ const MAX_NEIGHBORS = 16; // Maximum number of neighbors per particle for flocki
 let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
 let neighborIndicesBuffer, neighborCountBuffer; // Neighbor list buffers
 let renderParamsBuffer; // Uniform buffer for render parameters (monochrome flag)
+let edgeBindGroup; // Bind group for edge rendering
 let cellParticleListsBuffer; // Maps cells to particle indices for fast neighbor lookup
 let frameId = null;
 
@@ -358,6 +365,18 @@ function initializeParticles() {
       { binding: 0, resource: { buffer: particleBuffer } },
       { binding: 1, resource: { buffer: cellIndexBuffer } },
       { binding: 2, resource: { buffer: renderParamsBuffer } },
+    ],
+  });
+  
+  // Create edge rendering bind group
+  edgeBindGroup = device.createBindGroup({
+    layout: edgePipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+      { binding: 2, resource: { buffer: neighborIndicesBuffer } },
+      { binding: 3, resource: { buffer: neighborCountBuffer } },
+      { binding: 4, resource: { buffer: renderParamsBuffer } },
     ],
   });
   
@@ -1144,6 +1163,128 @@ const velocityVectorBindGroup = device.createBindGroup({
   ],
 });
 
+//
+// === Edge Rendering Shader (WGSL) ===
+// Renders lines connecting particles to their neighbors
+//
+const edgeShaderCode = /* wgsl */`
+const MAX_NEIGHBORS = ${MAX_NEIGHBORS}u;
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+
+struct VSOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) color: vec4<f32>,
+};
+
+@group(0) @binding(0)
+var<storage, read> particles: array<vec4<f32>>; // pos+vel packed
+
+@group(0) @binding(1)
+var<storage, read> cellIndices: array<u32>;
+
+@group(0) @binding(2)
+var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX_NEIGHBORS
+
+@group(0) @binding(3)
+var<storage, read> neighborCounts: array<u32>; // One per particle
+
+struct RenderParams {
+  monochrome: f32, // 1.0 = true, 0.0 = false
+};
+
+@group(0) @binding(4)
+var<uniform> renderParams: RenderParams;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) instanceIdx: u32) -> VSOut {
+  var out: VSOut;
+  
+  // Calculate which particle and which neighbor slot
+  let particleIdx = instanceIdx / MAX_NEIGHBORS;
+  let neighborSlot = instanceIdx % MAX_NEIGHBORS;
+  
+  // Check if this particle has a neighbor in this slot
+  if (particleIdx >= arrayLength(&particles)) {
+    // Degenerate line (both vertices at origin)
+    out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    return out;
+  }
+  
+  let numNeighbors = neighborCounts[particleIdx];
+  if (neighborSlot >= numNeighbors) {
+    // Degenerate line (both vertices at origin)
+    out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    return out;
+  }
+  
+  // Get neighbor index
+  let baseIndex = particleIdx * MAX_NEIGHBORS;
+  let neighborIdx = neighborIndices[baseIndex + neighborSlot];
+  
+  // Check if neighbor index is valid
+  if (neighborIdx >= arrayLength(&particles) || neighborIdx == 0xFFFFFFFFu) {
+    // Degenerate line (both vertices at origin)
+    out.pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    return out;
+  }
+  
+  // Get particle and neighbor positions
+  let particle = particles[particleIdx];
+  let neighbor = particles[neighborIdx];
+  
+  // Determine if this is the start (vid == 0) or end (vid == 1) vertex
+  if (vid == 0u) {
+    // Start vertex: particle position
+    out.pos = vec4<f32>(particle.xy, 0.0, 1.0);
+  } else {
+    // End vertex: neighbor position
+    out.pos = vec4<f32>(neighbor.xy, 0.0, 1.0);
+  }
+  
+  // Use the same color calculation as the particle shader
+  if (renderParams.monochrome > 0.5) {
+    out.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); // White
+  } else {
+    let cell = cellIndices[particleIdx];
+    let gx = cell % CELLS_PER_DIRECTION;
+    let gy = cell / CELLS_PER_DIRECTION;
+    // Create color based on velocity
+    let v = particle.zw;
+    let r = clamp(0.5 + v.x * 100.0, 0.0, 1.0);
+    let g = clamp(0.5 + v.y * 100.0, 0.0, 1.0);
+    let b = clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);
+    out.color = vec4<f32>(r, g, b, 1.0);
+  }
+  
+  return out;
+}
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+  return in.color;
+}
+`;
+
+const edgeModule = device.createShaderModule({ code: edgeShaderCode });
+const edgePipeline = device.createRenderPipeline({
+  layout: 'auto',
+  vertex: {
+    module: edgeModule,
+    entryPoint: 'vs_main',
+  },
+  fragment: {
+    module: edgeModule,
+    entryPoint: 'fs_main',
+    targets: [{ format }],
+  },
+  primitive: { topology: 'line-list' },
+});
+
+// edgeBindGroup is declared at the top level and created in initializeParticles()
+
 // Track particle visibility
 let showParticles = true;
 const showParticlesCheckbox = document.getElementById('show-particles');
@@ -1156,6 +1297,13 @@ let showGrid = false;
 const showGridCheckbox = document.getElementById('show-grid');
 showGridCheckbox.addEventListener('change', (e) => {
   showGrid = e.target.checked;
+});
+
+// Track edge visibility
+let showEdges = false;
+const showEdgesCheckbox = document.getElementById('show-edges');
+showEdgesCheckbox.addEventListener('change', (e) => {
+  showEdges = e.target.checked;
 });
 
 // Track flocking state
@@ -1475,6 +1623,14 @@ function frame() {
     renderPass.setPipeline(renderPipeline);
     renderPass.setBindGroup(0, renderBindGroup);
     renderPass.draw(numParticles);
+  }
+  
+  // Render edges (connections between particles and neighbors) if enabled
+  if (showEdges && neighborIndicesBuffer) {
+    renderPass.setPipeline(edgePipeline);
+    renderPass.setBindGroup(0, edgeBindGroup);
+    // Draw 2 vertices per edge, with numParticles * MAX_NEIGHBORS instances
+    renderPass.draw(2, numParticles * MAX_NEIGHBORS, 0, 0);
   }
   
   // Render grid lines and velocity vectors if enabled

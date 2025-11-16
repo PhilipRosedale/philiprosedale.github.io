@@ -113,6 +113,12 @@
     </label>
   </div>
   <div class="control-group">
+    <label for="do-flocking">
+      <input type="checkbox" id="do-flocking" checked>
+      Do Flocking
+    </label>
+  </div>
+  <div class="control-group">
     <button id="start-stop-btn" style="padding: 8px 16px; font-size: 14px; cursor: pointer;">Stop</button>
   </div>
 </div>
@@ -143,8 +149,11 @@ console.log('Got Got WebGPU context');
 const format = navigator.gpu.getPreferredCanvasFormat();
 context.configure({ device, format });
 
-let numParticles = 250000;
+let numParticles = 10000;
+const MAX_NEIGHBORS = 16; // Maximum number of neighbors per particle for flocking
 let particleBuffer, cellIndexBuffer, computeBindGroup, renderBindGroup;
+let neighborIndicesBuffer, neighborCountBuffer; // Neighbor list buffers
+let cellParticleListsBuffer; // Maps cells to particle indices for fast neighbor lookup
 let frameId = null;
 
 // Timestamp query infrastructure for GPU timing
@@ -157,17 +166,18 @@ const timestampCounter = document.getElementById('timestamp-counter');
 
 // Initialize timestamp query set if supported
 if (device.features.has('timestamp-query')) {
-  // Create query set with 4 queries: 
+  // Create query set with 6 queries: 
   // 0-1: particle compute (start, end)
   // 2-3: findNeighbors (start, end)
+  // 4-5: flocking (start, end)
   timestampQuerySet = device.createQuerySet({
     type: 'timestamp',
-    count: 4,
+    count: 6,
   });
   
-  // Create buffer to read back timestamps (4 u64 values = 32 bytes)
+  // Create buffer to read back timestamps (6 u64 values = 48 bytes)
   timestampBuffer = device.createBuffer({
-    size: 32,
+    size: 48,
     usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
   });
   
@@ -202,10 +212,10 @@ function resolveTimestamps(encoder, currentTime) {
                                (currentTime - lastTimestampReadTime >= TIMESTAMP_READ_INTERVAL);
   
   if (shouldReadTimestamp) {
-    // Resolve all queries (4 queries) to buffer
-    encoder.resolveQuerySet(timestampQuerySet, 0, 4, timestampBuffer, 0);
+    // Resolve all queries (6 queries) to buffer
+    encoder.resolveQuerySet(timestampQuerySet, 0, 6, timestampBuffer, 0);
     // Copy from timestamp buffer to staging buffer for readback
-    encoder.copyBufferToBuffer(timestampBuffer, 0, timestampStagingBuffer, 0, 32);
+    encoder.copyBufferToBuffer(timestampBuffer, 0, timestampStagingBuffer, 0, 48);
     timestampReadbackPending = true;
     lastTimestampReadTime = currentTime;
     return true;
@@ -217,7 +227,7 @@ function resolveTimestamps(encoder, currentTime) {
 let timestampStagingBuffer = null;
 if (timestampBuffer) {
   timestampStagingBuffer = device.createBuffer({
-    size: 32, // 4 u64 values
+    size: 48, // 6 u64 values
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
 }
@@ -251,6 +261,52 @@ function initializeParticles() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   });
   
+  // Neighbor indices buffer: flattened array where each particle has MAX_NEIGHBORS consecutive slots
+  // Layout: [particle0_neighbor0, particle0_neighbor1, ..., particle0_neighborN-1, particle1_neighbor0, ...]
+  if (neighborIndicesBuffer) {
+    neighborIndicesBuffer.destroy();
+  }
+  neighborIndicesBuffer = device.createBuffer({
+    size: numParticles * MAX_NEIGHBORS * 4, // MAX_NEIGHBORS u32s per particle
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  // Initialize to invalid indices (numParticles, which is out of bounds)
+  const neighborInitData = new Uint32Array(numParticles * MAX_NEIGHBORS);
+  neighborInitData.fill(numParticles); // Use numParticles as invalid marker (out of bounds)
+  device.queue.writeBuffer(neighborIndicesBuffer, 0, neighborInitData);
+  console.log('Created neighbor indices buffer');
+  
+  // Neighbor count buffer: one u32 per particle storing how many valid neighbors it has
+  if (neighborCountBuffer) {
+    neighborCountBuffer.destroy();
+  }
+  neighborCountBuffer = device.createBuffer({
+    size: numParticles * 4, // one u32 per particle
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  // Initialize to zero
+  device.queue.writeBuffer(neighborCountBuffer, 0, new Uint32Array(numParticles));
+  console.log('Created neighbor count buffer');
+  
+  // Cell-to-particle mapping buffer: for each cell, store indices of particles in that cell
+  // Estimate max particles per cell: numParticles / numCells * safety factor
+  const MAX_PARTICLES_PER_CELL = Math.ceil((numParticles / numCells) * 3); // 3x safety factor
+  if (cellParticleListsBuffer) {
+    cellParticleListsBuffer.destroy();
+  }
+  cellParticleListsBuffer = device.createBuffer({
+    size: numCells * MAX_PARTICLES_PER_CELL * 4, // u32 per particle index
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  // Initialize to invalid indices
+  const cellListInitData = new Uint32Array(numCells * MAX_PARTICLES_PER_CELL);
+  cellListInitData.fill(0xFFFFFFFF); // Invalid marker (JavaScript, not WGSL)
+  device.queue.writeBuffer(cellParticleListsBuffer, 0, cellListInitData);
+  console.log(`Created cell-to-particle mapping buffer (${MAX_PARTICLES_PER_CELL} particles per cell max)`);
+  
+  // Store MAX_PARTICLES_PER_CELL globally for shader compilation
+  window.MAX_PARTICLES_PER_CELL = MAX_PARTICLES_PER_CELL;
+  
   // Recreate bind groups with new buffers
   computeBindGroup = device.createBindGroup({
     layout: computePipeline.getBindGroupLayout(0),
@@ -271,11 +327,48 @@ function initializeParticles() {
       { binding: 1, resource: { buffer: cellIndexBuffer } },
     ],
   });
+  
+  // Create build cell mapping bind group
+  buildCellMappingBindGroup = device.createBindGroup({
+    layout: buildCellMappingPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+      { binding: 4, resource: { buffer: cellParticleListsBuffer } },
+      { binding: 5, resource: { buffer: particleCountBuffer } },
+    ],
+  });
+  
+  // Create find neighbors bind group
+  findNeighborsBindGroup = device.createBindGroup({
+    layout: findNeighborsPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: cellIndexBuffer } },
+      { binding: 2, resource: { buffer: neighborIndicesBuffer } },
+      { binding: 3, resource: { buffer: neighborCountBuffer } },
+      { binding: 4, resource: { buffer: cellParticleListsBuffer } },
+      { binding: 5, resource: { buffer: particleCountBuffer } },
+    ],
+  });
+  
+  // Create flocking bind group
+  flockingBindGroup = device.createBindGroup({
+    layout: flockingPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: particleBuffer } },
+      { binding: 1, resource: { buffer: neighborIndicesBuffer } },
+      { binding: 2, resource: { buffer: neighborCountBuffer } },
+    ],
+  });
 }
 
 // Grid configuration: cells per direction
 const cellsPerDirection = 20;
 const numCells = cellsPerDirection * cellsPerDirection;
+
+// Calculate MAX_PARTICLES_PER_CELL at top level for shader compilation
+// This will be updated in initializeParticles() if numParticles changes
+window.MAX_PARTICLES_PER_CELL = Math.ceil((numParticles / numCells) * 3);
 const gridVelocityData = new Float32Array(numCells * 2); // Initialize to zero
 const gridVelocityBuffer = device.createBuffer({
   size: gridVelocityData.byteLength,
@@ -390,23 +483,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let gridVel = gridVelocities[cellIndex];
   let particleVelBefore = p.vel; // Store original particle velocity
   
+  // grid-particle coupling constants 
+  const GRID_TO_PARTICLE = 0.0;    // typical 0.1
+  const PARTICLE_TO_GRID = 0.0;    // typical 0.001
+
   // Add grid velocity to particle velocity
   let gridVelMagnitude = length(gridVel);
   if (gridVelMagnitude > 0.0) {
-    p.vel += normalize(gridVel) * (0.001 * gridVelMagnitude);
+    p.vel += normalize(gridVel) * (PARTICLE_TO_GRID * gridVelMagnitude);
   }
   
   // Accumulate particle velocity contribution to grid (will be normalized by count later)
-  gridVelocities[cellIndex] = gridVel + particleVelBefore * 0.1;
+  gridVelocities[cellIndex] = gridVel + particleVelBefore * GRID_TO_PARTICLE;
 
   // Apply decay proportional to square of velocity
   let velSquared = dot(p.vel, p.vel);
   
   p.vel *= (1.0 - velSquared * params.drag); 
   p.vel *= params.decay;
-
-  //p.vel.x = clamp(p.vel.x, -1.0, 1.0);
-  //p.vel.y = clamp(p.vel.y, -1.0, 1.0);
   
   // Accumulate energy (velocity^2) atomically
   // Convert velSquared (0.0-1.0) to u32 in range 1-100
@@ -503,6 +597,273 @@ const normalizeVelocityBindGroup = device.createBindGroup({
     { binding: 1, resource: { buffer: particleCountBuffer } },
   ],
 });
+
+//
+// === Build Cell-to-Particle Mapping Compute Shader (WGSL) ===
+// Builds a list of particle indices for each cell for fast neighbor lookup
+//
+const buildCellMappingShaderCode = /* wgsl */`
+const MAX_PARTICLES_PER_CELL = ${window.MAX_PARTICLES_PER_CELL}u;
+
+@group(0) @binding(1)
+var<storage, read> cellIndices: array<u32>;
+
+@group(0) @binding(4)
+var<storage, read_write> cellParticleLists: array<u32>; // Flattened: numCells * MAX_PARTICLES_PER_CELL
+
+@group(0) @binding(5)
+var<storage, read_write> particleCounts: array<atomic<u32>>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let particleIdx = id.x;
+  if (particleIdx >= arrayLength(&cellIndices)) { return; }
+  
+  let cellIdx = cellIndices[particleIdx];
+  
+  // Get the current count for this cell (atomically)
+  let slot = atomicAdd(&particleCounts[cellIdx], 1u);
+  
+  // Check if we have room in this cell's list
+  if (slot < MAX_PARTICLES_PER_CELL) {
+    let listBase = cellIdx * MAX_PARTICLES_PER_CELL;
+    cellParticleLists[listBase + slot] = particleIdx;
+  }
+  // If slot >= MAX_PARTICLES_PER_CELL, we've exceeded capacity (shouldn't happen with good estimate)
+}
+`;
+
+const buildCellMappingModule = device.createShaderModule({ code: buildCellMappingShaderCode });
+const buildCellMappingPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: buildCellMappingModule, entryPoint: 'main' },
+});
+
+let buildCellMappingBindGroup; // Will be created in initializeParticles()
+
+//
+// === Find Neighbors Compute Shader (WGSL) ===
+// Finds the N nearest neighbors for each particle using the grid for spatial acceleration
+//
+const findNeighborsShaderCode = /* wgsl */`
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+const MAX_NEIGHBORS = ${MAX_NEIGHBORS}u;
+const MAX_PARTICLES_PER_CELL = ${window.MAX_PARTICLES_PER_CELL}u;
+
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+};
+
+@group(0) @binding(0)
+var<storage, read> particles: array<Particle>;
+
+@group(0) @binding(1)
+var<storage, read> cellIndices: array<u32>;
+
+@group(0) @binding(2)
+var<storage, read_write> neighborIndices: array<u32>;
+
+@group(0) @binding(3)
+var<storage, read_write> neighborCounts: array<u32>;
+
+@group(0) @binding(4)
+var<storage, read> cellParticleLists: array<u32>; // Flattened: numCells * MAX_PARTICLES_PER_CELL
+
+@group(0) @binding(5)
+var<storage, read> particleCounts: array<u32>; // Count of particles per cell
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let particleIdx = id.x;
+  if (particleIdx >= arrayLength(&particles)) { return; }
+  
+  let p = particles[particleIdx];
+  let myCell = cellIndices[particleIdx];
+  
+  // Calculate grid coordinates for this particle's cell
+  let myGx = myCell % CELLS_PER_DIRECTION;
+  let myGy = myCell / CELLS_PER_DIRECTION;
+  
+  // Array to store candidate neighbors with their distances
+  var nearestIndices: array<u32, MAX_NEIGHBORS>;
+  var nearestDistances: array<f32, MAX_NEIGHBORS>;
+  var numFound: u32 = 0u;
+  
+  // Initialize distances to a large value
+  for (var i = 0u; i < MAX_NEIGHBORS; i++) {
+    nearestDistances[i] = 1000000.0; // Large initial distance
+    nearestIndices[i] = 0xFFFFFFFFu; // Invalid index marker
+  }
+  
+  // Check particles in the same cell and 8 adjacent cells (3x3 grid)
+  for (var dy = 0u; dy < 3u; dy++) {
+    for (var dx = 0u; dx < 3u; dx++) {
+      // Convert 0-2 range to -1 to +1 range
+      var offsetX = i32(dx) - 1;
+      var offsetY = i32(dy) - 1;
+      
+      var checkGx = i32(myGx) + offsetX;
+      var checkGy = i32(myGy) + offsetY;
+      
+      // Skip if out of bounds
+      if (checkGx < 0 || checkGx >= i32(CELLS_PER_DIRECTION)) { continue; }
+      if (checkGy < 0 || checkGy >= i32(CELLS_PER_DIRECTION)) { continue; }
+      
+      let checkCell = u32(checkGy) * CELLS_PER_DIRECTION + u32(checkGx);
+      
+      // Get the list of particles in this cell from the pre-built mapping
+      let cellParticleCount = particleCounts[checkCell];
+      let listBase = checkCell * MAX_PARTICLES_PER_CELL;
+      
+      // Iterate only through particles in this cell (much faster!)
+      for (var slot = 0u; slot < cellParticleCount && slot < MAX_PARTICLES_PER_CELL; slot++) {
+        let candidateIdx = cellParticleLists[listBase + slot];
+        if (candidateIdx == particleIdx) { continue; } // Skip self
+        if (candidateIdx >= arrayLength(&particles)) { continue; } // Skip invalid
+        
+        let candidate = particles[candidateIdx];
+        let distSq = dot(candidate.pos - p.pos, candidate.pos - p.pos);
+        
+        // Insert this candidate if it's closer than our current farthest neighbor
+        // Find the worst (farthest) neighbor in our list
+        var worstIdx = 0u;
+        var worstDist = nearestDistances[0u];
+        for (var k = 1u; k < MAX_NEIGHBORS; k++) {
+          if (nearestDistances[k] > worstDist) {
+            worstDist = nearestDistances[k];
+            worstIdx = k;
+          }
+        }
+        
+        // If this candidate is closer than our worst, replace it
+        if (distSq < worstDist) {
+          nearestDistances[worstIdx] = distSq;
+          nearestIndices[worstIdx] = candidateIdx;
+          if (numFound < MAX_NEIGHBORS) {
+            numFound++;
+          }
+        }
+      }
+    }
+  }
+  
+  // Write results to buffers
+  let baseIndex = particleIdx * MAX_NEIGHBORS;
+  for (var i = 0u; i < MAX_NEIGHBORS; i++) {
+    if (i < numFound) {
+      neighborIndices[baseIndex + i] = nearestIndices[i];
+    } else {
+      neighborIndices[baseIndex + i] = 0xFFFFFFFFu; // Invalid marker
+    }
+  }
+  neighborCounts[particleIdx] = numFound;
+}
+`;
+
+const findNeighborsModule = device.createShaderModule({ code: findNeighborsShaderCode });
+const findNeighborsPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: findNeighborsModule, entryPoint: 'main' },
+});
+
+let findNeighborsBindGroup; // Will be created in initializeParticles()
+
+//
+// === Flocking Compute Shader (WGSL) ===
+// Applies cohesion, separation, and alignment forces based on neighbors
+//
+const flockingShaderCode = /* wgsl */`
+const MAX_NEIGHBORS = ${MAX_NEIGHBORS}u;
+
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+};
+
+@group(0) @binding(0)
+var<storage, read_write> particles: array<Particle>;
+
+@group(0) @binding(1)
+var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX_NEIGHBORS
+
+@group(0) @binding(2)
+var<storage, read> neighborCounts: array<u32>; // One per particle
+
+// Flocking parameters (can be made uniform later)
+const COHESION_STRENGTH = 0.05;  // typical 0.05;
+const SEPARATION_STRENGTH = 0.05;
+const SEPARATION_DISTANCE = 0.01;
+const ALIGNMENT_STRENGTH = 0.005;  // typical 0.05;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let particleIdx = id.x;
+  if (particleIdx >= arrayLength(&particles)) { return; }
+  
+  var p = particles[particleIdx];
+  let numNeighbors = neighborCounts[particleIdx];
+  
+  if (numNeighbors == 0u) { return; } // No neighbors, no flocking
+  
+  let baseIndex = particleIdx * MAX_NEIGHBORS;
+  
+  // Accumulators for flocking forces
+  var cohesionForce = vec2<f32>(0.0, 0.0); // Move toward average position
+  var separationForce = vec2<f32>(0.0, 0.0); // Move away from close neighbors
+  var alignmentForce = vec2<f32>(0.0, 0.0); // Match average velocity
+  var validNeighbors = 0u;
+  
+  // Iterate through neighbors
+  for (var n = 0u; n < numNeighbors && n < MAX_NEIGHBORS; n++) {
+    let neighborIdx = neighborIndices[baseIndex + n];
+    if (neighborIdx >= arrayLength(&particles)) { continue; } // Skip invalid
+    
+    let neighbor = particles[neighborIdx];
+    let diff = neighbor.pos - p.pos;
+    let distSq = dot(diff, diff);
+    let dist = sqrt(distSq);
+    
+    if (dist > 0.001) { // Avoid division by zero
+      let diffNorm = diff / dist;
+      
+      // Cohesion: move toward neighbor's position
+      cohesionForce += diff * COHESION_STRENGTH;
+      
+      // Separation: move away from neighbors that are too close
+      if (dist < SEPARATION_DISTANCE) {
+        separationForce -= diffNorm * SEPARATION_STRENGTH;  // / (dist + 0.001);
+      }
+      
+      // Alignment: match neighbor's velocity
+      alignmentForce += neighbor.vel * ALIGNMENT_STRENGTH;
+      
+      validNeighbors++;
+    }
+  }
+  
+  if (validNeighbors > 0u) {
+    // Normalize forces by number of neighbors
+    let invCount = 1.0 / f32(validNeighbors);
+    cohesionForce *= invCount;
+    separationForce *= invCount;
+    alignmentForce *= invCount;
+    
+    // Apply forces to velocity
+    p.vel += cohesionForce + separationForce + alignmentForce;
+  }
+  
+  particles[particleIdx] = p;
+}
+`;
+
+const flockingModule = device.createShaderModule({ code: flockingShaderCode });
+const flockingPipeline = device.createComputePipeline({
+  layout: 'auto',
+  compute: { module: flockingModule, entryPoint: 'main' },
+});
+
+let flockingBindGroup; // Will be created in initializeParticles()
 
 // computeBindGroup will be created in initializeParticles()
 
@@ -726,6 +1087,13 @@ showGridCheckbox.addEventListener('change', (e) => {
   showGrid = e.target.checked;
 });
 
+// Track flocking state
+let doFlocking = true; // Default to enabled
+const doFlockingCheckbox = document.getElementById('do-flocking');
+doFlockingCheckbox.addEventListener('change', (e) => {
+  doFlocking = e.target.checked;
+});
+
 // Track simulation running state
 let simulationRunning = true;
 const startStopBtn = document.getElementById('start-stop-btn');
@@ -812,6 +1180,8 @@ const fpsCounter = document.getElementById('fps-counter');
 const energyCounter = document.getElementById('energy-counter');
 let energyReadbackPending = false;
 let lastEnergyReadTime = 0;
+let neighborUpdateCounter = 0;
+const NEIGHBOR_UPDATE_INTERVAL = 10; // Update neighbors every 10 frames
 
 function frame() {
   const currentTime = performance.now();
@@ -865,17 +1235,47 @@ function frame() {
       pass.end();
     }
 
-    // 1.75️⃣ Find neighbors compute pass - EXAMPLE: Use createTimedComputePass() to measure GPU time
-    // When you add your findNeighbors pass, use createTimedComputePass() with queryIndexOffset 2:
-    /*
-    {
-      const pass = createTimedComputePass(encoder, 2); // Use query indices 2-3
-      pass.setPipeline(findNeighborsPipeline);
-      pass.setBindGroup(0, findNeighborsBindGroup);
+    // 1.75️⃣ Find neighbors compute pass (runs periodically, every NEIGHBOR_UPDATE_INTERVAL frames)
+    // Runs after particle compute so it uses fresh cell indices
+    neighborUpdateCounter++;
+    if (neighborUpdateCounter >= NEIGHBOR_UPDATE_INTERVAL) {
+      neighborUpdateCounter = 0;
+      
+      // Reset particleCounts for building cell mapping (we'll reuse it)
+      device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
+      
+      // Reset cellParticleLists to invalid indices
+      const cellListResetData = new Uint32Array(numCells * window.MAX_PARTICLES_PER_CELL);
+      cellListResetData.fill(0xFFFFFFFF); // Invalid marker (JavaScript, not WGSL)
+      device.queue.writeBuffer(cellParticleListsBuffer, 0, cellListResetData);
+      
+      // Build cell-to-particle mapping (must run before findNeighbors)
+      {
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(buildCellMappingPipeline);
+        pass.setBindGroup(0, buildCellMappingBindGroup);
+        pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
+        pass.end();
+      }
+      
+      // Now find neighbors using the optimized cell mapping
+      {
+        const pass = createTimedComputePass(encoder, 2); // Use query indices 2-3 for timing
+        pass.setPipeline(findNeighborsPipeline);
+        pass.setBindGroup(0, findNeighborsBindGroup);
+        pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
+        pass.end();
+      }
+    }
+
+    // 1.8️⃣ Flocking compute pass (applies cohesion, separation, alignment)
+    if (doFlocking) {
+      const pass = createTimedComputePass(encoder, 4); // Use query indices 4-5 for timing
+      pass.setPipeline(flockingPipeline);
+      pass.setBindGroup(0, flockingBindGroup);
       pass.dispatchWorkgroups(Math.ceil(numParticles / 64));
       pass.end();
     }
-    */
 
     // Copy energy from GPU to staging buffer for readback (only when ready to read)
     shouldReadEnergy = !energyReadbackPending && (currentTime - lastEnergyReadTime >= 1000);
@@ -952,6 +1352,14 @@ function frame() {
         const findNeighborsEndTime = Number(timestampArray[3]);
         const findNeighborsDurationMs = (findNeighborsEndTime - findNeighborsStartTime) * period / 1_000_000;
         timingText += `<br>findNeighbors: ${findNeighborsDurationMs.toFixed(3)} ms`;
+      }
+      
+      // Calculate flocking duration (queries 4-5) if available
+      if (timestampArray.length >= 6 && timestampArray[4] > 0 && timestampArray[5] > 0) {
+        const flockingStartTime = Number(timestampArray[4]);
+        const flockingEndTime = Number(timestampArray[5]);
+        const flockingDurationMs = (flockingEndTime - flockingStartTime) * period / 1_000_000;
+        timingText += `<br>Flocking: ${flockingDurationMs.toFixed(3)} ms`;
       }
       
       timestampCounter.innerHTML = timingText;

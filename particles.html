@@ -123,6 +123,12 @@
     </label>
   </div>
   <div class="control-group">
+    <label for="couple-to-grid">
+      <input type="checkbox" id="couple-to-grid" checked>
+      Couple to Grid
+    </label>
+  </div>
+  <div class="control-group">
     <label for="cohesion">Cohesion: <input type="number" id="cohesion" step="0.001" value="0.03"></label>
   </div>
   <div class="control-group">
@@ -423,6 +429,7 @@ let separationStrength = 0.05;
 let separationDistance = 0.02;
 let alignment = 0.009;
 let monochrome = false;
+let coupleToGrid = true; // Default to enabled
 
 const uniformData = new Float32Array(32); // Increased to accommodate new parameters
 uniformData[0] = dt;
@@ -432,6 +439,7 @@ uniformData[3] = cohesion;
 uniformData[4] = separationStrength;
 uniformData[5] = separationDistance;
 uniformData[6] = alignment;
+uniformData[7] = coupleToGrid ? 1.0 : 0.0; // Couple to grid flag (f32: 1.0 = true, 0.0 = false)
 
 const uniformBuffer = device.createBuffer({
   size: uniformData.byteLength,
@@ -488,6 +496,11 @@ struct Params {
   dt: f32,
   drag: f32,
   decay: f32,
+  cohesion: f32,
+  separationStrength: f32,
+  separationDistance: f32,
+  alignment: f32,
+  coupleToGrid: f32, // 1.0 = true, 0.0 = false
 };
 
 @group(0) @binding(2)
@@ -517,21 +530,23 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   atomicAdd(&particleCounts[cellIndex], 1u);
 
   // --- grid-particle interaction ---
-  let gridVel = gridVelocities[cellIndex];
-  let particleVelBefore = p.vel; // Store original particle velocity
-  
-  // grid-particle coupling constants 
-  const GRID_TO_PARTICLE = 0.1;    // typical 0.1
-  const PARTICLE_TO_GRID = 0.001;    // typical 0.001
+  if (params.coupleToGrid > 0.5) {
+    let gridVel = gridVelocities[cellIndex];
+    let particleVelBefore = p.vel; // Store original particle velocity
+    
+    // grid-particle coupling constants 
+    const GRID_TO_PARTICLE = 0.1;    // typical 0.1
+    const PARTICLE_TO_GRID = 0.001;    // typical 0.001
 
-  // Add grid velocity to particle velocity
-  let gridVelMagnitude = length(gridVel);
-  if (gridVelMagnitude > 0.0) {
-    p.vel += normalize(gridVel) * (PARTICLE_TO_GRID * gridVelMagnitude);
+    // Add grid velocity to particle velocity
+    let gridVelMagnitude = length(gridVel);
+    if (gridVelMagnitude > 0.0) {
+      p.vel += normalize(gridVel) * (PARTICLE_TO_GRID * gridVelMagnitude);
+    }
+    
+    // Accumulate particle velocity contribution to grid (will be normalized by count later)
+    gridVelocities[cellIndex] = gridVel + particleVelBefore * GRID_TO_PARTICLE;
   }
-  
-  // Accumulate particle velocity contribution to grid (will be normalized by count later)
-  gridVelocities[cellIndex] = gridVel + particleVelBefore * GRID_TO_PARTICLE;
 
   // Apply decay proportional to square of velocity
   let velSquared = dot(p.vel, p.vel);
@@ -1158,6 +1173,15 @@ monochromeCheckbox.addEventListener('change', (e) => {
   const renderParamsData = new Float32Array(1);
   renderParamsData[0] = monochrome ? 1.0 : 0.0;
   device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
+});
+
+// Track grid coupling state
+const coupleToGridCheckbox = document.getElementById('couple-to-grid');
+coupleToGridCheckbox.addEventListener('change', (e) => {
+  coupleToGrid = e.target.checked;
+  // Update uniform buffer
+  uniformData[7] = coupleToGrid ? 1.0 : 0.0;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 });
 
 // Track simulation running state

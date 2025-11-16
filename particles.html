@@ -117,6 +117,18 @@
     </label>
   </div>
   <div class="control-group">
+    <label for="cohesion">Cohesion: <input type="number" id="cohesion" step="0.001" value="0.03"></label>
+  </div>
+  <div class="control-group">
+    <label for="separation-strength">Separation Strength: <input type="number" id="separation-strength" step="0.001" value="0.05"></label>
+  </div>
+  <div class="control-group">
+    <label for="separation-distance">Separation Distance: <input type="number" id="separation-distance" step="0.001" value="0.02"></label>
+  </div>
+  <div class="control-group">
+    <label for="alignment">Alignment: <input type="number" id="alignment" step="0.001" value="0.009"></label>
+  </div>
+  <div class="control-group">
     <button id="start-stop-btn" style="padding: 8px 16px; font-size: 14px; cursor: pointer;">Stop</button>
   </div>
 </div>
@@ -356,6 +368,7 @@ function initializeParticles() {
       { binding: 0, resource: { buffer: particleBuffer } },
       { binding: 1, resource: { buffer: neighborIndicesBuffer } },
       { binding: 2, resource: { buffer: neighborCountBuffer } },
+      { binding: 3, resource: { buffer: uniformBuffer } },
     ],
   });
 }
@@ -388,11 +401,19 @@ console.log('Created particle count buffer');
 let drag = 1.0;
 let decay = 1.0;
 let dt = 0.016;
+let cohesion = 0.03;
+let separationStrength = 0.05;
+let separationDistance = 0.02;
+let alignment = 0.009;
 
-const uniformData = new Float32Array(24);
+const uniformData = new Float32Array(32); // Increased to accommodate new parameters
 uniformData[0] = dt;
 uniformData[1] = drag;
 uniformData[2] = decay;
+uniformData[3] = cohesion;
+uniformData[4] = separationStrength;
+uniformData[5] = separationDistance;
+uniformData[6] = alignment;
 
 const uniformBuffer = device.createBuffer({
   size: uniformData.byteLength,
@@ -482,8 +503,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let particleVelBefore = p.vel; // Store original particle velocity
   
   // grid-particle coupling constants 
-  const GRID_TO_PARTICLE = 0.0;    // typical 0.1
-  const PARTICLE_TO_GRID = 0.0;    // typical 0.001
+  const GRID_TO_PARTICLE = 0.1;    // typical 0.1
+  const PARTICLE_TO_GRID = 0.001;    // typical 0.001
 
   // Add grid velocity to particle velocity
   let gridVelMagnitude = length(gridVel);
@@ -788,11 +809,18 @@ var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX
 @group(0) @binding(2)
 var<storage, read> neighborCounts: array<u32>; // One per particle
 
-// Flocking parameters (can be made uniform later)
-const COHESION_STRENGTH = 0.05;  // typical 0.05;
-const SEPARATION_STRENGTH = 0.05;
-const SEPARATION_DISTANCE = 0.01;
-const ALIGNMENT_STRENGTH = 0.005;  // typical 0.05;
+struct Params {
+  dt: f32,
+  drag: f32,
+  decay: f32,
+  cohesion: f32,
+  separationStrength: f32,
+  separationDistance: f32,
+  alignment: f32,
+};
+
+@group(0) @binding(3)
+var<uniform> params: Params;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -826,15 +854,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       let diffNorm = diff / dist;
       
       // Cohesion: move toward neighbor's position
-      cohesionForce += diff * COHESION_STRENGTH;
+      cohesionForce += diff * params.cohesion;
       
       // Separation: move away from neighbors that are too close
-      if (dist < SEPARATION_DISTANCE) {
-        separationForce -= diffNorm * SEPARATION_STRENGTH;  // / (dist + 0.001);
+      if (dist < params.separationDistance) {
+        separationForce -= diffNorm * params.separationStrength;  // / (dist + 0.001);
       }
       
       // Alignment: match neighbor's velocity
-      alignmentForce += neighbor.vel * ALIGNMENT_STRENGTH;
+      alignmentForce += neighbor.vel * params.alignment;
       
       validNeighbors++;
     }
@@ -1112,12 +1140,24 @@ dragInput.value = drag; // Initialize input from JavaScript variable
 const decayInput = document.getElementById('decay');
 decayInput.value = decay;
 
+const cohesionInput = document.getElementById('cohesion');
+cohesionInput.value = cohesion;
+
+const separationStrengthInput = document.getElementById('separation-strength');
+separationStrengthInput.value = separationStrength;
+
+const separationDistanceInput = document.getElementById('separation-distance');
+separationDistanceInput.value = separationDistance;
+
+const alignmentInput = document.getElementById('alignment');
+alignmentInput.value = alignment;
+
 function updatedrag(value) {
   drag = parseFloat(value);
   dragInput.value = drag;
   
   // Update uniform buffer
-  uniformData[1] = drag; // Index 12 is where drag is stored
+  uniformData[1] = drag;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
   console.log("Updated drag to ", drag);
 }
@@ -1130,14 +1170,82 @@ dragInput.addEventListener('keypress', (e) => {
 });
 
 function updateDecay(value) {
-  drag = parseFloat(value);
+  decay = parseFloat(value);
   decayInput.value = decay;
   
   // Update uniform buffer
-  uniformData[2] = decay; // Index 12 is where drag is stored
+  uniformData[2] = decay;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
-  console.log("Updated decay to ", drag);
+  console.log("Updated decay to ", decay);
 }
+
+function updateCohesion(value) {
+  cohesion = parseFloat(value);
+  cohesionInput.value = cohesion;
+  
+  // Update uniform buffer
+  uniformData[3] = cohesion;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated cohesion to ", cohesion);
+}
+
+function updateSeparationStrength(value) {
+  separationStrength = parseFloat(value);
+  separationStrengthInput.value = separationStrength;
+  
+  // Update uniform buffer
+  uniformData[4] = separationStrength;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated separation strength to ", separationStrength);
+}
+
+function updateSeparationDistance(value) {
+  separationDistance = parseFloat(value);
+  separationDistanceInput.value = separationDistance;
+  
+  // Update uniform buffer
+  uniformData[5] = separationDistance;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated separation distance to ", separationDistance);
+}
+
+function updateAlignment(value) {
+  alignment = parseFloat(value);
+  alignmentInput.value = alignment;
+  
+  // Update uniform buffer
+  uniformData[6] = alignment;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  console.log("Updated alignment to ", alignment);
+}
+
+cohesionInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const val = parseFloat(e.target.value);
+    updateCohesion(isNaN(val) ? 0.03 : val);
+  }
+});
+
+separationStrengthInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const val = parseFloat(e.target.value);
+    updateSeparationStrength(isNaN(val) ? 0.05 : val);
+  }
+});
+
+separationDistanceInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const val = parseFloat(e.target.value);
+    updateSeparationDistance(isNaN(val) ? 0.02 : val);
+  }
+});
+
+alignmentInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const val = parseFloat(e.target.value);
+    updateAlignment(isNaN(val) ? 0.009 : val);
+  }
+});
 
 function restartSimulation() {
   // Stop current animation

@@ -1023,9 +1023,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   } else if (params.mode < 1.5) {
     // Mode 1: Velocity-based coloring
     let v = p.vel;
-    let r = clamp(0.5 + v.x * 100.0, 0.0, 1.0);
-    let g = clamp(0.5 + v.y * 100.0, 0.0, 1.0);
-    let b = clamp(0.5 + (v.x + v.y) * 100.0, 0.0, 1.0);
+    let r = clamp(0.75 + v.x * 10.0, 0.5, 1.0);
+    let g = clamp(0.75 + v.y * 10.0, 0.5, 1.0);
+    let b = clamp(0.5 + (v.x + v.y) * 5.0, 0.5, 1.0);
     p.color = vec3<f32>(r, g, b);
   } else {
     // Mode 2: Cell-based coloring (for debugging)

@@ -53,36 +53,38 @@
     border-radius: 3px;
     font-size: 12px;
   }
-  canvas { width: 1000px; height: 1000px; display: block; background: black; }
+  canvas { 
+    width: calc(100vw - 240px); 
+    height: 100vh; 
+    display: block; 
+    background: black; 
+  }
+  #statistics {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #444;
+  }
+  #statistics h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
   #fps-counter {
-    position: fixed;
-    bottom: 30px;
-    right: 10px;
     color: white;
     font-family: monospace;
     font-size: 12px;
+    margin-bottom: 8px;
   }
   #energy-counter {
-    position: fixed;
-    bottom: 10px;
-    right: 10px;
     color: white;
     font-family: monospace;
     font-size: 12px;
-    background: rgba(0, 0, 0, 0.5);
-    padding: 4px 8px;
-    border-radius: 4px;
+    margin-bottom: 8px;
   }
   #timestamp-counter {
-    position: fixed;
-    bottom: 50px;
-    right: 10px;
     color: white;
     font-family: monospace;
     font-size: 12px;
-    background: rgba(0, 0, 0, 0.5);
-    padding: 4px 8px;
-    border-radius: 4px;
   }
 </style>
 </head>
@@ -152,11 +154,14 @@
   <div class="control-group">
     <button id="start-stop-btn" style="padding: 8px 16px; font-size: 14px; cursor: pointer;">Stop</button>
   </div>
+  <div id="statistics">
+    <h4>Statistics</h4>
+    <div id="fps-counter">FPS: --</div>
+    <div id="energy-counter">Energy: --</div>
+    <div id="timestamp-counter">GPU Timing: --</div>
+  </div>
 </div>
 <canvas id="gfx" width="1000" height="1000"></canvas>
-<div id="fps-counter">FPS: --</div>
-<div id="energy-counter">Energy: --</div>
-<div id="timestamp-counter">GPU Timing: --</div>
 <script type="module">
 console.log('Startup');
 const adapter = await navigator.gpu.requestAdapter();
@@ -178,7 +183,34 @@ const context = canvas.getContext('webgpu');
 console.log('Got Got WebGPU context');
 
 const format = navigator.gpu.getPreferredCanvasFormat();
-context.configure({ device, format });
+
+// Function to resize canvas to fill available space
+function resizeCanvas() {
+  const controlPanelWidth = 240; // 200px width + 40px padding
+  const newWidth = window.innerWidth - controlPanelWidth;
+  const newHeight = window.innerHeight;
+  
+  canvas.width = newWidth;
+  canvas.height = newHeight;
+  
+  // Reconfigure WebGPU context with new size
+  context.configure({ 
+    device, 
+    format,
+    width: newWidth,
+    height: newHeight
+  });
+  
+  console.log(`Canvas resized to ${newWidth}x${newHeight}`);
+}
+
+// Initial resize
+resizeCanvas();
+
+// Resize on window resize
+window.addEventListener('resize', () => {
+  resizeCanvas();
+});
 
 let numParticles = 100000;
 const MAX_NEIGHBORS = 16; // Maximum number of neighbors per particle for flocking

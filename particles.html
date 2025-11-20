@@ -112,7 +112,7 @@
       Show Grid
     </label>
   </div>
-  <div class="control-group">
+  <div class="control-group"> 
     <label for="do-flocking">
       <input type="checkbox" id="do-flocking" checked>
       Do Flocking
@@ -137,6 +137,12 @@
     <label for="couple-to-grid">
       <input type="checkbox" id="couple-to-grid" checked>
       Couple to Grid
+    </label>
+  </div>
+  <div class="control-group">
+    <label for="torus">
+      <input type="checkbox" id="torus">
+      Torus
     </label>
   </div>
   <div class="control-group">
@@ -415,6 +421,7 @@ function initializeParticles() {
       { binding: 0, resource: { buffer: particleBuffer } },
       { binding: 1, resource: { buffer: neighborIndicesBuffer } },
       { binding: 2, resource: { buffer: neighborCountBuffer } },
+      { binding: 3, resource: { buffer: uniformBuffer } },
     ],
   });
   
@@ -438,6 +445,7 @@ function initializeParticles() {
       { binding: 3, resource: { buffer: neighborCountBuffer } },
       { binding: 4, resource: { buffer: cellParticleListsBuffer } },
       { binding: 5, resource: { buffer: particleCountBuffer } },
+      { binding: 6, resource: { buffer: uniformBuffer } },
     ],
   });
   
@@ -512,6 +520,7 @@ let separationDistance = 0.01;
 let alignment = 0.012;
 let monochrome = false;
 let coupleToGrid = true; // Default to enabled
+let torus = false; // Default to disabled (bouncing)
 let colorMode = 1; // 0 = monochrome, 1 = velocity, 2 = cell
 
 const uniformData = new Float32Array(32); // Increased to accommodate new parameters
@@ -523,6 +532,7 @@ uniformData[4] = separationStrength;
 uniformData[5] = separationDistance;
 uniformData[6] = alignment;
 uniformData[7] = coupleToGrid ? 1.0 : 0.0; // Couple to grid flag (f32: 1.0 = true, 0.0 = false)
+uniformData[8] = torus ? 1.0 : 0.0; // Torus flag (f32: 1.0 = true, 0.0 = false)
 
 const uniformBuffer = device.createBuffer({
   size: uniformData.byteLength,
@@ -551,7 +561,7 @@ console.log('Created energy sum buffer');
 // === Compute Shader (WGSL) ===
 //
 const computeShaderCode = /* wgsl */`
-const CELLS_PER_DIRECTION = ${cellsPerDirection}u;
+const CELLS_PER_DIRECTION = ${cellsPerDirection}u; 
 const CELL_SIZE = 2.0 / f32(CELLS_PER_DIRECTION);
 const MAX_CELL_INDEX = ${cellsPerDirection - 1}u;
 
@@ -586,6 +596,7 @@ struct Params {
   separationDistance: f32,
   alignment: f32,
   coupleToGrid: f32, // 1.0 = true, 0.0 = false
+  torus: f32, // 1.0 = true, 0.0 = false
 };
 
 @group(0) @binding(2)
@@ -601,9 +612,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // --- physics ---
   p.pos += p.vel * params.dt;
 
-  // bounce
-  if (abs(p.pos.x) > 1.0) { p.vel.x = -p.vel.x; }
-  if (abs(p.pos.y) > 1.0) { p.vel.y = -p.vel.y; }
+  // boundary handling: bounce or wrap (torus)
+  if (params.torus > 0.5) {
+    // Torus mode: wrap around edges (coordinate range is -1.0 to 1.0, width is 2.0)
+    // Wrap x coordinate: p.pos.x = ((p.pos.x + 1.0) mod 2.0) - 1.0
+    p.pos.x = fract((p.pos.x + 1.0) / 2.0) * 2.0 - 1.0;
+    // Wrap y coordinate
+    p.pos.y = fract((p.pos.y + 1.0) / 2.0) * 2.0 - 1.0;
+  } else {
+    // Bounce mode: reflect velocity
+    if (abs(p.pos.x) > 1.0) { p.vel.x = -p.vel.x; }
+    if (abs(p.pos.y) > 1.0) { p.vel.y = -p.vel.y; }
+  }
 
   // --- grid assignment ---
   let gx = clamp(floor((p.pos.x + 1.0) / CELL_SIZE), 0.0, f32(MAX_CELL_INDEX));
@@ -812,6 +832,37 @@ var<storage, read> cellParticleLists: array<u32>; // Flattened: numCells * MAX_P
 @group(0) @binding(5)
 var<storage, read_write> particleCounts: array<atomic<u32>>; // Count of particles per cell (atomic)
 
+struct Params {
+  dt: f32,
+  drag: f32,
+  decay: f32,
+  cohesion: f32,
+  separationStrength: f32,
+  separationDistance: f32,
+  alignment: f32,
+  coupleToGrid: f32,
+  torus: f32, // 1.0 = true, 0.0 = false
+};
+
+@group(0) @binding(6)
+var<uniform> params: Params;
+
+// Helper function to calculate toroidal distance squared
+fn toroidalDistSq(pos1: vec2<f32>, pos2: vec2<f32>) -> f32 {
+  var dx = pos2.x - pos1.x;
+  var dy = pos2.y - pos1.y;
+  
+  // Wrap distance components for torus (coordinate range is -1.0 to 1.0, width is 2.0)
+  if (abs(dx) > 1.0) {
+    dx = dx - sign(dx) * 2.0;
+  }
+  if (abs(dy) > 1.0) {
+    dy = dy - sign(dy) * 2.0;
+  }
+  
+  return dx * dx + dy * dy;
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let particleIdx = id.x;
@@ -864,7 +915,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         if (candidateIdx >= arrayLength(&particles)) { continue; } // Skip invalid
         
         let candidate = particles[candidateIdx];
-        let distSq = dot(candidate.pos - p.pos, candidate.pos - p.pos);
+        // Use toroidal distance if torus mode is enabled
+        let distSq = select(
+          dot(candidate.pos - p.pos, candidate.pos - p.pos),
+          toroidalDistSq(p.pos, candidate.pos),
+          params.torus > 0.5
+        );
         
         // Insert this candidate if it's closer than our current farthest neighbor
         // Find the worst (farthest) neighbor in our list
@@ -941,10 +997,28 @@ struct Params {
   separationStrength: f32,
   separationDistance: f32,
   alignment: f32,
+  coupleToGrid: f32,
+  torus: f32, // 1.0 = true, 0.0 = false
 };
 
 @group(0) @binding(3)
 var<uniform> params: Params;
+
+// Helper function to calculate toroidal difference vector
+fn toroidalDiff(pos1: vec2<f32>, pos2: vec2<f32>) -> vec2<f32> {
+  var dx = pos2.x - pos1.x;
+  var dy = pos2.y - pos1.y;
+  
+  // Wrap difference components for torus (coordinate range is -1.0 to 1.0, width is 2.0)
+  if (abs(dx) > 1.0) {
+    dx = dx - sign(dx) * 2.0;
+  }
+  if (abs(dy) > 1.0) {
+    dy = dy - sign(dy) * 2.0;
+  }
+  
+  return vec2<f32>(dx, dy);
+}
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -970,7 +1044,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (neighborIdx >= arrayLength(&particles)) { continue; } // Skip invalid
     
     let neighbor = particles[neighborIdx];
-    let diff = neighbor.pos - p.pos;
+    // Use toroidal difference if torus mode is enabled
+    let diff = select(
+      neighbor.pos - p.pos,
+      toroidalDiff(p.pos, neighbor.pos),
+      params.torus > 0.5
+    );
     let distSq = dot(diff, diff);
     let dist = sqrt(distSq);
     
@@ -1315,6 +1394,46 @@ var<storage, read> neighborIndices: array<u32>; // Flattened: numParticles * MAX
 @group(0) @binding(2)
 var<storage, read> neighborCounts: array<u32>; // One per particle
 
+struct Params {
+  dt: f32,
+  drag: f32,
+  decay: f32,
+  cohesion: f32,
+  separationStrength: f32,
+  separationDistance: f32,
+  alignment: f32,
+  coupleToGrid: f32,
+  torus: f32, // 1.0 = true, 0.0 = false
+};
+
+@group(0) @binding(3)
+var<uniform> params: Params;
+
+// Helper function to wrap a position relative to a reference position (for torus mode)
+// Returns the wrapped version of pos2 that is closest to pos1
+fn wrapPositionRelative(pos1: vec2<f32>, pos2: vec2<f32>) -> vec2<f32> {
+  var wrapped = pos2;
+  var dx = pos2.x - pos1.x;
+  var dy = pos2.y - pos1.y;
+  
+  // Wrap x component if needed (coordinate range is -1.0 to 1.0, width is 2.0)
+  // If |dx| > 1.0, wrapping will make it closer
+  if (dx > 1.0) {
+    wrapped.x = pos2.x - 2.0;
+  } else if (dx < -1.0) {
+    wrapped.x = pos2.x + 2.0;
+  }
+  
+  // Wrap y component if needed
+  if (dy > 1.0) {
+    wrapped.y = pos2.y - 2.0;
+  } else if (dy < -1.0) {
+    wrapped.y = pos2.y + 2.0;
+  }
+  
+  return wrapped;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) instanceIdx: u32) -> VSOut {
   var out: VSOut;
@@ -1360,8 +1479,12 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) instanceIdx
     // Start vertex: particle position
     out.pos = vec4<f32>(particle.pos, 0.0, 1.0);
   } else {
-    // End vertex: neighbor position
-    out.pos = vec4<f32>(neighbor.pos, 0.0, 1.0);
+    // End vertex: neighbor position (wrapped if torus mode)
+    var neighborPos = neighbor.pos;
+    if (params.torus > 0.5) {
+      neighborPos = wrapPositionRelative(particle.pos, neighbor.pos);
+    }
+    out.pos = vec4<f32>(neighborPos, 0.0, 1.0);
   }
   
   // Use the color stored in the particle
@@ -1427,6 +1550,15 @@ coupleToGridCheckbox.addEventListener('change', (e) => {
   coupleToGrid = e.target.checked;
   // Update uniform buffer
   uniformData[7] = coupleToGrid ? 1.0 : 0.0;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+});
+
+// Track torus state
+const torusCheckbox = document.getElementById('torus');
+torusCheckbox.addEventListener('change', (e) => {
+  torus = e.target.checked;
+  // Update uniform buffer
+  uniformData[8] = torus ? 1.0 : 0.0;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 });
 

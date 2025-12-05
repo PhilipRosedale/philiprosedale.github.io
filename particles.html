@@ -175,6 +175,24 @@
 </div>
 <canvas id="gfx" width="1000" height="1000"></canvas>
 <script type="module">
+// ============================================================================
+// FILE STRUCTURE
+// ============================================================================
+// This file is organized into the following sections:
+// 1. Global Configuration & Constants - WebGPU setup, constants
+// 2. Simulation Parameters - All editable simulation variables
+// 3. Buffer Declarations - GPU buffers for particles, grid, uniforms, etc.
+// 4. Shader Definitions - All WGSL shader code (compute & render)
+// 5. Initialization Functions - Particle initialization, bind group creation
+// 6. Helper Functions - Utility functions for coordinate conversion, etc.
+// 7. Event Handlers - Mouse/touch interaction and UI control handlers
+// 8. Control Panel Setup - UI initialization and event binding
+// 9. Frame Loop & Rendering - Main animation loop
+//
+// ============================================================================
+// GLOBAL CONFIGURATION & CONSTANTS
+// ============================================================================
+
 console.log('Startup');
 const adapter = await navigator.gpu.requestAdapter();
 console.log('Got Adapter');
@@ -309,6 +327,10 @@ if (timestampBuffer) {
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
 }
+
+// ============================================================================
+// INITIALIZATION FUNCTIONS
+// ============================================================================
 
 function initializeParticles() {
   // JS-side data: x, y, vx, vy, r, g, b, _pad (8 floats per particle, 32 bytes)
@@ -526,6 +548,7 @@ device.queue.writeBuffer(particleCountBuffer, 0, new Uint32Array(numCells));
 console.log('Created particle count buffer');
 
 
+// Simulation parameters (easily editable defaults)
 let drag = 1.0;
 let decay = 1.0;
 let dt = 0.016;
@@ -538,7 +561,7 @@ let coupleToGrid = true; // Default to enabled
 let torus = false; // Default to disabled (bouncing)
 let colorMode = 1; // 0 = monochrome, 1 = velocity, 2 = cell
 
-// Mouse interaction state
+// Mouse interaction parameters
 let mouseDragRadius = 0.05;
 let mouseDragStrength = 0.03;
 let isMouseDragging = false;
@@ -561,6 +584,12 @@ const uniformBuffer = device.createBuffer({
 });
 device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 console.log('Wrote uniform buffer to GPU');
+
+// ============================================================================
+// GPU BUFFER DECLARATIONS
+// ============================================================================
+// All GPU buffers are declared below. Buffers are created once and reused.
+//
 
 // Mouse interaction uniform buffer
 const mouseParamsData = new Float32Array(6); // mousePos (2), dragRadius, dragStrength, isActive, torus
@@ -597,6 +626,12 @@ const energyStagingBuffer = device.createBuffer({
 device.queue.writeBuffer(energySumBuffer, 0, new Uint32Array([0]));
 console.log('Created energy sum buffer');
 
+// ============================================================================
+// SHADER DEFINITIONS
+// ============================================================================
+// All WGSL shader code is defined below. Shaders are organized by function:
+// - Compute shaders (particle physics, grid operations, flocking, etc.)
+// - Render shaders (particle rendering, grid visualization, edges, etc.)
 //
 // === Compute Shader (WGSL) ===
 //
@@ -1747,7 +1782,11 @@ startStopBtn.addEventListener('click', () => {
 // Initialize particles (after pipelines are created)
 initializeParticles();
 
-// Mouse interaction event handlers
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Convert screen coordinates to particle coordinate space (-1 to 1)
 function screenToParticleCoords(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const x = ((clientX - rect.left) / rect.width) * 2.0 - 1.0;
@@ -1821,7 +1860,11 @@ canvas.addEventListener('touchcancel', (e) => {
   updateMouseParams();
 });
 
-// Control panel setup
+// ============================================================================
+// CONTROL PANEL EVENT HANDLERS
+// ============================================================================
+// All UI control event handlers are defined below
+//
 const numParticlesInput = document.getElementById('num-particles');
 numParticlesInput.value = numParticles; // Initialize input from JavaScript variable
 const dragInput = document.getElementById('drag');
@@ -1966,8 +2009,10 @@ numParticlesInput.addEventListener('keypress', (e) => {
   }
 });
 
-//
-// === Frame loop ===
+// ============================================================================
+// FRAME LOOP & RENDERING
+// ============================================================================
+// Main animation loop that runs compute passes and render passes
 //
 let lastTime = performance.now();
 let frameCount = 0;

@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Neurons</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+<style>
+  body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #808080;
+  }
+</style>
+</head>
+<body>
+<script>
+//  Interactive Neurons
+// 
+//  Creates a spiking network of neurons, each connected to a number of nearest neighbors.
+//  The simulation uses a leaky integrate and fire model, with synaptic weights updated  
+//  using STDP (Spike Timing Dependent Plasticity), meaning that if a spike is received at 
+//  a neuron just before that neuron fires, the synaptic weight is strengthened. If a spike
+//. is received just after a neuron has fired, the synaptic weight is weakened.  
+//. Neurons can be set to be I/O channels by left-clicking the neuron while pressing
+//. a key.   
+//. 
+//  To-Do tasks: 
+// 
+//  If "a" then "b" and b pressed just after a pulse arrived, strengthen a->b
+//. key to quiet all neuron charge to non-firing state (sleep), then wake up, same patterns?
+//  add measure of learning rate (changes/sec) and firing rate (firing/sec)  
+//  correct dt to be accurate rather than a constant
+
+
+let startingNeurons = 8;
+let numNeighbors = 3; 
+let neuronRadius = 10;
+let firingThreshold = 0.9;  // Neuron fires at this charge
+let axonVelocity = 200.0;     // Axon conduction rate in pixels/sec
+let refractoryPeriod = 0.25;   // Refractory period in seconds
+let bluesScale = [440, 6/5*440, 4/3*440, 45/32*440, 3/2*440, 9/5*440, 2*440];
+let justUpdatedNeurons = false;
+let learning = true;
+let averageFPS = 0;
+let leakageRate = 0.1;     // charge leakage rate/second 
+const LEARNING_WEIGHT_INCREMENT = 0.25;
+const LEARNING_WEIGHT_DECREMENT = -0.25;
+let measuredLearningRate = 0;
+
+let outputString = "";
+
+let neighborSlider;
+let neuronSlider;
+let conductionSpeedSlider;
+
+let audioCtx;
+
+class Neuron {
+  constructor(x, y, radius, charge) {
+    this.x = x;
+    this.y = y;
+    this.radius = radius;
+    this.charge = charge;
+    this.connections = [];
+    this.dragging = false;
+    this.clicked = false;
+    this.recovering = 0.0;
+    this.frequency = bluesScale[floor(random(bluesScale.length))];
+    this.key = ""; 
+    this.lastFired = null;
+  }
+    
+  connect(neuron, weight) {
+    let connection = new Connection(this, neuron, weight);
+    this.connections.push(connection);
+  }
+  
+  removeConnection(target) {
+    this.connections = this.connections.filter(conn => conn.to !== target);
+  }
+  
+  disconnect(neuron) {
+    // Remove connections to the given neuron
+    this.removeConnection(neuron);
+
+    // Remove connection from the given neuron back to this neuron
+    neuron.removeConnection(this);
+  }
+  
+  getRadius() {
+    return this.radius;
+  }
+  
+  update(dt) {
+    // Update this neuron
+    this.recovering = constrain(this.recovering - dt, 0, refractoryPeriod);
+    this.maybeFire();
+    this.charge = constrain(this.charge - (leakageRate * dt), 0, 1);
+  }
+  
+  // Fire this neuron on next update
+  fire() {
+    this.charge += firingThreshold;
+  }
+  
+  maybeFire() {
+    if (this.charge < 0) this.charge = 0;
+    if(!this.recovering && (this.charge >= firingThreshold)){
+      // Fire this neuron
+      //print("fire!");
+      this.lastFired = new Date();
+      this.addToOutput(this.key); 
+      playTone(this.frequency, 0.02);
+      for (let connection of this.connections) {
+        connection.charge = this.charge;     // send impulse to connections
+      }
+      this.recovering = refractoryPeriod;
+      this.charge = 0;  // reset neuron charge to zero
+    }
+  }
+  
+  addToOutput(key) {
+    let MAX_OUTPUT = 50;
+    outputString = outputString + key;
+      // Truncate to last 50 characters
+    if(outputString.length > MAX_OUTPUT) {
+    outputString = outputString.substring(outputString.length - MAX_OUTPUT);
+  }
+  }
+  
+  display() {
+    // Draw boundary of neuron, then inside to indicate charge level
+    fill("grey");
+    strokeWeight(1);
+    stroke('black');
+    ellipse(this.x, this.y, this.getRadius() * 2); 
+    noStroke();
+    if (this.recovering) {
+      fill((this.recovering / refractoryPeriod)*255);
+      ellipse(this.x, this.y, this.getRadius() * 2);
+    } else {
+      fill('green');
+      ellipse(this.x, this.y, map(this.charge, 0, 1.0, 0, this.getRadius() * 2));
+    }
+    if (this.key != "") {
+      fill('white');
+      textSize(neuronRadius);
+      textAlign(CENTER, CENTER);
+      text(this.key === ' ' ? '_' : this.key, this.x, this.y);
+    }
+  }
+
+  mousePressed() {
+    let d = dist(mouseX, mouseY, this.x, this.y);
+    if (d < this.getRadius()) {
+      this.offsetX = this.x - mouseX;
+      this.offsetY = this.y - mouseY;
+      this.startingX = this.x;
+      this.startingY = this.y;
+      
+      if (mouseButton === RIGHT) {
+        // If right-clicking a neuron, prompt for a key to be associated with it
+        let k = prompt('Enter a key to associate with this neuron:')
+        if (k) {
+          console.log(`Setting neuron key to ${k}`);
+          this.key = k;
+        }
+      } else if (mouseButton === LEFT) {
+        this.charge = firingThreshold;
+        this.clicked = true;
+      }
+    } 
+  }
+  
+  mouseDragged() {
+    if (this.clicked) {
+      this.dragging = true;
+    }
+  }
+
+  mouseReleased() {
+    if (this.clicked) {
+      this.clicked = false;
+      if (this.dragging) {
+        fixOffsets();
+        //if (dist(this.x, this.y, this.startingX, this.startingY) > this.getRadius()) {
+        //  updateNeuronConnections(this);  
+        //}
+        this.dragging = false;
+      }
+    }
+  }
+
+  drag() {
+    if (this.dragging) {
+      this.x = mouseX + this.offsetX;
+      this.y = mouseY + this.offsetY;
+    }
+  }
+}
+  
+class Connection {
+    constructor(from, to, weight) {
+      this.from = from;
+      this.to = to;
+      this.weight = weight;
+      this.dragging = false;
+      this.startWeight = 0;
+      this.startMouseX = 0;
+      this.offsetX = 0;
+      this.offsetY = 0;
+      this.charge = random(1.0);
+      this.chargePosition = random(1.0);    // How far along the axon is the charge right now?
+      this.setOffsets();
+      this.learned = 0;
+      this.lastTransferTime = null;
+    }
+  
+    setOffsets() {
+        const hasOppositeConnection = this.to.connections.filter(conn => conn.to === this.from).length > 0;
+        this.offsetX = 0;
+        this.offsetY = 0;
+        if(hasOppositeConnection) {
+            let angle = atan2(this.to.y - this.from.y, this.to.x - this.from.x); // calculate angle of line
+            const offsetDistance = 3; // pixel gap between adjacent connection lines
+            this.offsetX = offsetDistance * cos(angle + PI / 2); // calculate x offset
+            this.offsetY = offsetDistance * sin(angle + PI / 2); // calculate y offset
+        }
+      }
+  
+    update(dt) { 
+      // If there's a charge moving along the connection
+      if (this.charge > 0) {
+        let d = dist(this.from.x, this.from.y, this.to.x, this.to.y);
+        this.chargePosition += (axonVelocity * dt)/d;  //  Calculate how much charge will move
+
+        // If the charge reaches the target neuron, convey to target
+        if (this.chargePosition >= 1.0) {
+          this.to.charge += constrain(this.to.charge + this.weight * this.charge, 0, firingThreshold);  
+          this.lastTransferTime = new Date();
+          // If learning enabled, updates weights with Hebbian algorithm
+          if (learning) {
+            let oldWeight = this.weight;
+            if(!this.to.recovering && (this.to.charge >= firingThreshold)){ 
+              //  If this connection caused firing, strengthen connection
+              this.weight = constrain(this.weight + LEARNING_WEIGHT_INCREMENT, -1, 1);
+              //if (this.weight != oldWeight) print("increased weight to " + this.weight);
+            } else { 
+              if (this.to.recovering) {
+                // If this charge was received just after firing, decrement connection
+                this.weight = constrain(this.weight + LEARNING_WEIGHT_DECREMENT, -1, 1);
+                //if (this.weight != oldWeight) print("decreased weight to" + this.weight);
+              }   
+            }
+            let LEARNING_COLOR_DELAY = 60;
+            this.learned = (this.weight != oldWeight) ? LEARNING_COLOR_DELAY : this.learned;
+            if (this.weight != oldWeight) {
+              //console.log('Learned: ' + this.weight);
+              this.learned = constrain(this.learned--, 0, 1);
+            }
+          }
+          this.charge = 0;  // reset charge on connection to zero
+          this.chargePosition = 0;
+        } 
+      }
+    }
+  
+displayCharge() {
+    if (this.charge > 0) {
+      let x = lerp(this.from.x + this.offsetX, this.to.x + this.offsetX, this.chargePosition);
+      let y = lerp(this.from.y + this.offsetY, this.to.y + this.offsetY, this.chargePosition);
+
+      //fill(this.weight > 0 ? 'green' : 'red');
+      fill(165);
+      noStroke();
+      ellipse(x, y, 5 + map(abs(this.weight), 0, 1, 1, 5));
+    }
+  }
+    
+  display() {
+      // Find if there's a connection in opposite direction
+      const hasOppositeConnection = this.to.connections.filter(conn => conn.to === this.from).length > 0;
+      
+      // Calculate start and end point considering the neuron radii and the offset
+      let startX = lerp(this.from.x, this.to.x, this.from.getRadius() / dist(this.from.x, this.from.y, this.to.x, this.to.y));
+      let startY = lerp(this.from.y, this.to.y, this.from.getRadius() / dist(this.from.x, this.from.y, this.to.x, this.to.y));
+      let endX = lerp(this.from.x, this.to.x, 1 - (this.to.getRadius() + 6) / dist(this.from.x, this.from.y, this.to.x, this.to.y));
+      let endY = lerp(this.from.y, this.to.y, 1 - (this.to.getRadius() + 6) / dist(this.from.x, this.from.y, this.to.x, this.to.y));
+
+      // Draw the line
+      noFill();
+      strokeWeight(map(abs(this.weight), 0, 1, 1, 5));
+      stroke(this.learned ? 'white' : (this.weight > 0 ? 'green' : 'red'));
+      line(startX + this.offsetX, startY + this.offsetY, endX + this.offsetX, endY + this.offsetY);
+      this.learned = false;
+  }
+  
+    contains(x, y) {
+      // Same as original code, except for using stored offsets
+      // use this.offsetX and this.offsetY instead of recalculating them
+      let v = {x: this.from.x + this.offsetX, y: this.from.y + this.offsetY};
+      let w = {x: this.to.x + this.offsetX, y: this.to.y + this.offsetY};
+      let d = distToSegmentSquared({x:x, y:y}, v, w);
+      return d < 8;
+    }
+  
+    mousePressed() {
+      if(this.contains(mouseX, mouseY)){
+          this.dragging = true;
+          this.startWeight = this.weight;
+          this.startMouseX = mouseX;
+      } else {
+          this.dragging = false;
+      }
+    }
+
+    mouseDragged() {
+        if(this.dragging) {
+            // Scale mouse move distance to [-1, 1] range and add to startWeight
+            let scaleFactor = 20; // Change this for more or less sensitivity
+            let moveAmount = (mouseX - this.startMouseX) / scaleFactor;
+            this.weight = constrain(this.startWeight + moveAmount, -1, 1);
+        }
+    }
+  
+    mouseReleased() {
+        this.dragging = false;
+    }
+    
+  }
+  
+let neurons = [];
+let simulationRunning = true;
+
+function findNearestNeighbors(neuron, count) {
+  // Get all neurons and their distances to the given neuron
+  let distances = neurons.map(other => {
+    return {
+      neuron: other,
+      distance: dist(neuron.x, neuron.y, other.x, other.y)
+    };
+  });
+
+  // Sort by distance and exclude the given neuron itself
+  distances = distances.filter(d => d.neuron !== neuron);
+  distances.sort((a, b) => a.distance - b.distance);
+
+  // Return the 'count' nearest neurons
+  return distances.slice(0, count).map(d => d.neuron);
+}
+
+function updateNeuronConnections(neuron) {
+  // Disconnect from current neighbors
+  let currentNeighbors = neuron.connections.map(connection => connection.to);
+  for (let neighbor of currentNeighbors) {
+    neuron.disconnect(neighbor);
+  }
+
+  // Connect to the nearest neighbors based on the global numNeighbors variable
+  let nearestNeighbors = findNearestNeighbors(neuron, numNeighbors);
+  for (let neighbor of nearestNeighbors) {
+    let weight = random(-1, 1); // Assign random weights
+    neuron.connect(neighbor, weight);
+  }
+}
+
+ 
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  
+  let startStopButton = createButton('Stop');
+  startStopButton.position(10, 10);
+  startStopButton.mousePressed(() => {
+    if(simulationRunning){
+      simulationRunning = false;
+      startStopButton.html('Start');
+    } else {
+      simulationRunning = true;
+      SimulationLoop();	// restart the simulation loop
+      startStopButton.html('Stop');
+    }
+  });
+  
+  let learningButton = createButton(learning ? 'Freeze':'Learn');
+  learningButton.position(60, 10);
+  learningButton.mousePressed(() => {
+    learning = !learning;
+    learningButton.html(learning?'Freeze':'Learn');  
+  });
+  let inhibitButton = createButton('Inhibit');
+  inhibitButton.position(120, 10);
+  inhibitButton.mousePressed(() => incrementWeightsBy(-0.1));
+
+  let exciteButton = createButton('Excite');
+  exciteButton.position(180, 10);
+  exciteButton.mousePressed(() => incrementWeightsBy(0.1));
+  
+  neuronSlider = createSlider(2, 300, startingNeurons, 1);
+  neuronSlider.position(300, 10);
+  
+  neighborSlider = createSlider(1, 20, numNeighbors, 1);
+  neighborSlider.position(450, 10);
+  neighborSlider.changed(() => {
+    for (let neuron of neurons) {
+        updateNeuronConnections(neuron);
+      }
+    });
+  
+  conductionSpeedSlider = createSlider(50, 500, axonVelocity, 10);
+  conductionSpeedSlider.position(600, 10);
+
+  // Initial creation of neurons
+  initializeNeurons(neuronSlider.value());
+  SimulationLoop();
+}
+  
+function SimulationLoop() {
+  const dt = 0.016;  // Time step for the simulation (s)
+  
+  // Update axonVelocity based on the slider's value
+  axonVelocity = conductionSpeedSlider.value();
+
+  // For each neuron in the network, check if the neuron needs to fire
+  for (let neuron of neurons) {
+    neuron.update(dt);
+    
+    // For each connection of the neuron, update the position of the charge
+    for(let connection of neuron.connections) {
+      connection.update(dt);
+    }
+  }
+  
+  // Call the simulation loop again after a delay (corresponding to the time step)
+  if(simulationRunning) setTimeout(SimulationLoop, dt * 1000);  // Convert from s to ms
+}
+
+function initializeNeurons(numNeurons) {
+  neurons = [];
+  // Define number of neurons in x and y axis
+  let neuronsAcrossX = floor(sqrt(numNeurons));
+  let neuronsAcrossY = ceil(numNeurons / neuronsAcrossX);
+  
+  // Define spacing between neurons
+  let neuronSpacingX = width / (neuronsAcrossX + 1);
+  let neuronSpacingY = height / (neuronsAcrossY + 1);
+  
+  for(let j = 0; j < neuronsAcrossY; j++) {
+    for (let i = 0; i < neuronsAcrossX; i++) {
+        let neuronCount = i + j * neuronsAcrossX;
+        //limit neurons to numNeurons,
+        if(neuronCount < numNeurons) {
+          let x = (i+1) * neuronSpacingX;
+          let y = (j+1) * neuronSpacingY;
+          neurons.push(new Neuron(x, y, neuronRadius, random(0.99)));
+        }
+    }
+  }
+  // Connect neurons to their nearest neighbors
+  for (let neuron of neurons) {
+      updateNeuronConnections(neuron);
+  }
+  
+  // Finally, correct offsets for all 
+  fixOffsets();
+}
+
+function fixOffsets() {
+  // Correct rendered position of weight line at initialization and if neuron is dragged
+    console.log("fixing offsets");
+    for (let neuron of neurons) {
+    for (let connection of neuron.connections) {
+      connection.setOffsets();
+    }    
+  } 
+}
+
+function draw() {
+    background(128);
+  
+    if (justUpdatedNeurons) {
+      justUpdatedNeurons = false;
+      return;
+    }
+
+    if (neuronSlider.value() != neurons.length) {
+      initializeNeurons(neuronSlider.value());
+      justUpdatedNeurons = true;
+      return;
+    }
+
+    for(let neuron of neurons) {
+      for(let connection of neuron.connections) {
+          connection.display();
+          connection.displayCharge();
+      }
+    }
+
+    for (let neuron of neurons) {
+      neuron.display();
+    }
+    
+
+    textSize(12);
+    fill(0, 0, 0);
+    noStroke();
+    text(`Neurons: ${neurons.length}`, 330, 30);
+    numNeighbors = neighborSlider.value();
+  
+    text(`Speed: ${axonVelocity}`, 630, 30);
+    fill(0, 0, 0);
+    noStroke();
+    text(`Neighbors: ${numNeighbors}`, 480, 30);
+    if (simulationRunning) {
+      // Update and display neurons
+      for (let neuron of neurons) {
+        neuron.drag();
+        neuron.display();
+      }
+    }
+    fill(255);
+    noStroke();
+    textAlign(LEFT, TOP);
+    textSize(20);
+    text(`${outputString}`, 10, 50);
+  
+    
+    // Display frame rate
+    fill(0);
+    noStroke();
+    textAlign(LEFT, TOP);
+    textSize(12)
+    averageFPS = 0.9 * averageFPS + 0.1 * frameRate();
+    text(`Fps: ${averageFPS.toFixed(0)}`, 10, windowHeight - 100);
+  
+    // display learning rate 
+    text('Learning: ', 50, windowHeight - 100)
+    
+}
+  
+function mousePressed() {
+    for (let neuron of neurons) {
+        neuron.mousePressed();
+        if (!neuron.dragging) {
+          for(let connection of neuron.connections) {
+            connection.mousePressed();
+          }          
+        }
+      }
+  }
+
+function mouseDragged() {
+    for (let neuron of neurons) {
+    neuron.mouseDragged();
+    if (!neuron.dragging) {
+      for(let connection of neuron.connections) {
+        connection.mouseDragged();
+      }
+    }
+  } 
+}
+  
+function mouseReleased() {
+  for (let neuron of neurons) {
+    neuron.mouseReleased();
+    for(let connection of neuron.connections) {
+      connection.mouseReleased();
+    }
+  } 
+}
+
+// New function to handle the keyTyped event
+function keyTyped() {
+  //console.log(`key = ${key}`);
+  for (let n of neurons) {
+    if (n.key == key) {
+      n.fire()
+    }
+    if (n.clicked) {
+      n.key = key;
+      console.log("mapped to " + key);
+    }
+  }
+}
+
+// Function to play tone
+function playTone(frequency, duration) {
+    // Create an oscillator node
+    let oscillator = audioCtx.createOscillator();
+
+    oscillator.type = 'sine'; // This is the default - also square, sawtooth, triangle
+    oscillator.frequency.value = frequency; // frequency in Hz
+    oscillator.connect(audioCtx.destination);
+
+    // Start the oscillator
+    oscillator.start();
+
+    // Stop the oscillator after specified duration
+    setTimeout(function() {
+        oscillator.stop();
+    }, duration * 1000); // duration in seconds
+}
+
+function incrementWeightsBy(incrementAmount){
+  for (let neuron of neurons) {
+    for(let connection of neuron.connections) {
+      // increment the weight and clamp it to the range {-1,1}
+      connection.weight = constrain(connection.weight + incrementAmount, -1, 1);
+      
+    }
+  }
+}
+
+// Separate helper function to calculate the shortest distance from a point to a line segment
+// https://stackoverflow.com/questions/849211/shortest-distance-between-a-point-and-a-line-segment
+function sqr(x) { return x * x }
+function dist2(v, w) { return sqr(v.x - w.x) + sqr(v.y - w.y) }
+function distToSegmentSquared(p, v, w) {
+    var l2 = dist2(v, w);
+    if (l2 == 0) return dist2(p, v);
+    var t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return dist2(p, {x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) });
+}
+  
+
+</script>
+</body>
+</html>

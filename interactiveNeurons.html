@@ -185,10 +185,12 @@ class Neuron {
     if (this.clicked) {
       this.clicked = false;
       if (this.dragging) {
+        // When a neuron is dragged and released, recompute connections for all neurons
+        // since positions have changed and nearest neighbors may have changed
+        for (let neuron of neurons) {
+          updateNeuronConnections(neuron);
+        }
         fixOffsets();
-        //if (dist(this.x, this.y, this.startingX, this.startingY) > this.getRadius()) {
-        //  updateNeuronConnections(this);  
-        //}
         this.dragging = false;
       }
     }

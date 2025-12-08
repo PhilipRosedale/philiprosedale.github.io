@@ -415,8 +415,14 @@ function setup() {
     soundButton.html(soundEnabled ? 'Sound: On' : 'Sound: Off');
   });
   
+  let sleepButton = createButton('Sleep');
+  sleepButton.position(350, 10);
+  sleepButton.mousePressed(() => {
+    sleepNetwork();
+  });
+  
   let learningToggleButton = createButton(learning ? 'Learning: On' : 'Learning: Off');
-  learningToggleButton.position(350, 10);
+  learningToggleButton.position(400, 10);
   learningToggleButton.mousePressed(() => {
     learning = !learning;
     learningToggleButton.html(learning ? 'Learning: On' : 'Learning: Off');
@@ -424,10 +430,10 @@ function setup() {
   });
   
   neuronSlider = createSlider(2, 300, startingNeurons, 1);
-  neuronSlider.position(450, 10);
+  neuronSlider.position(500, 10);
   
   neighborSlider = createSlider(1, 20, numNeighbors, 1);
-  neighborSlider.position(600, 10);
+  neighborSlider.position(650, 10);
   neighborSlider.changed(() => {
     for (let neuron of neurons) {
         updateNeuronConnections(neuron);
@@ -435,7 +441,7 @@ function setup() {
     });
   
   conductionSpeedSlider = createSlider(50, 500, axonVelocity, 10);
-  conductionSpeedSlider.position(750, 10);
+  conductionSpeedSlider.position(800, 10);
 
   // Initial creation of neurons
   initializeNeurons(neuronSlider.value());
@@ -502,6 +508,26 @@ function fixOffsets() {
   } 
 }
 
+function sleepNetwork() {
+  // Clear all charges and chargePositions to put the network to sleep
+  for (let neuron of neurons) {
+    // Reset neuron charge to zero if non-zero
+    if (neuron.charge > 0) {
+      neuron.charge = 0;
+    }
+    // Also reset recovering state to allow immediate firing if needed
+    neuron.recovering = 0;
+    
+    // Clear all connection charges and chargePositions
+    for (let connection of neuron.connections) {
+      connection.charge = 0;
+      connection.chargePosition = 0;
+    }
+  }
+  // Clear the output string
+  outputString = "";
+}
+
 function draw() {
     background(128);
   
@@ -531,13 +557,13 @@ function draw() {
     textSize(12);
     fill(0, 0, 0);
     noStroke();
-    text(`Neurons: ${neurons.length}`, 480, 30);
+    text(`Neurons: ${neurons.length}`, 530, 30);
     numNeighbors = neighborSlider.value();
   
-    text(`Speed: ${axonVelocity}`, 780, 30);
+    text(`Speed: ${axonVelocity}`, 830, 30);
     fill(0, 0, 0);
     noStroke();
-    text(`Neighbors: ${numNeighbors}`, 630, 30);
+    text(`Neighbors: ${numNeighbors}`, 680, 30);
     if (simulationRunning) {
       // Update and display neurons
       for (let neuron of neurons) {

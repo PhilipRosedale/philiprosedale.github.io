@@ -34,12 +34,13 @@
 //  correct dt to be accurate rather than a constant
 
 
-let startingNeurons = 8;
+let startingNeurons = 4;
 let numNeighbors = 3; 
 let neuronRadius = 10;
 let firingThreshold = 0.9;  // Neuron fires at this charge
 let axonVelocity = 200.0;     // Axon conduction rate in pixels/sec
-let refractoryPeriod = 0.25;   // Refractory period in seconds
+const REFRACTORY_PERIOD_CONSTANT = 0.25 * 200.0;  // Constant for inverse proportionality (refractoryPeriod * axonVelocity)
+let refractoryPeriod = REFRACTORY_PERIOD_CONSTANT / axonVelocity;   // Refractory period in seconds (inversely proportional to axon velocity)
 let bluesScale = [440, 6/5*440, 4/3*440, 45/32*440, 3/2*440, 9/5*440, 2*440];
 let justUpdatedNeurons = false;
 let learning = true;
@@ -56,7 +57,7 @@ let neuronSlider;
 let conductionSpeedSlider;
 
 let audioCtx;
-let soundEnabled = true;
+let soundEnabled = false;
 
 class Neuron {
   constructor(x, y, radius, charge) {
@@ -169,7 +170,6 @@ class Neuron {
           this.key = k;
         }
       } else if (mouseButton === LEFT) {
-        this.charge = firingThreshold;
         this.clicked = true;
       }
     } 
@@ -190,8 +190,18 @@ class Neuron {
         for (let neuron of neurons) {
           updateNeuronConnections(neuron);
         }
+        // Reset all connection charges and chargePositions to zero after resetting connections
+        for (let neuron of neurons) {
+          for (let connection of neuron.connections) {
+            connection.charge = 0;
+            connection.chargePosition = 0;
+          }
+        }
         fixOffsets();
         this.dragging = false;
+      } else {
+        // Fire the neuron on release if it wasn't dragged
+        this.charge = firingThreshold;
       }
     }
   }
@@ -408,7 +418,7 @@ function setup() {
   exciteButton.position(180, 10);
   exciteButton.mousePressed(() => incrementWeightsBy(0.1));
   
-  let soundButton = createButton('Sound: On');
+  let soundButton = createButton('Sound: Off');
   soundButton.position(240, 10);
   soundButton.mousePressed(() => {
     soundEnabled = !soundEnabled;
@@ -453,6 +463,8 @@ function SimulationLoop() {
   
   // Update axonVelocity based on the slider's value
   axonVelocity = conductionSpeedSlider.value();
+  // Update refractoryPeriod inversely proportionally to axonVelocity (faster velocity = shorter refractory period)
+  refractoryPeriod = REFRACTORY_PERIOD_CONSTANT / axonVelocity;
 
   // For each neuron in the network, check if the neuron needs to fire
   for (let neuron of neurons) {

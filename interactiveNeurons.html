@@ -365,12 +365,9 @@ function findNearestNeighbors(neuron, count) {
 }
 
 function updateNeuronConnections(neuron) {
-  // Disconnect from current neighbors
-  let currentNeighbors = neuron.connections.map(connection => connection.to);
-  for (let neighbor of currentNeighbors) {
-    neuron.disconnect(neighbor);
-  }
-
+  // Clear existing connections first
+  neuron.connections = [];
+  
   // Connect to the nearest neighbors based on the global numNeighbors variable
   let nearestNeighbors = findNearestNeighbors(neuron, numNeighbors);
   for (let neighbor of nearestNeighbors) {

@@ -185,19 +185,31 @@ class Neuron {
     if (this.clicked) {
       this.clicked = false;
       if (this.dragging) {
-        // When a neuron is dragged and released, recompute connections for all neurons
-        // since positions have changed and nearest neighbors may have changed
-        for (let neuron of neurons) {
-          updateNeuronConnections(neuron);
-        }
-        // Reset all connection charges and chargePositions to zero after resetting connections
-        for (let neuron of neurons) {
-          for (let connection of neuron.connections) {
-            connection.charge = 0;
-            connection.chargePosition = 0;
+        // Calculate how far the neuron was dragged
+        let dragDistance = dist(this.x, this.y, this.startingX, this.startingY);
+        // Only re-wire if dragged more than 1/4 of the neuron's diameter
+        let dragThreshold = this.getRadius() / 2; // 1/4 of diameter = radius / 2
+        
+        if (dragDistance > dragThreshold) {
+          // When a neuron is dragged and released, recompute connections for all neurons
+          // since positions have changed and nearest neighbors may have changed
+          for (let neuron of neurons) {
+            updateNeuronConnections(neuron);
           }
+          // Reset all connection charges and chargePositions to zero after resetting connections
+          for (let neuron of neurons) {
+            for (let connection of neuron.connections) {
+              connection.charge = 0;
+              connection.chargePosition = 0;
+            }
+          }
+          fixOffsets();
+        } else {
+          // If dragged less than threshold, just reset position and fire
+          this.x = this.startingX;
+          this.y = this.startingY;
+          this.charge = firingThreshold;
         }
-        fixOffsets();
         this.dragging = false;
       } else {
         // Fire the neuron on release if it wasn't dragged

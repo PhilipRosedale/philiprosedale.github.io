@@ -563,6 +563,17 @@ function draw() {
       return;
     }
 
+    // Add charge to neuron if mouse is hovering over it (and not dragging)
+    if (!mouseIsPressed) {
+      for (let neuron of neurons) {
+        let d = dist(mouseX, mouseY, neuron.x, neuron.y);
+        if (d < neuron.getRadius()) {
+          // Add a small charge increment each frame when hovering
+          neuron.charge = constrain(neuron.charge + 0.01, 0, 1);
+        }
+      }
+    }
+
     for(let neuron of neurons) {
       for(let connection of neuron.connections) {
           connection.display();

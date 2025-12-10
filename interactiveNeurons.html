@@ -309,8 +309,12 @@ displayCharge() {
       let x = lerp(this.from.x + this.offsetX, this.to.x + this.offsetX, this.chargePosition);
       let y = lerp(this.from.y + this.offsetY, this.to.y + this.offsetY, this.chargePosition);
 
-      //fill(this.weight > 0 ? 'green' : 'red');
-      fill(165);
+      // Use paler version of connection color (green for positive, red for negative)
+      if (this.weight > 0) {
+        fill(150, 220, 150); // Paler green
+      } else {
+        fill(220, 150, 150); // Paler red
+      }
       noStroke();
       ellipse(x, y, 5 + map(abs(this.weight), 0, 1, 1, 5));
     }

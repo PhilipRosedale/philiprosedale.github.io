@@ -263,7 +263,9 @@ class Connection {
 
         // If the charge reaches the target neuron, convey to target
         if (this.chargePosition >= 1.0) {
-          this.to.charge += constrain(this.to.charge + this.weight * this.charge, 0, firingThreshold);  
+          // Calculate new charge: current charge + (weight * incoming charge)
+          // Then constrain to valid range [0, firingThreshold]
+          this.to.charge = constrain(this.to.charge + this.weight * this.charge, 0, firingThreshold);
           this.lastTransferTime = new Date();
           // If learning enabled, updates weights with Hebbian algorithm
           if (learning) {

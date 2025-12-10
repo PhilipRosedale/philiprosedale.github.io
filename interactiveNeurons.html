@@ -48,7 +48,11 @@ let averageFPS = 0;
 let leakageRate = 0.1;     // charge leakage rate/second 
 const LEARNING_WEIGHT_INCREMENT = 0.25;
 const LEARNING_WEIGHT_DECREMENT = -0.25;
-let measuredLearningRate = 0;
+let weightStrengthenCount = 0; // Counter for weight strengthening (positive changes)
+let weightWeakenCount = 0; // Counter for weight weakening (negative changes)
+let lastLearningRateMeasureTime = 0;
+let measuredStrengthenRate = 0;
+let measuredWeakenRate = 0;
 
 let outputString = "";
 
@@ -284,6 +288,12 @@ class Connection {
             let LEARNING_COLOR_DELAY = 60;
             this.learned = (this.weight != oldWeight) ? LEARNING_COLOR_DELAY : this.learned;
             if (this.weight != oldWeight) {
+              // Track whether weight was strengthened or weakened for learning rate measurement
+              if (this.weight > oldWeight) {
+                weightStrengthenCount++;
+              } else if (this.weight < oldWeight) {
+                weightWeakenCount++;
+              }
               //console.log('Learned: ' + this.weight);
               this.learned = constrain(this.learned--, 0, 1);
             }
@@ -385,7 +395,15 @@ function updateNeuronConnections(neuron) {
   // Connect to the nearest neighbors based on the global numNeighbors variable
   let nearestNeighbors = findNearestNeighbors(neuron, numNeighbors);
   for (let neighbor of nearestNeighbors) {
-    let weight = random(-1, 1); // Assign random weights
+    // 80% chance excitatory (positive), 20% chance inhibitory (negative)
+    let weight;
+    if (random() < 0.8) {
+      // Excitatory: positive weight between 0 and 1
+      weight = random(0, 1);
+    } else {
+      // Inhibitory: negative weight between -1 and 0
+      weight = random(-1, 0);
+    }
     neuron.connect(neighbor, weight);
   }
 }
@@ -591,13 +609,13 @@ function draw() {
     textSize(12);
     fill(0, 0, 0);
     noStroke();
-    text(`Neurons: ${neurons.length}`, 530, 30);
+    text(`Neurons: ${neurons.length}`, 530, 40);
     numNeighbors = neighborSlider.value();
   
-    text(`Speed: ${axonVelocity}`, 830, 30);
+    text(`Speed: ${axonVelocity}`, 830, 40);
     fill(0, 0, 0);
     noStroke();
-    text(`Neighbors: ${numNeighbors}`, 680, 30);
+    text(`Neighbors: ${numNeighbors}`, 680, 40);
     if (simulationRunning) {
       // Update and display neurons
       for (let neuron of neurons) {
@@ -612,16 +630,24 @@ function draw() {
     text(`${outputString}`, 10, 50);
   
     
-    // Display frame rate
+    // Measure learning rate once per second
+    let currentTime = millis();
+    if (currentTime - lastLearningRateMeasureTime >= 1000) {
+      measuredStrengthenRate = weightStrengthenCount;
+      measuredWeakenRate = weightWeakenCount;
+      weightStrengthenCount = 0; // Reset counters
+      weightWeakenCount = 0;
+      lastLearningRateMeasureTime = currentTime;
+    }
+    
+    // Display frame rate and learning rate near bottom of canvas
     fill(0);
     noStroke();
-    textAlign(LEFT, TOP);
-    textSize(12)
+    textAlign(LEFT, BOTTOM);
+    textSize(12);
     averageFPS = 0.9 * averageFPS + 0.1 * frameRate();
-    text(`Fps: ${averageFPS.toFixed(0)}`, 10, windowHeight - 100);
-  
-    // display learning rate 
-    text('Learning: ', 50, windowHeight - 100)
+    text(`Fps: ${averageFPS.toFixed(0)}`, 10, windowHeight - 20);
+    text(`Learning Rate: ${measuredStrengthenRate}/${measuredWeakenRate}`, 10, windowHeight - 5);
     
 }
   

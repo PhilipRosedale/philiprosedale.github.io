@@ -46,8 +46,12 @@ let justUpdatedNeurons = false;
 let learning = true;
 let averageFPS = 0;
 let leakageRate = 0.1;     // charge leakage rate/second 
-const LEARNING_WEIGHT_INCREMENT = 0.25;
-const LEARNING_WEIGHT_DECREMENT = -0.25;
+// STDP (Spike Timing Dependent Plasticity) parameters
+const STDP_TIME_WINDOW = 0.050;  // 50ms time window for STDP (in seconds)
+const STDP_TAU_PLUS = 0.020;     // Time constant for LTP (pre-before-post) decay (20ms)
+const STDP_TAU_MINUS = 0.020;    // Time constant for LTD (post-before-pre) decay (20ms)
+const STDP_A_PLUS = 0.15;        // Maximum LTP weight change
+const STDP_A_MINUS = 0.10;       // Maximum LTD weight change (slightly smaller for asymmetry)
 let weightStrengthenCount = 0; // Counter for weight strengthening (positive changes)
 let weightWeakenCount = 0; // Counter for weight weakening (negative changes)
 let lastLearningRateMeasureTime = 0;
@@ -116,9 +120,39 @@ class Neuron {
     if(!this.recovering && (this.charge >= firingThreshold)){
       // Fire this neuron
       //print("fire!");
-      this.lastFired = new Date();
+      let currentTime = new Date();
+      this.lastFired = currentTime;
       this.addToOutput(this.key); 
       playTone(this.frequency, 0.02);
+      
+      // STDP: Check all incoming connections for recent pre-synaptic spikes (pre-before-post = LTP)
+      if (learning) {
+        // Find all connections that target this neuron (incoming connections)
+        for (let neuron of neurons) {
+          for (let connection of neuron.connections) {
+            if (connection.to === this && connection.from.lastFired !== null) {
+              let timeDiff = (currentTime - connection.from.lastFired) / 1000.0;  // Convert to seconds
+              // If pre fired before post (positive timeDiff), and within time window
+              // Note: timeDiff includes axon delay, which is correct for STDP
+              if (timeDiff > 0 && timeDiff < STDP_TIME_WINDOW) {
+                // Apply LTP (Long Term Potentiation): strengthen connection
+                let oldWeight = connection.weight;
+                let weightChange = STDP_A_PLUS * Math.exp(-timeDiff / STDP_TAU_PLUS);
+                connection.weight = constrain(connection.weight + weightChange, -1, 1);
+                
+                // Update learning indicators
+                if (connection.weight !== oldWeight) {
+                  if (connection.weight > oldWeight) {
+                    weightStrengthenCount++;
+                  }
+                  connection.learned = 60;  // LEARNING_COLOR_DELAY
+                }
+              }
+            }
+          }
+        }
+      }
+      
       for (let connection of this.connections) {
         connection.charge = this.charge;     // send impulse to connections
       }
@@ -244,7 +278,7 @@ class Connection {
       this.chargePosition = random(1.0);    // How far along the axon is the charge right now?
       this.setOffsets();
       this.learned = 0;
-      this.lastTransferTime = null;
+      this.lastSpikeArrivalTime = null;  // Track when the last spike arrived at post-synaptic neuron
     }
   
     setOffsets() {
@@ -270,34 +304,28 @@ class Connection {
           // Calculate new charge: current charge + (weight * incoming charge)
           // Then constrain to valid range [0, firingThreshold]
           this.to.charge = constrain(this.to.charge + this.weight * this.charge, 0, firingThreshold);
-          this.lastTransferTime = new Date();
-          // If learning enabled, updates weights with Hebbian algorithm
-          if (learning) {
-            let oldWeight = this.weight;
-            if(!this.to.recovering && (this.to.charge >= firingThreshold)){ 
-              //  If this connection caused firing, strengthen connection
-              this.weight = constrain(this.weight + LEARNING_WEIGHT_INCREMENT, -1, 1);
-              //if (this.weight != oldWeight) print("increased weight to " + this.weight);
-            } else { 
-              if (this.to.recovering) {
-                // If this charge was received just after firing, decrement connection
-                this.weight = constrain(this.weight + LEARNING_WEIGHT_DECREMENT, -1, 1);
-                //if (this.weight != oldWeight) print("decreased weight to" + this.weight);
-              }   
-            }
-            let LEARNING_COLOR_DELAY = 60;
-            this.learned = (this.weight != oldWeight) ? LEARNING_COLOR_DELAY : this.learned;
-            if (this.weight != oldWeight) {
-              // Track whether weight was strengthened or weakened for learning rate measurement
-              if (this.weight > oldWeight) {
-                weightStrengthenCount++;
-              } else if (this.weight < oldWeight) {
-                weightWeakenCount++;
+          this.lastSpikeArrivalTime = new Date();  // Record when spike arrived
+          
+          // STDP: Check if post-synaptic neuron recently fired (post-before-pre = LTD)
+          if (learning && this.to.lastFired !== null) {
+            let timeDiff = (this.lastSpikeArrivalTime - this.to.lastFired) / 1000.0;  // Convert to seconds
+            // If post fired before pre arrived (positive timeDiff), and within time window
+            if (timeDiff > 0 && timeDiff < STDP_TIME_WINDOW) {
+              // Apply LTD (Long Term Depression): weaken connection
+              let oldWeight = this.weight;
+              let weightChange = -STDP_A_MINUS * Math.exp(-timeDiff / STDP_TAU_MINUS);
+              this.weight = constrain(this.weight + weightChange, -1, 1);
+              
+              // Update learning indicators
+              if (this.weight !== oldWeight) {
+                if (this.weight < oldWeight) {
+                  weightWeakenCount++;
+                }
+                this.learned = 60;  // LEARNING_COLOR_DELAY
               }
-              //console.log('Learned: ' + this.weight);
-              this.learned = constrain(this.learned--, 0, 1);
             }
           }
+          
           this.charge = 0;  // reset charge on connection to zero
           this.chargePosition = 0;
         } 

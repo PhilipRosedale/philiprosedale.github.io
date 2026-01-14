@@ -57,6 +57,8 @@ let weightWeakenCount = 0; // Counter for weight weakening (negative changes)
 let lastLearningRateMeasureTime = 0;
 let measuredStrengthenRate = 0;
 let measuredWeakenRate = 0;
+let firingCount = 0; // Counter for neuron firings
+let measuredFiringRate = 0; // Measured firing rate (firings per second)
 
 let outputString = "";
 
@@ -122,6 +124,7 @@ class Neuron {
       //print("fire!");
       let currentTime = new Date();
       this.lastFired = currentTime;
+      firingCount++; // Increment firing counter
       this.addToOutput(this.key); 
       playTone(this.frequency, 0.02);
       
@@ -691,17 +694,19 @@ function draw() {
     text(`${outputString}`, 10, 50);
   
     
-    // Measure learning rate once per second
+    // Measure learning rate and firing rate once per second
     let currentTime = millis();
     if (currentTime - lastLearningRateMeasureTime >= 1000) {
       measuredStrengthenRate = weightStrengthenCount;
       measuredWeakenRate = weightWeakenCount;
+      measuredFiringRate = firingCount;
       weightStrengthenCount = 0; // Reset counters
       weightWeakenCount = 0;
+      firingCount = 0;
       lastLearningRateMeasureTime = currentTime;
     }
     
-    // Display frame rate and learning rate near bottom of canvas
+    // Display frame rate, learning rate, and firing rate near bottom of canvas
     fill(0);
     noStroke();
     textAlign(LEFT, BOTTOM);
@@ -709,6 +714,8 @@ function draw() {
     averageFPS = 0.9 * averageFPS + 0.1 * frameRate();
     text(`Fps: ${averageFPS.toFixed(0)}`, 10, windowHeight - 20);
     text(`Learning Rate: ${measuredStrengthenRate}/${measuredWeakenRate}`, 10, windowHeight - 5);
+    let normalizedFiringRate = neurons.length > 0 ? (measuredFiringRate / neurons.length).toFixed(2) : '0.00';
+    text(`Firing Rate: ${normalizedFiringRate}`, 200, windowHeight - 5);
     
 }
   

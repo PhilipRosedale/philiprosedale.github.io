@@ -234,8 +234,10 @@ class Neuron {
         if (dragDistance > dragThreshold) {
           // When a neuron is dragged and released, recompute connections for all neurons
           // since positions have changed and nearest neighbors may have changed
+          // First, build a map of existing connection weights to preserve them
+          let existingWeights = buildConnectionWeightMap();
           for (let neuron of neurons) {
-            updateNeuronConnections(neuron);
+            updateNeuronConnections(neuron, existingWeights);
           }
           // Reset all connection charges and chargePositions to zero after resetting connections
           for (let neuron of neurons) {
@@ -423,21 +425,54 @@ function findNearestNeighbors(neuron, count) {
   return distances.slice(0, count).map(d => d.neuron);
 }
 
-function updateNeuronConnections(neuron) {
+function buildConnectionWeightMap() {
+  // Build a map of all existing connections and their weights
+  // Key format: "fromIndex-toIndex" where indices are positions in neurons array
+  let weightMap = new Map();
+  for (let i = 0; i < neurons.length; i++) {
+    for (let connection of neurons[i].connections) {
+      let toIndex = neurons.indexOf(connection.to);
+      let key = `${i}-${toIndex}`;
+      weightMap.set(key, connection.weight);
+    }
+  }
+  return weightMap;
+}
+
+function updateNeuronConnections(neuron, existingWeights = null) {
+  // Build weight map if not provided
+  let weightMap = existingWeights;
+  if (weightMap === null) {
+    weightMap = buildConnectionWeightMap();
+  }
+  
+  // Get this neuron's index
+  let fromIndex = neurons.indexOf(neuron);
+  
   // Clear existing connections first
   neuron.connections = [];
   
   // Connect to the nearest neighbors based on the global numNeighbors variable
   let nearestNeighbors = findNearestNeighbors(neuron, numNeighbors);
   for (let neighbor of nearestNeighbors) {
-    // 80% chance excitatory (positive), 20% chance inhibitory (negative)
+    // Check if this connection already existed
+    let toIndex = neurons.indexOf(neighbor);
+    let key = `${fromIndex}-${toIndex}`;
     let weight;
-    if (random() < 0.8) {
-      // Excitatory: positive weight between 0 and 1
-      weight = random(0, 1);
+    
+    if (weightMap.has(key)) {
+      // Use existing weight if connection already existed
+      weight = weightMap.get(key);
     } else {
-      // Inhibitory: negative weight between -1 and 0
-      weight = random(-1, 0);
+      // Create new weight for new connections
+      // 80% chance excitatory (positive), 20% chance inhibitory (negative)
+      if (random() < 0.8) {
+        // Excitatory: positive weight between 0 and 1
+        weight = random(0, 1);
+      } else {
+        // Inhibitory: negative weight between -1 and 0
+        weight = random(-1, 0);
+      }
     }
     neuron.connect(neighbor, weight);
   }
@@ -498,8 +533,10 @@ function setup() {
   neighborSlider = createSlider(1, 20, numNeighbors, 1);
   neighborSlider.position(650, 10);
   neighborSlider.changed(() => {
+    // Preserve existing connection weights when changing neighbor count
+    let existingWeights = buildConnectionWeightMap();
     for (let neuron of neurons) {
-        updateNeuronConnections(neuron);
+        updateNeuronConnections(neuron, existingWeights);
       }
     });
   

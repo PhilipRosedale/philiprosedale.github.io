@@ -653,10 +653,8 @@ function fixOffsets() {
 function sleepNetwork() {
   // Clear all charges and chargePositions to put the network to sleep
   for (let neuron of neurons) {
-    // Reset neuron charge to zero if non-zero
-    if (neuron.charge > 0) {
-      neuron.charge = 0;
-    }
+    // Reset neuron charge to zero (clear all active charges)
+    neuron.charge = 0;
     // Also reset recovering state to allow immediate firing if needed
     neuron.recovering = 0;
     

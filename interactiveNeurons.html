@@ -133,10 +133,11 @@ class Neuron {
         // Find all connections that target this neuron (incoming connections)
         for (let neuron of neurons) {
           for (let connection of neuron.connections) {
-            if (connection.to === this && connection.from.lastFired !== null) {
-              let timeDiff = (currentTime - connection.from.lastFired) / 1000.0;  // Convert to seconds
-              // If pre fired before post (positive timeDiff), and within time window
-              // Note: timeDiff includes axon delay, which is correct for STDP
+            if (connection.to === this && connection.lastSpikeArrivalTime !== null) {
+              // Calculate time difference: (when post fired) - (when spike arrived at post)
+              // Positive timeDiff means spike arrived before post fired (LTP condition)
+              let timeDiff = (currentTime - connection.lastSpikeArrivalTime) / 1000.0;  // Convert to seconds
+              // If spike arrived before post fired (positive timeDiff), and within time window
               if (timeDiff > 0 && timeDiff < STDP_TIME_WINDOW) {
                 // Apply LTP (Long Term Potentiation): strengthen connection
                 let oldWeight = connection.weight;

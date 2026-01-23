@@ -60,7 +60,7 @@ let measuredWeakenRate = 0;
 let firingCount = 0; // Counter for neuron firings
 let measuredFiringRate = 0; // Measured firing rate (firings per second)
 
-let outputString = "";
+let outputString = []; // Array of {char, source} objects where source is 'key' or 'spontaneous'
 
 let neighborSlider;
 let neuronSlider;
@@ -82,6 +82,7 @@ class Neuron {
     this.frequency = bluesScale[floor(random(bluesScale.length))];
     this.key = ""; 
     this.lastFired = null;
+    this.outputAddedForKeyPress = false; // Flag to track if output was already added for a key press
   }
     
   connect(neuron, weight) {
@@ -125,7 +126,11 @@ class Neuron {
       let currentTime = new Date();
       this.lastFired = currentTime;
       firingCount++; // Increment firing counter
-      this.addToOutput(this.key); 
+      // Only add output if it wasn't already added for a key press and neuron has a key set
+      if (!this.outputAddedForKeyPress && this.key !== "") {
+        this.addToOutput(this.key, 'spontaneous');
+      }
+      this.outputAddedForKeyPress = false; // Reset flag after firing
       playTone(this.frequency, 0.02);
       
       // STDP: Check all incoming connections for recent pre-synaptic spikes (pre-before-post = LTP)
@@ -165,13 +170,19 @@ class Neuron {
     }
   }
   
-  addToOutput(key) {
-    let MAX_OUTPUT = 50;
-    outputString = outputString + key;
+  addToOutput(key, source = 'spontaneous') {
+    // Don't add empty keys to output
+    if (key === "" || key === null || key === undefined) {
+      return;
+    }
+    let MAX_OUTPUT = 100;
+    outputString.push({char: key, source: source});
       // Truncate to last 50 characters
+      
     if(outputString.length > MAX_OUTPUT) {
-    outputString = outputString.substring(outputString.length - MAX_OUTPUT);
+    outputString = outputString.slice(outputString.length - MAX_OUTPUT);
   }
+    
   }
   
   display() {
@@ -666,7 +677,7 @@ function sleepNetwork() {
     }
   }
   // Clear the output string
-  outputString = "";
+  outputString = [];
 }
 
 function draw() {
@@ -723,11 +734,26 @@ function draw() {
         neuron.display();
       }
     }
-    fill(255);
-    noStroke();
+    // Display output string with color coding: red for key-pressed, white for spontaneous
+    // Display the last 50 characters (or all if less than 50)
     textAlign(LEFT, TOP);
     textSize(20);
-    text(`${outputString}`, 10, 50);
+    noStroke();
+    
+    // Get the last 50 characters to display (most recent)
+    let charsToDisplay = outputString.slice(-50);
+    let xPos = 10;
+    
+    // Display all characters
+    for (let item of charsToDisplay) {
+      if (item.source === 'key') {
+        fill(255, 0, 0); // Red for key-pressed
+      } else {
+        fill(255, 255, 255); // White for spontaneous firing
+      }
+      text(item.char, xPos, 50);
+      xPos += textWidth(item.char);
+    }
   
     
     // Measure learning rate and firing rate once per second
@@ -791,6 +817,9 @@ function keyTyped() {
   //console.log(`key = ${key}`);
   for (let n of neurons) {
     if (n.key == key) {
+      // Add output immediately with 'key' source when key is pressed
+      n.addToOutput(key, 'key');
+      n.outputAddedForKeyPress = true; // Set flag to prevent duplicate output in maybeFire()
       n.fire()
     }
     if (n.clicked) {

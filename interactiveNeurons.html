@@ -540,10 +540,10 @@ function setup() {
   });
   
   neuronSlider = createSlider(2, 300, startingNeurons, 1);
-  neuronSlider.position(500, 10);
+  neuronSlider.position(10, 80);
   
   neighborSlider = createSlider(1, 20, numNeighbors, 1);
-  neighborSlider.position(650, 10);
+  neighborSlider.position(10, 110);
   neighborSlider.changed(() => {
     // Preserve existing connection weights when changing neighbor count
     let existingWeights = buildConnectionWeightMap();
@@ -553,7 +553,7 @@ function setup() {
     });
   
   conductionSpeedSlider = createSlider(50, 500, axonVelocity, 10);
-  conductionSpeedSlider.position(800, 10);
+  conductionSpeedSlider.position(10, 140);
 
   // Initial creation of neurons
   initializeNeurons(neuronSlider.value());
@@ -720,13 +720,10 @@ function draw() {
     textSize(12);
     fill(0, 0, 0);
     noStroke();
-    text(`Neurons: ${neurons.length}`, 530, 40);
     numNeighbors = neighborSlider.value();
-  
-    text(`Speed: ${axonVelocity}`, 830, 40);
-    fill(0, 0, 0);
-    noStroke();
-    text(`Neighbors: ${numNeighbors}`, 680, 40);
+    text(`Neurons: ${neurons.length}`, 20, 85);
+    text(`Neighbors: ${numNeighbors}`, 20, 115);
+    text(`Speed: ${axonVelocity}`, 20, 145);
     if (simulationRunning) {
       // Update and display neurons
       for (let neuron of neurons) {

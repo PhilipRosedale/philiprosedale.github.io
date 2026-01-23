@@ -539,11 +539,13 @@ function setup() {
     learningToggleButton.html(learning ? 'Learning: On' : 'Learning: Off');
   });
   
-  neuronSlider = createSlider(2, 300, startingNeurons, 1);
+  neuronSlider = createSlider(2, 200, startingNeurons, 1);
   neuronSlider.position(10, 80);
+  neuronSlider.style('width', '150px');
   
   neighborSlider = createSlider(1, 20, numNeighbors, 1);
   neighborSlider.position(10, 110);
+  neighborSlider.style('width', '150px');
   neighborSlider.changed(() => {
     // Preserve existing connection weights when changing neighbor count
     let existingWeights = buildConnectionWeightMap();
@@ -554,6 +556,7 @@ function setup() {
   
   conductionSpeedSlider = createSlider(50, 500, axonVelocity, 10);
   conductionSpeedSlider.position(10, 140);
+  conductionSpeedSlider.style('width', '150px');
 
   // Initial creation of neurons
   initializeNeurons(neuronSlider.value());

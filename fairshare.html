@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FairShare - Group Currency</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #3a7ca5;
+            --secondary-color: #2f6690;
+            --accent-color: #16425b;
+            --text-color: #333;
+            --light-gray: #f5f5f5;
+            --medium-gray: #e0e0e0;
+            --dark-gray: #666;
+            --white: #fff;
+            --green: #28a745;
+            --red: #dc3545;
+            --yellow: #ffc107;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --transition: all 0.3s ease;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--light-gray);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background-color: var(--primary-color);
+            color: var(--white);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: var(--shadow);
+        }
+        .header h1 { font-size: 1.5rem; font-weight: 700; }
+        .header h1 a { color: var(--white); text-decoration: none; }
+        .header-right { display: flex; align-items: center; gap: 1rem; }
+        .header .user-name { font-size: 0.9rem; opacity: 0.9; }
+
+        /* Buttons */
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .btn:hover { transform: translateY(-1px); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-primary { background: var(--primary-color); color: var(--white); }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-color); }
+        .btn-secondary { background: var(--medium-gray); color: var(--text-color); }
+        .btn-secondary:hover:not(:disabled) { background: #ccc; }
+        .btn-success { background: var(--green); color: var(--white); }
+        .btn-success:hover:not(:disabled) { background: #218838; }
+        .btn-danger { background: var(--red); color: var(--white); }
+        .btn-danger:hover:not(:disabled) { background: #c82333; }
+        .btn-small { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--primary-color);
+            color: var(--primary-color);
+        }
+        .btn-outline:hover:not(:disabled) {
+            background: var(--primary-color);
+            color: var(--white);
+        }
+
+        /* Layout */
+        .app-layout {
+            display: flex;
+            min-height: calc(100vh - 60px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--white);
+            border-right: 1px solid var(--medium-gray);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--medium-gray);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .sidebar-header h3 { font-size: 0.9rem; color: var(--dark-gray); text-transform: uppercase; letter-spacing: 0.05em; }
+        .sidebar-actions { display: flex; gap: 0.5rem; }
+        .group-list { flex: 1; overflow-y: auto; }
+        .group-item {
+            padding: 0.8rem 1rem;
+            cursor: pointer;
+            border-bottom: 1px solid var(--light-gray);
+            transition: var(--transition);
+        }
+        .group-item:hover { background: var(--light-gray); }
+        .group-item.active { background: #e3f0f8; border-left: 3px solid var(--primary-color); }
+        .group-item .group-name { font-weight: 600; font-size: 0.95rem; }
+        .group-item .group-currency { font-size: 0.8rem; color: var(--dark-gray); }
+        .group-item .group-status {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 10px;
+            margin-left: 0.3rem;
+        }
+        .group-item .group-status.pending { background: var(--yellow); color: #333; }
+
+        /* Main content */
+        .main-content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        /* Auth screen */
+        .auth-container {
+            max-width: 400px;
+            margin: 3rem auto;
+            background: var(--white);
+            padding: 2.5rem;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+        }
+        .auth-container h2 {
+            text-align: center;
+            margin-bottom: 0.5rem;
+            color: var(--accent-color);
+        }
+        .auth-container .subtitle {
+            text-align: center;
+            color: var(--dark-gray);
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid var(--medium-gray);
+        }
+        .auth-tab {
+            flex: 1;
+            padding: 0.7rem;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--dark-gray);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: var(--transition);
+        }
+        .auth-tab.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 0.3rem;
+            color: var(--accent-color);
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 0.6rem 0.8rem;
+            border: 1px solid var(--medium-gray);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            transition: var(--transition);
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(58, 124, 165, 0.15);
+        }
+        .form-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }
+        .form-actions .btn { flex: 1; }
+
+        /* Cards */
+        .card {
+            background: var(--white);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h3 {
+            font-size: 1.1rem;
+            color: var(--accent-color);
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--light-gray);
+        }
+
+        /* Balance display */
+        .balance-card {
+            text-align: center;
+            background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+            color: var(--white);
+        }
+        .balance-card h3 { color: rgba(255,255,255,0.8); border-bottom-color: rgba(255,255,255,0.2); }
+        .balance-amount {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin: 0.5rem 0;
+        }
+        .balance-currency { font-size: 0.9rem; opacity: 0.8; }
+
+        /* Group info bar */
+        .group-info-bar {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
+        }
+        .info-item {
+            background: var(--white);
+            padding: 0.8rem 1.2rem;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            text-align: center;
+            min-width: 120px;
+        }
+        .info-item .info-label { font-size: 0.75rem; color: var(--dark-gray); text-transform: uppercase; letter-spacing: 0.05em; }
+        .info-item .info-value { font-size: 1.2rem; font-weight: 700; color: var(--accent-color); }
+
+        /* Action grid */
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 0.8rem;
+            margin-bottom: 1.5rem;
+        }
+        .action-btn {
+            padding: 1rem;
+            background: var(--white);
+            border: 2px solid var(--medium-gray);
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: var(--transition);
+            font-family: inherit;
+        }
+        .action-btn:hover {
+            border-color: var(--primary-color);
+            background: #f0f7fb;
+            transform: translateY(-2px);
+        }
+        .action-btn .action-icon { font-size: 1.5rem; margin-bottom: 0.3rem; }
+        .action-btn .action-label { font-size: 0.8rem; font-weight: 600; color: var(--accent-color); }
+
+        /* Transaction list */
+        .tx-list { list-style: none; }
+        .tx-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.7rem 0;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        .tx-item:last-child { border-bottom: none; }
+        .tx-info .tx-parties { font-weight: 500; font-size: 0.9rem; }
+        .tx-info .tx-memo { font-size: 0.8rem; color: var(--dark-gray); }
+        .tx-info .tx-date { font-size: 0.75rem; color: var(--dark-gray); }
+        .tx-amount { font-weight: 700; font-size: 0.95rem; }
+        .tx-amount.sent { color: var(--red); }
+        .tx-amount.received { color: var(--green); }
+
+        /* Members list */
+        .member-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid var(--light-gray);
+        }
+        .member-item:last-child { border-bottom: none; }
+        .member-name { font-weight: 500; }
+        .member-status {
+            font-size: 0.75rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 10px;
+        }
+        .member-status.active { background: #d4edda; color: #155724; }
+        .member-status.pending { background: #fff3cd; color: #856404; }
+
+        /* Modal overlay */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .modal {
+            background: var(--white);
+            border-radius: 8px;
+            padding: 2rem;
+            width: 90%;
+            max-width: 450px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal h3 {
+            color: var(--accent-color);
+            margin-bottom: 1.5rem;
+        }
+
+        /* Welcome / empty state */
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--dark-gray);
+        }
+        .empty-state .empty-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .empty-state h3 { color: var(--accent-color); margin-bottom: 0.5rem; }
+        .empty-state p { margin-bottom: 1.5rem; }
+
+        /* Command reference */
+        .command-ref {
+            max-width: 700px;
+            margin: 3rem auto 0;
+        }
+        .command-ref h3 {
+            text-align: center;
+            color: var(--accent-color);
+            margin-bottom: 1rem;
+        }
+        .command-ref table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .command-ref th, .command-ref td {
+            padding: 0.6rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--medium-gray);
+        }
+        .command-ref th {
+            background: var(--accent-color);
+            color: var(--white);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .command-ref td:first-child { font-weight: 600; color: var(--primary-color); }
+        .command-ref td { font-size: 0.9rem; }
+
+        /* Notification toast */
+        .toast {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            padding: 0.8rem 1.2rem;
+            border-radius: 6px;
+            color: var(--white);
+            font-weight: 500;
+            font-size: 0.9rem;
+            z-index: 2000;
+            animation: slideIn 0.3s ease-out;
+            max-width: 350px;
+        }
+        .toast.success { background: var(--green); }
+        .toast.error { background: var(--red); }
+        .toast.info { background: var(--primary-color); }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--medium-gray); }
+            .app-layout { flex-direction: column; }
+            .main-content { padding: 1rem; }
+            .balance-amount { font-size: 2rem; }
+            .action-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<div class="header">
+    <h1><a href="index.html">FairShare</a></h1>
+    <div class="header-right">
+        <span class="user-name" id="userDisplay"></span>
+        <button class="btn btn-outline" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
+    </div>
+</div>
+
+<!-- ===== AUTH SCREEN ===== -->
+<div id="authScreen" class="auth-container">
+    <h2>FairShare</h2>
+    <p class="subtitle">Group currency for everyone</p>
+
+    <div class="auth-tabs">
+        <div class="auth-tab active" data-tab="login" onclick="switchAuthTab('login')">Log In</div>
+        <div class="auth-tab" data-tab="signup" onclick="switchAuthTab('signup')">Sign Up</div>
+    </div>
+
+    <form id="loginForm" onsubmit="handleLogin(event)">
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="loginEmail" required placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="loginPassword" required placeholder="Your password" minlength="6">
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Log In</button>
+        </div>
+    </form>
+
+    <form id="signupForm" class="hidden" onsubmit="handleSignup(event)">
+        <div class="form-group">
+            <label>Display Name</label>
+            <input type="text" id="signupName" required placeholder="How others will see you" minlength="2">
+        </div>
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="signupEmail" required placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="signupPassword" required placeholder="At least 6 characters" minlength="6">
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-success">Create Account</button>
+        </div>
+    </form>
+</div>
+
+<!-- ===== APP (hidden until logged in) ===== -->
+<div id="appScreen" class="hidden">
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>My Groups</h3>
+                <div class="sidebar-actions">
+                    <button class="btn btn-primary btn-small" onclick="showModal('createGroup')">+ New</button>
+                    <button class="btn btn-secondary btn-small" onclick="showModal('joinGroup')">Join</button>
+                </div>
+            </div>
+            <div class="group-list" id="groupList">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <!-- Main -->
+        <div class="main-content" id="mainContent">
+            <!-- Empty state shown when no group selected -->
+            <div id="emptyState" class="empty-state">
+                <div class="empty-icon">&#9878;</div>
+                <h3>Welcome to FairShare</h3>
+                <p>Create a new group or join an existing one to get started.</p>
+                <button class="btn btn-primary" onclick="showModal('createGroup')">Create a Group</button>
+                <button class="btn btn-secondary" style="margin-left: 0.5rem;" onclick="showModal('joinGroup')">Join a Group</button>
+            </div>
+
+            <!-- Group view (hidden until group selected) -->
+            <div id="groupView" class="hidden">
+                <!-- Balance -->
+                <div class="card balance-card">
+                    <h3>Your Balance</h3>
+                    <div class="balance-amount" id="balanceAmount">0</div>
+                    <div class="balance-currency" id="balanceCurrency"></div>
+                </div>
+
+                <!-- Info bar -->
+                <div class="group-info-bar" id="groupInfoBar">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- Actions -->
+                <div class="action-grid">
+                    <button class="action-btn" onclick="showModal('send')">
+                        <div class="action-icon">&#10132;</div>
+                        <div class="action-label">Send</div>
+                    </button>
+                    <button class="action-btn" onclick="showModal('vote')">
+                        <div class="action-icon">&#9745;</div>
+                        <div class="action-label">Vote</div>
+                    </button>
+                    <button class="action-btn" onclick="loadCandidates()">
+                        <div class="action-icon">&#128101;</div>
+                        <div class="action-label">Candidates</div>
+                    </button>
+                    <button class="action-btn" onclick="loadMembers()">
+                        <div class="action-icon">&#128100;</div>
+                        <div class="action-label">Members</div>
+                    </button>
+                    <button class="action-btn" onclick="loadStats()">
+                        <div class="action-icon">&#128202;</div>
+                        <div class="action-label">Stats</div>
+                    </button>
+                    <button class="action-btn" onclick="runTally()">
+                        <div class="action-icon">&#127922;</div>
+                        <div class="action-label">Tally</div>
+                    </button>
+                </div>
+
+                <!-- Detail panel (transactions, members, candidates, stats) -->
+                <div class="card" id="detailPanel">
+                    <h3 id="detailTitle">Recent Transactions</h3>
+                    <div id="detailContent">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Command Reference -->
+    <div class="command-ref">
+        <h3>Command Reference</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td>Create Group</td><td>Create a new group with its own currency name and symbol</td></tr>
+            <tr><td>Join</td><td>Request to join an existing group (requires endorsement by members)</td></tr>
+            <tr><td>Candidates</td><td>View pending join requests for your group</td></tr>
+            <tr><td>Endorse</td><td>Vote to accept a candidate (>50% of members needed)</td></tr>
+            <tr><td>Send</td><td>Transfer currency to another member (transaction fee applies)</td></tr>
+            <tr><td>Balance</td><td>View your balance in the group's currency</td></tr>
+            <tr><td>Vote</td><td>Vote on the transaction fee rate or daily income amount</td></tr>
+            <tr><td>Tally</td><td>Compute the median of votes and update group settings</td></tr>
+            <tr><td>Rates</td><td>View current fee rate and daily income</td></tr>
+            <tr><td>Stats</td><td>View group statistics (member count, total supply, etc.)</td></tr>
+        </table>
+    </div>
+</div>
+
+<!-- ===== MODAL CONTAINER ===== -->
+<div id="modalOverlay" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+    <div class="modal" id="modalBody">
+        <!-- Populated dynamically per modal type -->
+    </div>
+</div>
+
+<!-- ===== SUPABASE SDK ===== -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+<script>
+// ============================================================
+// CONFIG - Replace these with your Supabase project values
+// ============================================================
+const SUPABASE_URL = 'https://vdpqgmrfvlaieqpvpdcr.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_gLucmVnkADrj4korgexZjA_PkGE4KhY';
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// STATE
+// ============================================================
+let currentUser = null;
+let currentProfile = null;
+let selectedGroup = null;
+let myGroups = [];
+
+// ============================================================
+// INIT
+// ============================================================
+async function init() {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+        currentUser = session.user;
+        await loadProfile();
+        showApp();
+    } else {
+        showAuth();
+    }
+
+    // Listen for auth changes
+    supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+            currentUser = session.user;
+            await loadProfile();
+            showApp();
+        } else if (event === 'SIGNED_OUT') {
+            currentUser = null;
+            currentProfile = null;
+            showAuth();
+        }
+    });
+}
+
+// ============================================================
+// AUTH
+// ============================================================
+function switchAuthTab(tab) {
+    document.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.getElementById('loginForm').classList.toggle('hidden', tab !== 'login');
+    document.getElementById('signupForm').classList.toggle('hidden', tab !== 'signup');
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function handleSignup(e) {
+    e.preventDefault();
+    const name = document.getElementById('signupName').value;
+    const email = document.getElementById('signupEmail').value;
+    const password = document.getElementById('signupPassword').value;
+
+    const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { display_name: name } }
+    });
+    if (error) {
+        showToast(error.message, 'error');
+    } else {
+        showToast('Account created! Check your email to confirm, then log in.', 'success');
+        switchAuthTab('login');
+    }
+}
+
+async function logout() {
+    await supabase.auth.signOut();
+}
+
+function showAuth() {
+    document.getElementById('authScreen').classList.remove('hidden');
+    document.getElementById('appScreen').classList.add('hidden');
+    document.getElementById('logoutBtn').classList.add('hidden');
+    document.getElementById('userDisplay').textContent = '';
+}
+
+async function showApp() {
+    document.getElementById('authScreen').classList.add('hidden');
+    document.getElementById('appScreen').classList.remove('hidden');
+    document.getElementById('logoutBtn').classList.remove('hidden');
+    document.getElementById('userDisplay').textContent = currentProfile?.display_name || currentUser.email;
+    await loadMyGroups();
+}
+
+// ============================================================
+// PROFILE
+// ============================================================
+async function loadProfile() {
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', currentUser.id)
+        .single();
+    if (data) currentProfile = data;
+}
+
+// ============================================================
+// GROUPS
+// ============================================================
+async function loadMyGroups() {
+    const { data, error } = await supabase
+        .from('members')
+        .select('*, groups(*)')
+        .eq('user_id', currentUser.id)
+        .in('status', ['active', 'pending']);
+
+    if (error) { showToast('Failed to load groups', 'error'); return; }
+    myGroups = data || [];
+    renderGroupList();
+
+    // Re-select current group if still valid
+    if (selectedGroup) {
+        const still = myGroups.find(m => m.group_id === selectedGroup.id && m.status === 'active');
+        if (still) {
+            selectGroup(still.groups, still);
+        } else {
+            selectedGroup = null;
+            showEmptyState();
+        }
+    } else {
+        showEmptyState();
+    }
+}
+
+function renderGroupList() {
+    const el = document.getElementById('groupList');
+    if (myGroups.length === 0) {
+        el.innerHTML = '<div style="padding:1rem;color:var(--dark-gray);font-size:0.85rem;">No groups yet. Create or join one!</div>';
+        return;
+    }
+    el.innerHTML = myGroups.map(m => `
+        <div class="group-item ${selectedGroup && selectedGroup.id === m.group_id ? 'active' : ''}"
+             onclick="selectGroupById('${m.group_id}')">
+            <div class="group-name">
+                ${esc(m.groups.name)}
+                ${m.status === 'pending' ? '<span class="group-status pending">pending</span>' : ''}
+            </div>
+            <div class="group-currency">${esc(m.groups.currency_name)} (${esc(m.groups.currency_symbol)})</div>
+        </div>
+    `).join('');
+}
+
+function selectGroupById(groupId) {
+    const membership = myGroups.find(m => m.group_id === groupId);
+    if (membership) selectGroup(membership.groups, membership);
+}
+
+async function selectGroup(group, membership) {
+    selectedGroup = group;
+    document.getElementById('emptyState').classList.add('hidden');
+    document.getElementById('groupView').classList.remove('hidden');
+    renderGroupList();
+
+    if (membership.status === 'pending') {
+        document.getElementById('balanceAmount').textContent = '--';
+        document.getElementById('balanceCurrency').textContent = 'Awaiting endorsement';
+        document.getElementById('groupInfoBar').innerHTML = '';
+        document.getElementById('detailPanel').classList.add('hidden');
+        return;
+    }
+
+    // Show balance
+    document.getElementById('balanceAmount').textContent =
+        group.currency_symbol + ' ' + Number(membership.balance).toFixed(2);
+    document.getElementById('balanceCurrency').textContent = group.currency_name;
+
+    // Info bar
+    const { count: memberCount } = await supabase
+        .from('members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', group.id)
+        .eq('status', 'active');
+
+    document.getElementById('groupInfoBar').innerHTML = `
+        <div class="info-item">
+            <div class="info-label">Members</div>
+            <div class="info-value">${memberCount || 0}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Fee Rate</div>
+            <div class="info-value">${(Number(group.fee_rate) * 100).toFixed(1)}%</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Daily Income</div>
+            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)}</div>
+        </div>
+    `;
+
+    document.getElementById('detailPanel').classList.remove('hidden');
+    await loadTransactions();
+}
+
+function showEmptyState() {
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('groupView').classList.add('hidden');
+}
+
+// ============================================================
+// TRANSACTIONS
+// ============================================================
+async function loadTransactions() {
+    if (!selectedGroup) return;
+    document.getElementById('detailTitle').textContent = 'Recent Transactions';
+
+    const { data, error } = await supabase
+        .from('transactions')
+        .select('*, sender:profiles!transactions_from_user_fkey(display_name), receiver:profiles!transactions_to_user_fkey(display_name)')
+        .eq('group_id', selectedGroup.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+    if (error || !data || data.length === 0) {
+        document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">No transactions yet.</p>';
+        return;
+    }
+
+    document.getElementById('detailContent').innerHTML = `<ul class="tx-list">
+        ${data.map(tx => {
+            const isSender = tx.from_user === currentUser.id;
+            return `<li class="tx-item">
+                <div class="tx-info">
+                    <div class="tx-parties">${esc(tx.sender?.display_name || '?')} &rarr; ${esc(tx.receiver?.display_name || '?')}</div>
+                    ${tx.memo ? `<div class="tx-memo">${esc(tx.memo)}</div>` : ''}
+                    <div class="tx-date">${new Date(tx.created_at).toLocaleString()}</div>
+                </div>
+                <div class="tx-amount ${isSender ? 'sent' : 'received'}">
+                    ${isSender ? '-' : '+'}${selectedGroup.currency_symbol} ${Number(tx.amount).toFixed(2)}
+                    ${tx.fee > 0 ? `<div style="font-size:0.7rem;color:var(--dark-gray);">fee: ${Number(tx.fee).toFixed(2)}</div>` : ''}
+                </div>
+            </li>`;
+        }).join('')}
+    </ul>`;
+}
+
+// ============================================================
+// MEMBERS
+// ============================================================
+async function loadMembers() {
+    if (!selectedGroup) return;
+    document.getElementById('detailTitle').textContent = 'Members';
+
+    const { data, error } = await supabase
+        .from('members')
+        .select('*, profiles(display_name)')
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'active')
+        .order('joined_at', { ascending: true });
+
+    if (error || !data) {
+        document.getElementById('detailContent').innerHTML = '<p>Failed to load members.</p>';
+        return;
+    }
+
+    document.getElementById('detailContent').innerHTML = data.map(m => `
+        <div class="member-item">
+            <span class="member-name">${esc(m.profiles?.display_name || 'Unknown')}</span>
+            <span class="member-status active">active</span>
+        </div>
+    `).join('');
+}
+
+// ============================================================
+// CANDIDATES (Endorsement)
+// ============================================================
+async function loadCandidates() {
+    if (!selectedGroup) return;
+    document.getElementById('detailTitle').textContent = 'Candidates Awaiting Endorsement';
+
+    const { data: candidates, error } = await supabase
+        .from('members')
+        .select('*, profiles(display_name)')
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'pending');
+
+    if (error || !candidates || candidates.length === 0) {
+        document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">No pending candidates.</p>';
+        return;
+    }
+
+    // Get endorsement counts
+    const { data: endorsements } = await supabase
+        .from('endorsements')
+        .select('candidate_id, endorser_id')
+        .eq('group_id', selectedGroup.id);
+
+    const endorseMap = {};
+    const myEndorsements = new Set();
+    (endorsements || []).forEach(e => {
+        endorseMap[e.candidate_id] = (endorseMap[e.candidate_id] || 0) + 1;
+        if (e.endorser_id === currentUser.id) myEndorsements.add(e.candidate_id);
+    });
+
+    const { count: activeCount } = await supabase
+        .from('members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'active');
+
+    const threshold = Math.floor((activeCount || 0) / 2) + 1;
+
+    document.getElementById('detailContent').innerHTML = candidates.map(c => {
+        const endorsed = myEndorsements.has(c.user_id);
+        const count = endorseMap[c.user_id] || 0;
+        return `<div class="member-item">
+            <div>
+                <span class="member-name">${esc(c.profiles?.display_name || 'Unknown')}</span>
+                <span style="font-size:0.8rem;color:var(--dark-gray);margin-left:0.5rem;">${count}/${threshold} endorsements</span>
+            </div>
+            <div>
+                ${endorsed
+                    ? `<button class="btn btn-danger btn-small" onclick="unendorse('${c.user_id}')">Unendorse</button>`
+                    : `<button class="btn btn-success btn-small" onclick="endorse('${c.user_id}')">Endorse</button>`
+                }
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function endorse(candidateId) {
+    const { error } = await supabase.from('endorsements').insert({
+        group_id: selectedGroup.id,
+        candidate_id: candidateId,
+        endorser_id: currentUser.id
+    });
+    if (error) { showToast(error.message, 'error'); return; }
+
+    // Check if threshold met
+    const { data } = await supabase.rpc('check_endorsements', {
+        p_group_id: selectedGroup.id,
+        p_candidate_id: candidateId
+    });
+    if (data?.admitted) {
+        showToast('Candidate admitted to the group!', 'success');
+        await loadMyGroups();
+    } else {
+        showToast('Endorsement recorded', 'info');
+    }
+    await loadCandidates();
+}
+
+async function unendorse(candidateId) {
+    const { error } = await supabase.from('endorsements')
+        .delete()
+        .eq('group_id', selectedGroup.id)
+        .eq('candidate_id', candidateId)
+        .eq('endorser_id', currentUser.id);
+    if (error) { showToast(error.message, 'error'); return; }
+    showToast('Endorsement removed', 'info');
+    await loadCandidates();
+}
+
+// ============================================================
+// STATS
+// ============================================================
+async function loadStats() {
+    if (!selectedGroup) return;
+    document.getElementById('detailTitle').textContent = 'Group Statistics';
+
+    const { count: memberCount } = await supabase
+        .from('members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'active');
+
+    const { data: members } = await supabase
+        .from('members')
+        .select('balance')
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'active');
+
+    const totalSupply = (members || []).reduce((sum, m) => sum + Number(m.balance), 0);
+
+    const { count: txCount } = await supabase
+        .from('transactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', selectedGroup.id);
+
+    const { count: pendingCount } = await supabase
+        .from('members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'pending');
+
+    document.getElementById('detailContent').innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+            <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
+            <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
+            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${selectedGroup.currency_symbol} ${totalSupply.toFixed(2)}</div></div>
+            <div class="info-item"><div class="info-label">Total Transactions</div><div class="info-value">${txCount || 0}</div></div>
+            <div class="info-item"><div class="info-label">Fee Rate</div><div class="info-value">${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%</div></div>
+            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)}</div></div>
+        </div>
+    `;
+}
+
+// ============================================================
+// TALLY
+// ============================================================
+async function runTally() {
+    if (!selectedGroup) return;
+
+    const { data: feeResult } = await supabase.rpc('compute_tally', {
+        p_group_id: selectedGroup.id,
+        p_vote_type: 'fee_rate'
+    });
+    const { data: incomeResult } = await supabase.rpc('compute_tally', {
+        p_group_id: selectedGroup.id,
+        p_vote_type: 'daily_income'
+    });
+
+    // Refresh group data
+    const { data: updatedGroup } = await supabase
+        .from('groups')
+        .select('*')
+        .eq('id', selectedGroup.id)
+        .single();
+
+    if (updatedGroup) {
+        selectedGroup = updatedGroup;
+        const membership = myGroups.find(m => m.group_id === selectedGroup.id);
+        if (membership) {
+            membership.groups = updatedGroup;
+            selectGroup(updatedGroup, membership);
+        }
+    }
+
+    showToast(
+        `Tally complete! Fee: ${(feeResult?.median * 100 || 0).toFixed(1)}% (${feeResult?.vote_count || 0} votes), ` +
+        `Income: ${incomeResult?.median?.toFixed(2) || 0} (${incomeResult?.vote_count || 0} votes)`,
+        'success'
+    );
+}
+
+// ============================================================
+// MODALS
+// ============================================================
+function showModal(type) {
+    const overlay = document.getElementById('modalOverlay');
+    const body = document.getElementById('modalBody');
+    overlay.classList.remove('hidden');
+
+    switch (type) {
+        case 'createGroup':
+            body.innerHTML = `
+                <h3>Create a Group</h3>
+                <form onsubmit="createGroup(event)">
+                    <div class="form-group">
+                        <label>Group Name</label>
+                        <input type="text" id="newGroupName" required placeholder="e.g. My Community">
+                    </div>
+                    <div class="form-group">
+                        <label>Currency Name</label>
+                        <input type="text" id="newCurrencyName" required placeholder="e.g. FairCoins">
+                    </div>
+                    <div class="form-group">
+                        <label>Currency Symbol</label>
+                        <input type="text" id="newCurrencySymbol" required placeholder="e.g. FC" maxlength="5" value="$">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create</button>
+                    </div>
+                </form>
+            `;
+            break;
+
+        case 'joinGroup':
+            body.innerHTML = `
+                <h3>Join a Group</h3>
+                <div class="form-group">
+                    <label>Search by name</label>
+                    <input type="text" id="joinSearch" placeholder="Type a group name..." oninput="searchGroups(this.value)">
+                </div>
+                <div id="joinResults" style="max-height:250px;overflow-y:auto;"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `;
+            searchGroups('');
+            break;
+
+        case 'send':
+            loadSendModal();
+            break;
+
+        case 'vote':
+            body.innerHTML = `
+                <h3>Vote on Group Settings</h3>
+                <form onsubmit="castVote(event)">
+                    <div class="form-group">
+                        <label>What to vote on</label>
+                        <select id="voteType">
+                            <option value="fee_rate">Transaction Fee Rate (%)</option>
+                            <option value="daily_income">Daily Income Amount</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Your vote value</label>
+                        <input type="number" id="voteValue" required min="0" step="any" placeholder="e.g. 5 for 5% fee, or 10 for daily income">
+                    </div>
+                    <p style="font-size:0.8rem;color:var(--dark-gray);margin-top:0.5rem;">
+                        The group setting will be the median of all members' votes.
+                        For fee rate, enter a percentage (e.g. 5 for 5%).
+                    </p>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Submit Vote</button>
+                    </div>
+                </form>
+            `;
+            break;
+    }
+}
+
+function closeModal() {
+    document.getElementById('modalOverlay').classList.add('hidden');
+}
+
+// ============================================================
+// CREATE GROUP
+// ============================================================
+async function createGroup(e) {
+    e.preventDefault();
+    const name = document.getElementById('newGroupName').value.trim();
+    const currencyName = document.getElementById('newCurrencyName').value.trim();
+    const currencySymbol = document.getElementById('newCurrencySymbol').value.trim();
+
+    // Create the group
+    const { data: group, error: groupError } = await supabase
+        .from('groups')
+        .insert({
+            name,
+            currency_name: currencyName,
+            currency_symbol: currencySymbol,
+            created_by: currentUser.id
+        })
+        .select()
+        .single();
+
+    if (groupError) { showToast(groupError.message, 'error'); return; }
+
+    // Add creator as active member
+    const { error: memberError } = await supabase
+        .from('members')
+        .insert({
+            group_id: group.id,
+            user_id: currentUser.id,
+            status: 'active',
+            balance: 0
+        });
+
+    if (memberError) { showToast(memberError.message, 'error'); return; }
+
+    showToast(`Group "${name}" created!`, 'success');
+    closeModal();
+    await loadMyGroups();
+    selectGroupById(group.id);
+}
+
+// ============================================================
+// JOIN GROUP
+// ============================================================
+async function searchGroups(query) {
+    let q = supabase.from('groups').select('*').order('name');
+    if (query.trim()) {
+        q = q.ilike('name', `%${query.trim()}%`);
+    }
+    const { data, error } = await q.limit(20);
+
+    const resultsEl = document.getElementById('joinResults');
+    if (error || !data || data.length === 0) {
+        resultsEl.innerHTML = '<p style="color:var(--dark-gray);padding:0.5rem;">No groups found.</p>';
+        return;
+    }
+
+    // Filter out groups user is already in
+    const myGroupIds = new Set(myGroups.map(m => m.group_id));
+
+    resultsEl.innerHTML = data.map(g => {
+        const alreadyIn = myGroupIds.has(g.id);
+        return `<div class="member-item" style="padding:0.8rem 0;">
+            <div>
+                <span class="member-name">${esc(g.name)}</span>
+                <div style="font-size:0.8rem;color:var(--dark-gray);">${esc(g.currency_name)} (${esc(g.currency_symbol)})</div>
+            </div>
+            ${alreadyIn
+                ? '<span style="font-size:0.8rem;color:var(--dark-gray);">Already joined</span>'
+                : `<button class="btn btn-primary btn-small" onclick="requestJoin('${g.id}', '${esc(g.name)}')">Request to Join</button>`
+            }
+        </div>`;
+    }).join('');
+}
+
+async function requestJoin(groupId, groupName) {
+    const { error } = await supabase.from('members').insert({
+        group_id: groupId,
+        user_id: currentUser.id,
+        status: 'pending',
+        balance: 0
+    });
+
+    if (error) { showToast(error.message, 'error'); return; }
+    showToast(`Join request sent to "${groupName}"`, 'success');
+    closeModal();
+    await loadMyGroups();
+}
+
+// ============================================================
+// SEND CURRENCY
+// ============================================================
+async function loadSendModal() {
+    const body = document.getElementById('modalBody');
+
+    // Load active members (excluding self)
+    const { data: members } = await supabase
+        .from('members')
+        .select('user_id, profiles(display_name)')
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'active')
+        .neq('user_id', currentUser.id);
+
+    const options = (members || []).map(m =>
+        `<option value="${m.user_id}">${esc(m.profiles?.display_name || 'Unknown')}</option>`
+    ).join('');
+
+    body.innerHTML = `
+        <h3>Send ${esc(selectedGroup.currency_name)}</h3>
+        <form onsubmit="sendCurrency(event)">
+            <div class="form-group">
+                <label>To</label>
+                <select id="sendTo" required>${options || '<option disabled>No other members</option>'}</select>
+            </div>
+            <div class="form-group">
+                <label>Amount</label>
+                <input type="number" id="sendAmount" required min="0.01" step="any" placeholder="0.00">
+            </div>
+            <div class="form-group">
+                <label>Memo (optional)</label>
+                <input type="text" id="sendMemo" placeholder="What's this for?">
+            </div>
+            <p style="font-size:0.8rem;color:var(--dark-gray);">
+                Fee rate: ${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%
+            </p>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" ${!options ? 'disabled' : ''}>Send</button>
+            </div>
+        </form>
+    `;
+}
+
+async function sendCurrency(e) {
+    e.preventDefault();
+    const toUser = document.getElementById('sendTo').value;
+    const amount = parseFloat(document.getElementById('sendAmount').value);
+    const memo = document.getElementById('sendMemo').value.trim() || null;
+
+    const { data, error } = await supabase.rpc('send_currency', {
+        p_group_id: selectedGroup.id,
+        p_to_user: toUser,
+        p_amount: amount,
+        p_memo: memo
+    });
+
+    if (error) { showToast(error.message, 'error'); return; }
+
+    showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
+    closeModal();
+    await loadMyGroups(); // Refresh balances
+}
+
+// ============================================================
+// VOTE
+// ============================================================
+async function castVote(e) {
+    e.preventDefault();
+    const voteType = document.getElementById('voteType').value;
+    let value = parseFloat(document.getElementById('voteValue').value);
+
+    // For fee_rate, user enters percentage, store as decimal
+    if (voteType === 'fee_rate') {
+        value = value / 100;
+    }
+
+    // Upsert vote (unique constraint on group_id, user_id, vote_type)
+    const { error } = await supabase.from('votes').upsert({
+        group_id: selectedGroup.id,
+        user_id: currentUser.id,
+        vote_type: voteType,
+        value: value
+    }, { onConflict: 'group_id,user_id,vote_type' });
+
+    if (error) { showToast(error.message, 'error'); return; }
+
+    showToast('Vote recorded! Use Tally to update group settings.', 'success');
+    closeModal();
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
+
+// ============================================================
+// BOOT
+// ============================================================
+init();
+</script>
+</body>
+</html>

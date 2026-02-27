@@ -416,7 +416,7 @@
     <h1><a href="index.html">FairShare</a></h1>
     <div class="header-right">
         <span class="user-name" id="userDisplay"></span>
-        <button class="btn btn-outline" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
+        <button class="btn btn-outline hidden" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
     </div>
 </div>
 
@@ -578,9 +578,14 @@
 // CONFIG - Replace these with your Supabase project values
 // ============================================================
 const SUPABASE_URL = 'https://vdpqgmrfvlaieqpvpdcr.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_gLucmVnkADrj4korgexZjA_PkGE4KhY';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkcHFnbXJmdmxhaWVxcHZwZGNyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2MjUzNjcsImV4cCI6MjA4NzIwMTM2N30.ORvkYqcrDjnhdpCvXaIBzjRLyzi3WSIqMmIxWecpgl8';
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let supabase;
+try {
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} catch (e) {
+    console.error('Failed to initialize Supabase client:', e);
+}
 
 // ============================================================
 // STATE
@@ -594,27 +599,38 @@ let myGroups = [];
 // INIT
 // ============================================================
 async function init() {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-        currentUser = session.user;
-        await loadProfile();
-        showApp();
-    } else {
+    if (!supabase) {
+        showToast('Could not connect to database. Check Supabase config.', 'error');
         showAuth();
+        return;
     }
-
-    // Listen for auth changes
-    supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' && session) {
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
             currentUser = session.user;
             await loadProfile();
             showApp();
-        } else if (event === 'SIGNED_OUT') {
-            currentUser = null;
-            currentProfile = null;
+        } else {
             showAuth();
         }
-    });
+
+        // Listen for auth changes
+        supabase.auth.onAuthStateChange(async (event, session) => {
+            if (event === 'SIGNED_IN' && session) {
+                currentUser = session.user;
+                await loadProfile();
+                showApp();
+            } else if (event === 'SIGNED_OUT') {
+                currentUser = null;
+                currentProfile = null;
+                showAuth();
+            }
+        });
+    } catch (e) {
+        console.error('Init error:', e);
+        showToast('Connection error: ' + e.message, 'error');
+        showAuth();
+    }
 }
 
 // ============================================================

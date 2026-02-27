@@ -580,9 +580,9 @@
 const SUPABASE_URL = 'https://vdpqgmrfvlaieqpvpdcr.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkcHFnbXJmdmxhaWVxcHZwZGNyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2MjUzNjcsImV4cCI6MjA4NzIwMTM2N30.ORvkYqcrDjnhdpCvXaIBzjRLyzi3WSIqMmIxWecpgl8';
 
-let supabase;
+let db;
 try {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 } catch (e) {
     console.error('Failed to initialize Supabase client:', e);
 }
@@ -599,13 +599,13 @@ let myGroups = [];
 // INIT
 // ============================================================
 async function init() {
-    if (!supabase) {
+    if (!db) {
         showToast('Could not connect to database. Check Supabase config.', 'error');
         showAuth();
         return;
     }
     try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await db.auth.getSession();
         if (session) {
             currentUser = session.user;
             await loadProfile();
@@ -615,7 +615,7 @@ async function init() {
         }
 
         // Listen for auth changes
-        supabase.auth.onAuthStateChange(async (event, session) => {
+        db.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
                 currentUser = session.user;
                 await loadProfile();
@@ -647,7 +647,7 @@ async function handleLogin(e) {
     const email = document.getElementById('loginEmail').value;
     const password = document.getElementById('loginPassword').value;
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await db.auth.signInWithPassword({ email, password });
     if (error) {
         showToast(error.message, 'error');
     }
@@ -659,7 +659,7 @@ async function handleSignup(e) {
     const email = document.getElementById('signupEmail').value;
     const password = document.getElementById('signupPassword').value;
 
-    const { error } = await supabase.auth.signUp({
+    const { error } = await db.auth.signUp({
         email,
         password,
         options: { data: { display_name: name } }
@@ -673,7 +673,7 @@ async function handleSignup(e) {
 }
 
 async function logout() {
-    await supabase.auth.signOut();
+    await db.auth.signOut();
 }
 
 function showAuth() {
@@ -695,7 +695,7 @@ async function showApp() {
 // PROFILE
 // ============================================================
 async function loadProfile() {
-    const { data, error } = await supabase
+    const { data, error } = await db
         .from('profiles')
         .select('*')
         .eq('id', currentUser.id)
@@ -707,7 +707,7 @@ async function loadProfile() {
 // GROUPS
 // ============================================================
 async function loadMyGroups() {
-    const { data, error } = await supabase
+    const { data, error } = await db
         .from('members')
         .select('*, groups(*)')
         .eq('user_id', currentUser.id)
@@ -774,7 +774,7 @@ async function selectGroup(group, membership) {
     document.getElementById('balanceCurrency').textContent = group.currency_name;
 
     // Info bar
-    const { count: memberCount } = await supabase
+    const { count: memberCount } = await db
         .from('members')
         .select('*', { count: 'exact', head: true })
         .eq('group_id', group.id)
@@ -811,7 +811,7 @@ async function loadTransactions() {
     if (!selectedGroup) return;
     document.getElementById('detailTitle').textContent = 'Recent Transactions';
 
-    const { data, error } = await supabase
+    const { data, error } = await db
         .from('transactions')
         .select('*, sender:profiles!transactions_from_user_fkey(display_name), receiver:profiles!transactions_to_user_fkey(display_name)')
         .eq('group_id', selectedGroup.id)
@@ -848,7 +848,7 @@ async function loadMembers() {
     if (!selectedGroup) return;
     document.getElementById('detailTitle').textContent = 'Members';
 
-    const { data, error } = await supabase
+    const { data, error } = await db
         .from('members')
         .select('*, profiles(display_name)')
         .eq('group_id', selectedGroup.id)
@@ -875,7 +875,7 @@ async function loadCandidates() {
     if (!selectedGroup) return;
     document.getElementById('detailTitle').textContent = 'Candidates Awaiting Endorsement';
 
-    const { data: candidates, error } = await supabase
+    const { data: candidates, error } = await db
         .from('members')
         .select('*, profiles(display_name)')
         .eq('group_id', selectedGroup.id)
@@ -887,7 +887,7 @@ async function loadCandidates() {
     }
 
     // Get endorsement counts
-    const { data: endorsements } = await supabase
+    const { data: endorsements } = await db
         .from('endorsements')
         .select('candidate_id, endorser_id')
         .eq('group_id', selectedGroup.id);
@@ -899,7 +899,7 @@ async function loadCandidates() {
         if (e.endorser_id === currentUser.id) myEndorsements.add(e.candidate_id);
     });
 
-    const { count: activeCount } = await supabase
+    const { count: activeCount } = await db
         .from('members')
         .select('*', { count: 'exact', head: true })
         .eq('group_id', selectedGroup.id)
@@ -926,7 +926,7 @@ async function loadCandidates() {
 }
 
 async function endorse(candidateId) {
-    const { error } = await supabase.from('endorsements').insert({
+    const { error } = await db.from('endorsements').insert({
         group_id: selectedGroup.id,
         candidate_id: candidateId,
         endorser_id: currentUser.id
@@ -934,7 +934,7 @@ async function endorse(candidateId) {
     if (error) { showToast(error.message, 'error'); return; }
 
     // Check if threshold met
-    const { data } = await supabase.rpc('check_endorsements', {
+    const { data } = await db.rpc('check_endorsements', {
         p_group_id: selectedGroup.id,
         p_candidate_id: candidateId
     });
@@ -948,7 +948,7 @@ async function endorse(candidateId) {
 }
 
 async function unendorse(candidateId) {
-    const { error } = await supabase.from('endorsements')
+    const { error } = await db.from('endorsements')
         .delete()
         .eq('group_id', selectedGroup.id)
         .eq('candidate_id', candidateId)
@@ -965,13 +965,13 @@ async function loadStats() {
     if (!selectedGroup) return;
     document.getElementById('detailTitle').textContent = 'Group Statistics';
 
-    const { count: memberCount } = await supabase
+    const { count: memberCount } = await db
         .from('members')
         .select('*', { count: 'exact', head: true })
         .eq('group_id', selectedGroup.id)
         .eq('status', 'active');
 
-    const { data: members } = await supabase
+    const { data: members } = await db
         .from('members')
         .select('balance')
         .eq('group_id', selectedGroup.id)
@@ -979,12 +979,12 @@ async function loadStats() {
 
     const totalSupply = (members || []).reduce((sum, m) => sum + Number(m.balance), 0);
 
-    const { count: txCount } = await supabase
+    const { count: txCount } = await db
         .from('transactions')
         .select('*', { count: 'exact', head: true })
         .eq('group_id', selectedGroup.id);
 
-    const { count: pendingCount } = await supabase
+    const { count: pendingCount } = await db
         .from('members')
         .select('*', { count: 'exact', head: true })
         .eq('group_id', selectedGroup.id)
@@ -1008,17 +1008,17 @@ async function loadStats() {
 async function runTally() {
     if (!selectedGroup) return;
 
-    const { data: feeResult } = await supabase.rpc('compute_tally', {
+    const { data: feeResult } = await db.rpc('compute_tally', {
         p_group_id: selectedGroup.id,
         p_vote_type: 'fee_rate'
     });
-    const { data: incomeResult } = await supabase.rpc('compute_tally', {
+    const { data: incomeResult } = await db.rpc('compute_tally', {
         p_group_id: selectedGroup.id,
         p_vote_type: 'daily_income'
     });
 
     // Refresh group data
-    const { data: updatedGroup } = await supabase
+    const { data: updatedGroup } = await db
         .from('groups')
         .select('*')
         .eq('id', selectedGroup.id)
@@ -1135,7 +1135,7 @@ async function createGroup(e) {
     const currencySymbol = document.getElementById('newCurrencySymbol').value.trim();
 
     // Create the group
-    const { data: group, error: groupError } = await supabase
+    const { data: group, error: groupError } = await db
         .from('groups')
         .insert({
             name,
@@ -1149,7 +1149,7 @@ async function createGroup(e) {
     if (groupError) { showToast(groupError.message, 'error'); return; }
 
     // Add creator as active member
-    const { error: memberError } = await supabase
+    const { error: memberError } = await db
         .from('members')
         .insert({
             group_id: group.id,
@@ -1170,7 +1170,7 @@ async function createGroup(e) {
 // JOIN GROUP
 // ============================================================
 async function searchGroups(query) {
-    let q = supabase.from('groups').select('*').order('name');
+    let q = db.from('groups').select('*').order('name');
     if (query.trim()) {
         q = q.ilike('name', `%${query.trim()}%`);
     }
@@ -1201,7 +1201,7 @@ async function searchGroups(query) {
 }
 
 async function requestJoin(groupId, groupName) {
-    const { error } = await supabase.from('members').insert({
+    const { error } = await db.from('members').insert({
         group_id: groupId,
         user_id: currentUser.id,
         status: 'pending',
@@ -1221,7 +1221,7 @@ async function loadSendModal() {
     const body = document.getElementById('modalBody');
 
     // Load active members (excluding self)
-    const { data: members } = await supabase
+    const { data: members } = await db
         .from('members')
         .select('user_id, profiles(display_name)')
         .eq('group_id', selectedGroup.id)
@@ -1264,7 +1264,7 @@ async function sendCurrency(e) {
     const amount = parseFloat(document.getElementById('sendAmount').value);
     const memo = document.getElementById('sendMemo').value.trim() || null;
 
-    const { data, error } = await supabase.rpc('send_currency', {
+    const { data, error } = await db.rpc('send_currency', {
         p_group_id: selectedGroup.id,
         p_to_user: toUser,
         p_amount: amount,
@@ -1292,7 +1292,7 @@ async function castVote(e) {
     }
 
     // Upsert vote (unique constraint on group_id, user_id, vote_type)
-    const { error } = await supabase.from('votes').upsert({
+    const { error } = await db.from('votes').upsert({
         group_id: selectedGroup.id,
         user_id: currentUser.id,
         vote_type: voteType,

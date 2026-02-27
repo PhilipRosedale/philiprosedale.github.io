@@ -91,36 +91,44 @@ create table public.members (
 
 alter table public.members enable row level security;
 
--- Members of a group can see all members in that group
+-- Helper function to check group membership (SECURITY DEFINER avoids RLS recursion)
+create or replace function public.is_group_member(p_group_id uuid)
+returns boolean as $$
+  select exists (
+    select 1 from public.members
+    where group_id = p_group_id
+      and user_id = auth.uid()
+      and status = 'active'
+  );
+$$ language sql security definer stable;
+
+-- Members can view their own memberships + members of groups they belong to
 create policy "Group members can view members"
   on public.members for select
   using (
-    exists (
-      select 1 from public.members m
-      where m.group_id = members.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
-    or members.user_id = auth.uid()  -- can always see own memberships
+    user_id = auth.uid()
+    or public.is_group_member(group_id)
   );
 
--- Authenticated users can request to join (insert with status='pending')
+-- Users can join groups: as 'pending' for any group, or 'active' if they created the group
 create policy "Users can request to join groups"
   on public.members for insert
-  with check (auth.uid() = user_id and status = 'pending');
+  with check (
+    auth.uid() = user_id
+    and (
+      status = 'pending'
+      or (status = 'active' and exists (
+        select 1 from public.groups
+        where id = members.group_id and created_by = auth.uid()
+      ))
+    )
+  );
 
 -- Members can update (for balance changes via functions, status changes)
 -- In practice, balance updates will go through server functions
 create policy "System can update members"
   on public.members for update
-  using (
-    exists (
-      select 1 from public.members m
-      where m.group_id = members.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
-  );
+  using (public.is_group_member(group_id));
 
 
 -- 4. ENDORSEMENTS
@@ -138,26 +146,14 @@ alter table public.endorsements enable row level security;
 -- Active members can view endorsements in their group
 create policy "Group members can view endorsements"
   on public.endorsements for select
-  using (
-    exists (
-      select 1 from public.members m
-      where m.group_id = endorsements.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
-  );
+  using (public.is_group_member(group_id));
 
 -- Active members can endorse candidates
 create policy "Active members can endorse"
   on public.endorsements for insert
   with check (
     auth.uid() = endorser_id
-    and exists (
-      select 1 from public.members m
-      where m.group_id = endorsements.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
+    and public.is_group_member(group_id)
   );
 
 -- Members can remove their own endorsements
@@ -183,14 +179,7 @@ alter table public.transactions enable row level security;
 -- Members can view transactions in their group
 create policy "Group members can view transactions"
   on public.transactions for select
-  using (
-    exists (
-      select 1 from public.members m
-      where m.group_id = transactions.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
-  );
+  using (public.is_group_member(group_id));
 
 -- Transactions are created via the send_currency function, not direct insert
 -- But we allow insert for the function (runs as security definer)
@@ -215,26 +204,14 @@ alter table public.votes enable row level security;
 -- Members can view votes in their group
 create policy "Group members can view votes"
   on public.votes for select
-  using (
-    exists (
-      select 1 from public.members m
-      where m.group_id = votes.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
-  );
+  using (public.is_group_member(group_id));
 
 -- Active members can cast votes
 create policy "Active members can vote"
   on public.votes for insert
   with check (
     auth.uid() = user_id
-    and exists (
-      select 1 from public.members m
-      where m.group_id = votes.group_id
-        and m.user_id = auth.uid()
-        and m.status = 'active'
-    )
+    and public.is_group_member(group_id)
   );
 
 -- Members can update their own votes

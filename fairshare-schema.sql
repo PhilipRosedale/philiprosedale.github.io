@@ -349,6 +349,34 @@ create policy "Members can delete own amendment votes"
   using (auth.uid() = user_id);
 
 
+-- 10. GROUP EVENTS (activity log + realtime notifications)
+create table public.group_events (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  event_type text not null,
+  summary text not null,
+  actor_id uuid references public.profiles(id),
+  metadata jsonb default '{}',
+  created_at timestamptz default now()
+);
+
+alter table public.group_events enable row level security;
+
+-- Group members can read events
+create policy "Group members can view events"
+  on public.group_events for select
+  using (public.is_group_member(group_id));
+
+-- Events are inserted by SECURITY DEFINER functions, but allow client insert
+-- for amendment_proposed (logged client-side via RPC)
+create policy "Active members can log events"
+  on public.group_events for insert
+  with check (
+    auth.uid() = actor_id
+    and public.is_group_member(group_id)
+  );
+
+
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================
@@ -451,6 +479,18 @@ begin
   -- Create pending membership
   insert into public.members (group_id, user_id, status, balance)
   values (v_sponsorship.group_id, v_user_id, 'pending', 0);
+
+  -- Log member_sponsored event
+  insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+  values (
+    v_sponsorship.group_id,
+    'member_sponsored',
+    (select display_name from public.profiles where id = v_sponsorship.sponsor_id)
+      || ' sponsored '
+      || (select display_name from public.profiles where id = v_user_id),
+    v_sponsorship.sponsor_id,
+    json_build_object('sponsor_id', v_sponsorship.sponsor_id, 'candidate_id', v_user_id)::jsonb
+  );
 
   -- Auto-endorse from the sponsor
   insert into public.endorsements (group_id, candidate_id, endorser_id)
@@ -593,6 +633,16 @@ begin
     delete from public.endorsements
     where group_id = p_group_id and candidate_id = p_candidate_id;
 
+    -- Log member_joined event
+    insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+    values (
+      p_group_id,
+      'member_joined',
+      (select display_name from public.profiles where id = p_candidate_id) || ' was admitted as a member',
+      p_candidate_id,
+      json_build_object('user_id', p_candidate_id)::jsonb
+    );
+
     return json_build_object(
       'admitted', true,
       'endorsements', v_endorsement_count,
@@ -674,6 +724,19 @@ begin
     -- Clear all votes for this type so a fresh round is needed
     delete from public.votes
     where group_id = p_group_id and vote_type = p_vote_type;
+
+    -- Log the rate change event
+    insert into public.group_events (group_id, event_type, summary, metadata)
+    values (
+      p_group_id,
+      'rate_change',
+      case p_vote_type
+        when 'fee_rate' then 'Fee rate changed to ' || round(v_median * 100, 1) || '%'
+        when 'daily_income' then 'Daily income changed to ' || round(v_median, 2)
+        else 'Rate changed'
+      end,
+      json_build_object('vote_type', p_vote_type, 'new_value', v_median, 'vote_count', v_vote_count)::jsonb
+    );
 
     v_applied := true;
   else
@@ -837,11 +900,33 @@ begin
     update public.amendments
     set status = 'passed', resolved_at = now()
     where id = p_amendment_id;
+
+    -- Log amendment_passed event
+    insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+    values (
+      v_amendment.group_id,
+      'amendment_passed',
+      'Amendment passed: ' || v_amendment.title,
+      v_amendment.proposed_by,
+      json_build_object('amendment_id', p_amendment_id, 'title', v_amendment.title,
+        'approve_count', v_approve_count, 'active_members', v_active_count)::jsonb
+    );
   else
     -- Mark as failed
     update public.amendments
     set status = 'failed', resolved_at = now()
     where id = p_amendment_id;
+
+    -- Log amendment_failed event
+    insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+    values (
+      v_amendment.group_id,
+      'amendment_failed',
+      'Amendment failed: ' || v_amendment.title,
+      v_amendment.proposed_by,
+      json_build_object('amendment_id', p_amendment_id, 'title', v_amendment.title,
+        'approve_count', v_approve_count, 'active_members', v_active_count)::jsonb
+    );
   end if;
 
   return json_build_object(
@@ -851,5 +936,24 @@ begin
     'ratio', round(v_ratio * 100, 1),
     'threshold', round(v_amendment.threshold * 100, 1)
   );
+end;
+$$ language plpgsql security definer;
+
+
+-- Log a group event from the client (for events not triggered by DEFINER functions)
+create or replace function public.log_group_event(
+  p_group_id uuid,
+  p_event_type text,
+  p_summary text,
+  p_metadata jsonb default '{}'
+)
+returns void as $$
+begin
+  if not public.is_group_member(p_group_id) then
+    raise exception 'You are not an active member of this group';
+  end if;
+
+  insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+  values (p_group_id, p_event_type, p_summary, auth.uid(), p_metadata);
 end;
 $$ language plpgsql security definer;

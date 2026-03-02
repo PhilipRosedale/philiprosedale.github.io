@@ -252,6 +252,7 @@
         }
         .info-item .info-label { font-size: 0.75rem; color: var(--dark-gray); text-transform: uppercase; letter-spacing: 0.05em; }
         .info-item .info-value { font-size: 1.2rem; font-weight: 700; color: var(--accent-color); }
+        .info-item .info-my-vote { font-size: 0.75rem; color: var(--primary-color); font-weight: 600; margin-top: 2px; }
 
         /* Action grid */
         .action-grid {
@@ -640,10 +641,6 @@
                         <div class="action-icon">&#128202;</div>
                         <div class="action-label">Stats</div>
                     </button>
-                    <button class="action-btn" onclick="runTally()">
-                        <div class="action-icon">&#127922;</div>
-                        <div class="action-label">Tally</div>
-                    </button>
                 </div>
 
                 <!-- Detail panel (transactions, members, candidates, stats) -->
@@ -668,8 +665,7 @@
             <tr><td>Endorse</td><td>Vote to accept a candidate (&gt;50% of members needed)</td></tr>
             <tr><td>Send</td><td>Transfer currency to another member (transaction fee applies)</td></tr>
             <tr><td>Balance</td><td>View your balance in the group's currency</td></tr>
-            <tr><td>Vote</td><td>Vote on the transaction fee rate or daily income amount</td></tr>
-            <tr><td>Tally</td><td>Compute the median of votes and update group settings</td></tr>
+            <tr><td>Vote</td><td>Vote on the transaction fee rate or daily income — applied automatically when enough members vote</td></tr>
             <tr><td>Rates</td><td>View current fee rate and daily income</td></tr>
             <tr><td>Constitution</td><td>View group constitution, propose amendments, vote on changes</td></tr>
             <tr><td>Stats</td><td>View group statistics (member count, total supply, etc.)</td></tr>
@@ -966,12 +962,16 @@ async function selectGroup(group, membership) {
         group.currency_symbol + ' ' + Number(membership.balance).toFixed(2) + ' ' + group.currency_name;
     document.getElementById('balanceCurrency').textContent = '';
 
-    // Info bar
-    const { count: memberCount } = await db
-        .from('members')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_id', group.id)
-        .eq('status', 'active');
+    // Info bar — also fetch user's pending votes
+    const [{ count: memberCount }, { data: myVotes }] = await Promise.all([
+        db.from('members').select('*', { count: 'exact', head: true })
+            .eq('group_id', group.id).eq('status', 'active'),
+        db.from('votes').select('vote_type, value')
+            .eq('group_id', group.id).eq('user_id', currentUser.id)
+    ]);
+
+    const myFeeVote = myVotes?.find(v => v.vote_type === 'fee_rate');
+    const myIncomeVote = myVotes?.find(v => v.vote_type === 'daily_income');
 
     document.getElementById('groupInfoBar').innerHTML = `
         <div class="info-item">
@@ -981,10 +981,12 @@ async function selectGroup(group, membership) {
         <div class="info-item">
             <div class="info-label">Fee Rate</div>
             <div class="info-value">${(Number(group.fee_rate) * 100).toFixed(1)}%</div>
+            ${myFeeVote ? `<div class="info-my-vote">Your vote: ${(Number(myFeeVote.value) * 100).toFixed(1)}%</div>` : ''}
         </div>
         <div class="info-item">
             <div class="info-label">Daily Income</div>
             <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)} ${esc(group.currency_name)}</div>
+            ${myIncomeVote ? `<div class="info-my-vote">Your vote: ${group.currency_symbol} ${Number(myIncomeVote.value).toFixed(2)}</div>` : ''}
         </div>
     `;
 
@@ -1223,44 +1225,6 @@ async function loadStats() {
 }
 
 // ============================================================
-// TALLY
-// ============================================================
-async function runTally() {
-    if (!selectedGroup) return;
-
-    const { data: feeResult } = await db.rpc('compute_tally', {
-        p_group_id: selectedGroup.id,
-        p_vote_type: 'fee_rate'
-    });
-    const { data: incomeResult } = await db.rpc('compute_tally', {
-        p_group_id: selectedGroup.id,
-        p_vote_type: 'daily_income'
-    });
-
-    // Refresh group data
-    const { data: updatedGroup } = await db
-        .from('groups')
-        .select('*')
-        .eq('id', selectedGroup.id)
-        .single();
-
-    if (updatedGroup) {
-        selectedGroup = updatedGroup;
-        const membership = myGroups.find(m => m.group_id === selectedGroup.id);
-        if (membership) {
-            membership.groups = updatedGroup;
-            selectGroup(updatedGroup, membership);
-        }
-    }
-
-    showToast(
-        `Tally complete! Fee: ${(feeResult?.median * 100 || 0).toFixed(1)}% (${feeResult?.vote_count || 0} votes), ` +
-        `Income: ${incomeResult?.median?.toFixed(2) || 0} (${incomeResult?.vote_count || 0} votes)`,
-        'success'
-    );
-}
-
-// ============================================================
 // MODALS
 // ============================================================
 function showModal(type) {
@@ -1395,7 +1359,7 @@ async function createGroup(e) {
     const currencySymbol = document.getElementById('newCurrencySymbol').value.trim();
 
     // Generate default constitution
-    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nCurrency Name: ' + currencyName + ' $CURRENCY_NAME\nCurrency Symbol: ' + currencySymbol + ' $CURRENCY_SYMBOL\nApprove New Member: 100% members $NEW_MEMBER_PERCENTAGE\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE';
+    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nCurrency Name: ' + currencyName + ' $CURRENCY_NAME\nCurrency Symbol: ' + currencySymbol + ' $CURRENCY_SYMBOL\nApprove New Member: 100% members $NEW_MEMBER_PERCENTAGE\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE\nChange Currency Rates: 66% members $CHANGE_CURRENCY_RATES_PERCENTAGE';
 
     // Create the group
     const { data: group, error: groupError } = await db
@@ -1581,8 +1545,36 @@ async function castVote(e) {
 
     if (error) { showToast(error.message, 'error'); return; }
 
-    showToast('Vote recorded! Use Tally to update group settings.', 'success');
     closeModal();
+
+    // Auto-tally: check if enough members have voted to apply the change
+    const { data: tallyResult } = await db.rpc('compute_tally', {
+        p_group_id: selectedGroup.id,
+        p_vote_type: voteType
+    });
+
+    const label = voteType === 'fee_rate' ? 'Fee Rate' : 'Daily Income';
+    if (tallyResult?.applied) {
+        // Refresh group data
+        const { data: updatedGroup } = await db.from('groups').select('*').eq('id', selectedGroup.id).single();
+        if (updatedGroup) {
+            selectedGroup = updatedGroup;
+            const membership = myGroups.find(m => m.group_id === selectedGroup.id);
+            if (membership) {
+                membership.groups = updatedGroup;
+                selectGroup(updatedGroup, membership);
+            }
+        }
+        const displayVal = voteType === 'fee_rate'
+            ? `${(tallyResult.median * 100).toFixed(1)}%`
+            : `${selectedGroup.currency_symbol} ${Number(tallyResult.median).toFixed(2)}`;
+        showToast(`${label} updated to ${displayVal} (${tallyResult.vote_count}/${tallyResult.active_members} members voted)`, 'success');
+    } else {
+        // Refresh info bar so "Your vote" appears
+        const membership = myGroups.find(m => m.group_id === selectedGroup.id);
+        if (membership) selectGroup(selectedGroup, membership);
+        showToast(`Vote recorded — ${tallyResult?.vote_count || 0}/${tallyResult?.threshold || '?'} votes needed to apply ${label}`, 'info');
+    }
 }
 
 // ============================================================

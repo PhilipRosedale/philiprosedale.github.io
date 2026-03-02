@@ -27,6 +27,7 @@ When an amendment changes a tagged value and passes, the `resolve_amendment` fun
 | `$CURRENCY_SYMBOL` | Updates `groups.currency_symbol` |
 | `$NEW_MEMBER_PERCENTAGE` | Read at endorsement time from constitution text |
 | `$AMENDMENT_PERCENTAGE` | Snapshot stored on each new amendment proposal |
+| `$CHANGE_CURRENCY_RATES_PERCENTAGE` | Read at vote time by `compute_tally`; controls when enough members have voted to apply median fee rate / daily income (default 66%) |
 
 ### Adding New Tags
 

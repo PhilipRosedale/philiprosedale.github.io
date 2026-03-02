@@ -610,6 +610,8 @@ $$ language plpgsql security definer;
 
 
 -- Compute tally (median) of votes and update group settings
+-- Reads $CHANGE_CURRENCY_RATES_PERCENTAGE from constitution (default 66%)
+-- Only applies the change when enough active members have voted
 create or replace function public.compute_tally(
   p_group_id uuid,
   p_vote_type text
@@ -617,31 +619,78 @@ create or replace function public.compute_tally(
 returns json as $$
 declare
   v_median numeric;
-  v_count int;
+  v_vote_count int;
+  v_active_count int;
+  v_constitution text;
+  v_pct_match text[];
+  v_pct numeric;
+  v_threshold int;
+  v_applied boolean := false;
 begin
-  -- Get vote count
-  select count(*) into v_count
+  -- Count votes for this type
+  select count(*) into v_vote_count
   from public.votes
   where group_id = p_group_id and vote_type = p_vote_type;
 
-  if v_count = 0 then
-    return json_build_object('median', 0, 'vote_count', 0);
+  if v_vote_count = 0 then
+    return json_build_object('median', 0, 'vote_count', 0, 'applied', false, 'reason', 'No votes cast');
   end if;
 
-  -- Compute median
-  select percentile_cont(0.5) within group (order by value)
-  into v_median
-  from public.votes
-  where group_id = p_group_id and vote_type = p_vote_type;
+  -- Count active members
+  select count(*) into v_active_count
+  from public.members
+  where group_id = p_group_id and status = 'active';
 
-  -- Update the group setting
-  if p_vote_type = 'fee_rate' then
-    update public.groups set fee_rate = v_median where id = p_group_id;
-  elsif p_vote_type = 'daily_income' then
-    update public.groups set daily_income = v_median where id = p_group_id;
+  -- Read threshold from constitution ($CHANGE_CURRENCY_RATES_PERCENTAGE), default 66%
+  select constitution into v_constitution
+  from public.groups
+  where id = p_group_id;
+
+  v_pct := 0.66; -- default 66%
+  if v_constitution is not null then
+    v_pct_match := regexp_match(v_constitution, ':\s*(\d+)%\s*members?\s*\$CHANGE_CURRENCY_RATES_PERCENTAGE');
+    if v_pct_match is not null then
+      v_pct := v_pct_match[1]::numeric / 100.0;
+    end if;
   end if;
 
-  return json_build_object('median', v_median, 'vote_count', v_count);
+  v_threshold := greatest(1, ceil(v_active_count * v_pct));
+
+  -- Only apply if enough members have voted
+  if v_vote_count >= v_threshold then
+    -- Compute median
+    select percentile_cont(0.5) within group (order by value)
+    into v_median
+    from public.votes
+    where group_id = p_group_id and vote_type = p_vote_type;
+
+    -- Update the group setting
+    if p_vote_type = 'fee_rate' then
+      update public.groups set fee_rate = v_median where id = p_group_id;
+    elsif p_vote_type = 'daily_income' then
+      update public.groups set daily_income = v_median where id = p_group_id;
+    end if;
+
+    -- Clear all votes for this type so a fresh round is needed
+    delete from public.votes
+    where group_id = p_group_id and vote_type = p_vote_type;
+
+    v_applied := true;
+  else
+    -- Still compute median for display, but don't apply
+    select percentile_cont(0.5) within group (order by value)
+    into v_median
+    from public.votes
+    where group_id = p_group_id and vote_type = p_vote_type;
+  end if;
+
+  return json_build_object(
+    'median', v_median,
+    'vote_count', v_vote_count,
+    'active_members', v_active_count,
+    'threshold', v_threshold,
+    'applied', v_applied
+  );
 end;
 $$ language plpgsql security definer;
 
@@ -773,10 +822,10 @@ begin
               update public.groups set currency_name = v_value where id = v_amendment.group_id;
             when 'CURRENCY_SYMBOL' then
               update public.groups set currency_symbol = v_value where id = v_amendment.group_id;
-            -- AMENDMENT_PERCENTAGE is read from constitution text at proposal time,
-            -- no separate column to update
+            -- AMENDMENT_PERCENTAGE, NEW_MEMBER_PERCENTAGE, and
+            -- CHANGE_CURRENCY_RATES_PERCENTAGE are read from constitution text
+            -- at runtime, no separate column to update
             -- Future tags can be added here:
-            -- when 'ENDORSEMENT_THRESHOLD' then ...
             else
               null; -- Unknown tag, ignore
           end case;

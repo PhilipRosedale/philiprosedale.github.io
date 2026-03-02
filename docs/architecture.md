@@ -50,7 +50,7 @@ See [`fairshare-schema.sql`](../fairshare-schema.sql) for the full schema. Summa
 | `send_currency` | Atomically transfer currency between members, applying fee |
 | `check_endorsements` | Count endorsements and admit candidate if threshold met |
 | `claim_sponsorship` | Validate invite token, create pending member, auto-endorse |
-| `compute_tally` | Compute median of votes and update group settings |
+| `compute_tally` | Compute median of votes; auto-applies when enough members vote (per `$CHANGE_CURRENCY_RATES_PERCENTAGE`) |
 | `distribute_daily_income` | Mint and distribute daily income to all active members |
 | `resolve_amendment` | Count amendment votes, apply constitution changes if passed |
 | `get_sponsorship_by_token` | Public lookup of invite details (no auth required) |

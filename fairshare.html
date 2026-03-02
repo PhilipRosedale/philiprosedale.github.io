@@ -959,8 +959,8 @@ async function selectGroup(group, membership) {
 
     // Show balance
     document.getElementById('balanceAmount').textContent =
-        group.currency_symbol + ' ' + Number(membership.balance).toFixed(2);
-    document.getElementById('balanceCurrency').textContent = group.currency_name;
+        group.currency_symbol + ' ' + Number(membership.balance).toFixed(2) + ' ' + group.currency_name;
+    document.getElementById('balanceCurrency').textContent = '';
 
     // Info bar
     const { count: memberCount } = await db
@@ -980,7 +980,7 @@ async function selectGroup(group, membership) {
         </div>
         <div class="info-item">
             <div class="info-label">Daily Income</div>
-            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)}</div>
+            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)} ${esc(group.currency_name)}</div>
         </div>
     `;
 
@@ -1022,7 +1022,7 @@ async function loadTransactions() {
                     <div class="tx-date">${new Date(tx.created_at).toLocaleString()}</div>
                 </div>
                 <div class="tx-amount ${isSender ? 'sent' : 'received'}">
-                    ${isSender ? '-' : '+'}${selectedGroup.currency_symbol} ${Number(tx.amount).toFixed(2)}
+                    ${isSender ? '-' : '+'}${selectedGroup.currency_symbol} ${Number(tx.amount).toFixed(2)} ${esc(selectedGroup.currency_name)}
                     ${tx.fee > 0 ? `<div style="font-size:0.7rem;color:var(--dark-gray);">fee: ${Number(tx.fee).toFixed(2)}</div>` : ''}
                 </div>
             </li>`;
@@ -1209,10 +1209,10 @@ async function loadStats() {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
             <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
-            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${selectedGroup.currency_symbol} ${totalSupply.toFixed(2)}</div></div>
+            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${selectedGroup.currency_symbol} ${totalSupply.toFixed(2)} ${esc(selectedGroup.currency_name)}</div></div>
             <div class="info-item"><div class="info-label">Total Transactions</div><div class="info-value">${txCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Fee Rate</div><div class="info-value">${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%</div></div>
-            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)}</div></div>
+            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)} ${esc(selectedGroup.currency_name)}</div></div>
         </div>
     `;
 }
@@ -1273,13 +1273,16 @@ function showModal(type) {
                         <input type="text" id="newGroupName" required placeholder="e.g. My Community">
                     </div>
                     <div class="form-group">
-                        <label>Currency Name</label>
-                        <input type="text" id="newCurrencyName" required placeholder="e.g. FairCoins">
+                        <label>Currency Name (plural if desired, e.g. "dollars")</label>
+                        <input type="text" id="newCurrencyName" required placeholder="e.g. dollars, coins, credits">
                     </div>
                     <div class="form-group">
                         <label>Currency Symbol</label>
-                        <input type="text" id="newCurrencySymbol" required placeholder="e.g. FC" maxlength="5" value="$">
+                        <input type="text" id="newCurrencySymbol" required placeholder="e.g. $, FC, ¢" maxlength="5" value="$">
                     </div>
+                    <p style="font-size:0.8rem;color:var(--dark-gray);margin-top:0.5rem;">
+                        Balances display as: <strong>$ 100.00 dollars</strong>
+                    </p>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                         <button type="submit" class="btn btn-primary">Create</button>
@@ -1545,7 +1548,7 @@ async function sendCurrency(e) {
 
     if (error) { showToast(error.message, 'error'); return; }
 
-    showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
+    showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} ${selectedGroup.currency_name} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
     closeModal();
     await loadMyGroups(); // Refresh balances
 }

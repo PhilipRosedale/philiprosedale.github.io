@@ -56,6 +56,7 @@ create table public.groups (
   currency_symbol text not null default '$',
   fee_rate numeric not null default 0,        -- current voted fee rate (0-1)
   daily_income numeric not null default 0,    -- current voted daily income amount
+  constitution text,                          -- group constitution with tagged variables
   created_by uuid references public.profiles(id),
   created_at timestamptz default now()
 );
@@ -261,6 +262,91 @@ create policy "Active members can sponsor"
 create policy "Sponsors can update own sponsorships"
   on public.sponsorships for update
   using (auth.uid() = sponsor_id and status = 'pending');
+
+
+-- 8. AMENDMENTS (constitution changes)
+create table public.amendments (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  proposed_by uuid not null references public.profiles(id),
+  title text not null,            -- short summary, e.g. "Rename group to XYZ"
+  old_text text not null,         -- constitution at time of proposal
+  new_text text not null,         -- proposed new constitution
+  status text not null default 'voting'
+    check (status in ('voting', 'passed', 'failed', 'withdrawn')),
+  threshold numeric not null,     -- snapshot of $AMENDMENT_PERCENTAGE at proposal time (0-1)
+  created_at timestamptz default now(),
+  expires_at timestamptz default (now() + interval '7 days'),
+  resolved_at timestamptz
+);
+
+alter table public.amendments enable row level security;
+
+-- Group members can view amendments
+create policy "Group members can view amendments"
+  on public.amendments for select
+  using (public.is_group_member(group_id));
+
+-- Active members can propose amendments
+create policy "Active members can propose amendments"
+  on public.amendments for insert
+  with check (
+    auth.uid() = proposed_by
+    and public.is_group_member(group_id)
+  );
+
+-- Proposers can withdraw their own voting amendments
+create policy "Proposers can withdraw amendments"
+  on public.amendments for update
+  using (auth.uid() = proposed_by and status = 'voting')
+  with check (true);
+
+
+-- 9. AMENDMENT VOTES
+create table public.amendment_votes (
+  id uuid primary key default gen_random_uuid(),
+  amendment_id uuid not null references public.amendments(id) on delete cascade,
+  user_id uuid not null references public.profiles(id),
+  vote boolean not null,          -- true = approve, false = reject
+  created_at timestamptz default now(),
+  unique(amendment_id, user_id)
+);
+
+alter table public.amendment_votes enable row level security;
+
+-- Group members can view amendment votes (join through amendments to get group_id)
+create policy "Members can view amendment votes"
+  on public.amendment_votes for select
+  using (
+    exists (
+      select 1 from public.amendments a
+      where a.id = amendment_votes.amendment_id
+        and public.is_group_member(a.group_id)
+    )
+  );
+
+-- Active group members can cast a vote on an amendment
+create policy "Active members can vote on amendments"
+  on public.amendment_votes for insert
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.amendments a
+      where a.id = amendment_votes.amendment_id
+        and a.status = 'voting'
+        and public.is_group_member(a.group_id)
+    )
+  );
+
+-- Members can change their vote
+create policy "Members can update own amendment votes"
+  on public.amendment_votes for update
+  using (auth.uid() = user_id);
+
+-- Members can remove their vote
+create policy "Members can delete own amendment votes"
+  on public.amendment_votes for delete
+  using (auth.uid() = user_id);
 
 
 -- ============================================================
@@ -568,6 +654,127 @@ begin
     'amount_per_member', v_daily_income,
     'member_count', v_member_count,
     'total_minted', v_daily_income * v_member_count
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- Resolve an amendment: either early (threshold already met) or after voting expires
+-- Counts approvals vs active members, applies if threshold met
+create or replace function public.resolve_amendment(p_amendment_id uuid)
+returns json as $$
+declare
+  v_amendment record;
+  v_active_count int;
+  v_approve_count int;
+  v_ratio numeric;
+  v_passed boolean;
+  v_line text;
+  v_tag text;
+  v_value text;
+  v_parts text[];
+begin
+  -- Fetch the amendment
+  select * into v_amendment
+  from public.amendments
+  where id = p_amendment_id
+  for update;
+
+  if not found then
+    raise exception 'Amendment not found';
+  end if;
+
+  if v_amendment.status != 'voting' then
+    raise exception 'Amendment is not in voting status';
+  end if;
+
+  -- Verify caller is an active member of this group
+  if not public.is_group_member(v_amendment.group_id) then
+    raise exception 'You are not an active member of this group';
+  end if;
+
+  -- Count active members
+  select count(*) into v_active_count
+  from public.members
+  where group_id = v_amendment.group_id and status = 'active';
+
+  -- Count approval votes
+  select count(*) into v_approve_count
+  from public.amendment_votes
+  where amendment_id = p_amendment_id and vote = true;
+
+  -- Calculate ratio
+  if v_active_count = 0 then
+    v_ratio := 0;
+  else
+    v_ratio := v_approve_count::numeric / v_active_count::numeric;
+  end if;
+
+  v_passed := v_ratio >= v_amendment.threshold;
+
+  -- If threshold not met and voting hasn't expired, don't resolve yet
+  if not v_passed and v_amendment.expires_at > now() then
+    return json_build_object(
+      'resolved', false,
+      'approve_count', v_approve_count,
+      'active_members', v_active_count,
+      'ratio', round(v_ratio * 100, 1),
+      'threshold', round(v_amendment.threshold * 100, 1)
+    );
+  end if;
+
+  if v_passed then
+    -- Update the constitution
+    update public.groups
+    set constitution = v_amendment.new_text
+    where id = v_amendment.group_id;
+
+    -- Parse tagged variables from new_text and apply changes
+    -- Format: each line may end with $TAG_NAME
+    -- The value is everything between the colon and the tag
+    foreach v_line in array string_to_array(v_amendment.new_text, E'\n')
+    loop
+      -- Match lines ending with $IDENTIFIER
+      if v_line ~ '\$[A-Z_]+\s*$' then
+        -- Extract the tag name (last $WORD on the line)
+        v_tag := (regexp_match(v_line, '\$([A-Z_]+)\s*$'))[1];
+        -- Extract the value: everything after first colon, before the $TAG
+        v_parts := regexp_match(v_line, ':\s*(.*?)\s*\$[A-Z_]+\s*$');
+        if v_parts is not null then
+          v_value := v_parts[1];
+
+          -- Apply known tags
+          case v_tag
+            when 'GROUP_NAME' then
+              update public.groups set name = v_value where id = v_amendment.group_id;
+            -- AMENDMENT_PERCENTAGE is read from constitution text at proposal time,
+            -- no separate column to update
+            -- Future tags can be added here:
+            -- when 'ENDORSEMENT_THRESHOLD' then ...
+            else
+              null; -- Unknown tag, ignore
+          end case;
+        end if;
+      end if;
+    end loop;
+
+    -- Mark as passed
+    update public.amendments
+    set status = 'passed', resolved_at = now()
+    where id = p_amendment_id;
+  else
+    -- Mark as failed
+    update public.amendments
+    set status = 'failed', resolved_at = now()
+    where id = p_amendment_id;
+  end if;
+
+  return json_build_object(
+    'passed', v_passed,
+    'approve_count', v_approve_count,
+    'active_members', v_active_count,
+    'ratio', round(v_ratio * 100, 1),
+    'threshold', round(v_amendment.threshold * 100, 1)
   );
 end;
 $$ language plpgsql security definer;

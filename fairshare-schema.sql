@@ -456,10 +456,16 @@ begin
   insert into public.endorsements (group_id, candidate_id, endorser_id)
   values (v_sponsorship.group_id, v_user_id, v_sponsorship.sponsor_id);
 
+  -- Immediately check if this endorsement meets the threshold
+  perform public.check_endorsements(v_sponsorship.group_id, v_user_id);
+
+  -- Return result; check if candidate was admitted
   return json_build_object(
     'success', true,
     'group_id', v_sponsorship.group_id,
-    'group_name', (select name from public.groups where id = v_sponsorship.group_id)
+    'group_name', (select name from public.groups where id = v_sponsorship.group_id),
+    'admitted', (select status = 'active' from public.members
+                 where group_id = v_sponsorship.group_id and user_id = v_user_id)
   );
 end;
 $$ language plpgsql security definer;
@@ -538,6 +544,7 @@ $$ language plpgsql security definer;
 
 
 -- Check endorsements and admit candidate if threshold met
+-- Reads $NEW_MEMBER_PERCENTAGE from group constitution (default 100%)
 create or replace function public.check_endorsements(
   p_group_id uuid,
   p_candidate_id uuid
@@ -547,6 +554,9 @@ declare
   v_active_count int;
   v_endorsement_count int;
   v_threshold int;
+  v_constitution text;
+  v_pct_match text[];
+  v_pct numeric;
 begin
   -- Count active members
   select count(*) into v_active_count
@@ -558,8 +568,20 @@ begin
   from public.endorsements
   where group_id = p_group_id and candidate_id = p_candidate_id;
 
-  -- Threshold: >50% of active members
-  v_threshold := (v_active_count / 2) + 1;
+  -- Read threshold from constitution ($NEW_MEMBER_PERCENTAGE), default 100%
+  select constitution into v_constitution
+  from public.groups
+  where id = p_group_id;
+
+  v_pct := 1.0; -- default 100%
+  if v_constitution is not null then
+    v_pct_match := regexp_match(v_constitution, ':\s*(\d+)%\s*members?\s*\$NEW_MEMBER_PERCENTAGE');
+    if v_pct_match is not null then
+      v_pct := v_pct_match[1]::numeric / 100.0;
+    end if;
+  end if;
+
+  v_threshold := greatest(1, ceil(v_active_count * v_pct));
 
   if v_endorsement_count >= v_threshold then
     -- Admit the candidate

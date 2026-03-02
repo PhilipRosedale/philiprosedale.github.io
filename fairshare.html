@@ -795,7 +795,11 @@ async function handlePendingInvite() {
         if (error) {
             showToast('Invite: ' + error.message, 'error');
         } else if (data?.success) {
-            showToast(`You've been sponsored to join "${data.group_name}"! Awaiting group endorsement.`, 'success');
+            if (data.admitted) {
+                showToast(`Welcome to "${data.group_name}"! You've been admitted as a member.`, 'success');
+            } else {
+                showToast(`You've been sponsored to join "${data.group_name}"! Awaiting group endorsement.`, 'success');
+            }
         }
     } catch (e) {
         console.error('Failed to claim sponsorship:', e);
@@ -1111,7 +1115,8 @@ async function loadCandidates() {
         .eq('group_id', selectedGroup.id)
         .eq('status', 'active');
 
-    const threshold = Math.floor((activeCount || 0) / 2) + 1;
+    const memberPct = parseNewMemberThreshold(selectedGroup.constitution);
+    const threshold = Math.max(1, Math.ceil((activeCount || 0) * memberPct));
 
     document.getElementById('detailContent').innerHTML = candidates.map(c => {
         const endorsed = myEndorsements.has(c.user_id);
@@ -1390,7 +1395,7 @@ async function createGroup(e) {
     const currencySymbol = document.getElementById('newCurrencySymbol').value.trim();
 
     // Generate default constitution
-    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nCurrency Name: ' + currencyName + ' $CURRENCY_NAME\nCurrency Symbol: ' + currencySymbol + ' $CURRENCY_SYMBOL\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE';
+    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nCurrency Name: ' + currencyName + ' $CURRENCY_NAME\nCurrency Symbol: ' + currencySymbol + ' $CURRENCY_SYMBOL\nApprove New Member: 100% members $NEW_MEMBER_PERCENTAGE\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE';
 
     // Create the group
     const { data: group, error: groupError } = await db
@@ -1638,6 +1643,13 @@ function renderConstitution(text) {
 function parseAmendmentThreshold(constitutionText) {
     if (!constitutionText) return 1.0; // default 100%
     const match = constitutionText.match(/:\s*(\d+)%\s*members?\s*\$AMENDMENT_PERCENTAGE/i);
+    if (match) return parseInt(match[1]) / 100;
+    return 1.0;
+}
+
+function parseNewMemberThreshold(constitutionText) {
+    if (!constitutionText) return 1.0; // default 100%
+    const match = constitutionText.match(/:\s*(\d+)%\s*members?\s*\$NEW_MEMBER_PERCENTAGE/i);
     if (match) return parseInt(match[1]) / 100;
     return 1.0;
 }

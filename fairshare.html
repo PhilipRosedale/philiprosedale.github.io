@@ -1390,7 +1390,7 @@ async function createGroup(e) {
     const currencySymbol = document.getElementById('newCurrencySymbol').value.trim();
 
     // Generate default constitution
-    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE';
+    const defaultConstitution = 'Group Name: ' + name + ' $GROUP_NAME\nCurrency Name: ' + currencyName + ' $CURRENCY_NAME\nCurrency Symbol: ' + currencySymbol + ' $CURRENCY_SYMBOL\nApprove Amendment: 100% members $AMENDMENT_PERCENTAGE';
 
     // Create the group
     const { data: group, error: groupError } = await db

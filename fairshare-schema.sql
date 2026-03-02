@@ -747,6 +747,10 @@ begin
           case v_tag
             when 'GROUP_NAME' then
               update public.groups set name = v_value where id = v_amendment.group_id;
+            when 'CURRENCY_NAME' then
+              update public.groups set currency_name = v_value where id = v_amendment.group_id;
+            when 'CURRENCY_SYMBOL' then
+              update public.groups set currency_symbol = v_value where id = v_amendment.group_id;
             -- AMENDMENT_PERCENTAGE is read from constitution text at proposal time,
             -- no separate column to update
             -- Future tags can be added here:

@@ -225,9 +225,158 @@ create policy "Members can delete own votes"
   using (auth.uid() = user_id);
 
 
+-- 7. SPONSORSHIPS (invite-only membership)
+create table public.sponsorships (
+  id uuid primary key default gen_random_uuid(),
+  token text unique not null default encode(gen_random_bytes(16), 'hex'),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  sponsor_id uuid not null references public.profiles(id),
+  message text,                       -- sponsor's description of the candidate
+  candidate_id uuid references public.profiles(id),  -- filled when claimed
+  status text not null default 'pending'
+    check (status in ('pending', 'claimed', 'expired', 'revoked')),
+  created_at timestamptz default now(),
+  expires_at timestamptz default (now() + interval '7 days')
+);
+
+alter table public.sponsorships enable row level security;
+
+-- Sponsors can see their own sponsorships; group members can see group sponsorships
+create policy "Sponsors and group members can view sponsorships"
+  on public.sponsorships for select
+  using (
+    sponsor_id = auth.uid()
+    or public.is_group_member(group_id)
+  );
+
+-- Active group members can create sponsorships
+create policy "Active members can sponsor"
+  on public.sponsorships for insert
+  with check (
+    auth.uid() = sponsor_id
+    and public.is_group_member(group_id)
+  );
+
+-- Sponsors can revoke their own pending sponsorships
+create policy "Sponsors can update own sponsorships"
+  on public.sponsorships for update
+  using (auth.uid() = sponsor_id and status = 'pending');
+
+
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================
+
+-- Look up a sponsorship by its token (bypasses RLS for invite landing page)
+-- Returns sponsor name, group name, message -- safe public info only
+create or replace function public.get_sponsorship_by_token(p_token text)
+returns json as $$
+declare
+  v_record record;
+begin
+  select
+    s.id,
+    s.token,
+    s.group_id,
+    s.status,
+    s.message,
+    s.expires_at,
+    p.display_name as sponsor_name,
+    g.name as group_name,
+    g.currency_name,
+    g.currency_symbol
+  into v_record
+  from public.sponsorships s
+  join public.profiles p on p.id = s.sponsor_id
+  join public.groups g on g.id = s.group_id
+  where s.token = p_token;
+
+  if not found then
+    return json_build_object('error', 'Invitation not found');
+  end if;
+
+  if v_record.status != 'pending' then
+    return json_build_object('error', 'This invitation has already been used');
+  end if;
+
+  if v_record.expires_at < now() then
+    return json_build_object('error', 'This invitation has expired');
+  end if;
+
+  return json_build_object(
+    'id', v_record.id,
+    'group_id', v_record.group_id,
+    'sponsor_name', v_record.sponsor_name,
+    'group_name', v_record.group_name,
+    'currency_name', v_record.currency_name,
+    'currency_symbol', v_record.currency_symbol,
+    'message', v_record.message
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- Claim a sponsorship: validate token, create pending member, auto-endorse from sponsor
+create or replace function public.claim_sponsorship(p_token text)
+returns json as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_sponsorship record;
+begin
+  if v_user_id is null then
+    raise exception 'You must be logged in to claim a sponsorship';
+  end if;
+
+  -- Lock the row to prevent double-claim
+  select * into v_sponsorship
+  from public.sponsorships
+  where token = p_token
+  for update;
+
+  if not found then
+    raise exception 'Invitation not found';
+  end if;
+
+  if v_sponsorship.status != 'pending' then
+    raise exception 'This invitation has already been used';
+  end if;
+
+  if v_sponsorship.expires_at < now() then
+    -- Mark as expired
+    update public.sponsorships set status = 'expired' where id = v_sponsorship.id;
+    raise exception 'This invitation has expired';
+  end if;
+
+  -- Check user isn't already a member (active or pending)
+  if exists (
+    select 1 from public.members
+    where group_id = v_sponsorship.group_id
+      and user_id = v_user_id
+      and status in ('active', 'pending')
+  ) then
+    raise exception 'You are already a member or pending candidate of this group';
+  end if;
+
+  -- Mark sponsorship as claimed
+  update public.sponsorships
+  set candidate_id = v_user_id, status = 'claimed'
+  where id = v_sponsorship.id;
+
+  -- Create pending membership
+  insert into public.members (group_id, user_id, status, balance)
+  values (v_sponsorship.group_id, v_user_id, 'pending', 0);
+
+  -- Auto-endorse from the sponsor
+  insert into public.endorsements (group_id, candidate_id, endorser_id)
+  values (v_sponsorship.group_id, v_user_id, v_sponsorship.sponsor_id);
+
+  return json_build_object(
+    'success', true,
+    'group_id', v_sponsorship.group_id,
+    'group_name', (select name from public.groups where id = v_sponsorship.group_id)
+  );
+end;
+$$ language plpgsql security definer;
 
 -- Send currency from one member to another within a group
 create or replace function public.send_currency(

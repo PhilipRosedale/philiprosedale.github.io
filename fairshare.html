@@ -425,6 +425,11 @@
     <h2>FairShare</h2>
     <p class="subtitle">Group currency for everyone</p>
 
+    <!-- Invite banner (shown when arriving via invite link) -->
+    <div id="inviteBanner" class="hidden" style="background:linear-gradient(135deg,#e3f0f8,#d4e8f5);border-radius:8px;padding:1rem;margin-bottom:1.5rem;border-left:4px solid var(--primary-color);">
+        <div id="inviteBannerText" style="font-size:0.9rem;color:var(--accent-color);line-height:1.5;"></div>
+    </div>
+
     <div class="auth-tabs">
         <div class="auth-tab active" data-tab="login" onclick="switchAuthTab('login')">Log In</div>
         <div class="auth-tab" data-tab="signup" onclick="switchAuthTab('signup')">Sign Up</div>
@@ -472,7 +477,6 @@
                 <h3>My Groups</h3>
                 <div class="sidebar-actions">
                     <button class="btn btn-primary btn-small" onclick="showModal('createGroup')">+ New</button>
-                    <button class="btn btn-secondary btn-small" onclick="showModal('joinGroup')">Join</button>
                 </div>
             </div>
             <div class="group-list" id="groupList">
@@ -486,9 +490,8 @@
             <div id="emptyState" class="empty-state">
                 <div class="empty-icon">&#9878;</div>
                 <h3>Welcome to FairShare</h3>
-                <p>Create a new group or join an existing one to get started.</p>
+                <p>Create a new group to get started, or ask an existing member to sponsor you.</p>
                 <button class="btn btn-primary" onclick="showModal('createGroup')">Create a Group</button>
-                <button class="btn btn-secondary" style="margin-left: 0.5rem;" onclick="showModal('joinGroup')">Join a Group</button>
             </div>
 
             <!-- Group view (hidden until group selected) -->
@@ -506,7 +509,7 @@
                 </div>
 
                 <!-- Actions -->
-                <div class="action-grid">
+                <div class="action-grid" id="actionGrid">
                     <button class="action-btn" onclick="showModal('send')">
                         <div class="action-icon">&#10132;</div>
                         <div class="action-label">Send</div>
@@ -514,6 +517,10 @@
                     <button class="action-btn" onclick="showModal('vote')">
                         <div class="action-icon">&#9745;</div>
                         <div class="action-label">Vote</div>
+                    </button>
+                    <button class="action-btn" onclick="showModal('sponsor')">
+                        <div class="action-icon">&#128279;</div>
+                        <div class="action-label">Sponsor</div>
                     </button>
                     <button class="action-btn" onclick="loadCandidates()">
                         <div class="action-icon">&#128101;</div>
@@ -550,9 +557,9 @@
         <table>
             <tr><th>Command</th><th>Description</th></tr>
             <tr><td>Create Group</td><td>Create a new group with its own currency name and symbol</td></tr>
-            <tr><td>Join</td><td>Request to join an existing group (requires endorsement by members)</td></tr>
-            <tr><td>Candidates</td><td>View pending join requests for your group</td></tr>
-            <tr><td>Endorse</td><td>Vote to accept a candidate (>50% of members needed)</td></tr>
+            <tr><td>Sponsor</td><td>Create an invite link for a new candidate you want to sponsor</td></tr>
+            <tr><td>Candidates</td><td>View sponsored candidates awaiting endorsement</td></tr>
+            <tr><td>Endorse</td><td>Vote to accept a candidate (&gt;50% of members needed)</td></tr>
             <tr><td>Send</td><td>Transfer currency to another member (transaction fee applies)</td></tr>
             <tr><td>Balance</td><td>View your balance in the group's currency</td></tr>
             <tr><td>Vote</td><td>Vote on the transaction fee rate or daily income amount</td></tr>
@@ -604,11 +611,21 @@ async function init() {
         showAuth();
         return;
     }
+
+    // Check for invite token in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const inviteToken = urlParams.get('invite');
+    if (inviteToken) {
+        sessionStorage.setItem('fairshare_invite', inviteToken);
+        await showInviteBanner(inviteToken);
+    }
+
     try {
         const { data: { session } } = await db.auth.getSession();
         if (session) {
             currentUser = session.user;
             await loadProfile();
+            await handlePendingInvite(); // claim invite if one is stored
             showApp();
         } else {
             showAuth();
@@ -619,6 +636,7 @@ async function init() {
             if (event === 'SIGNED_IN' && session) {
                 currentUser = session.user;
                 await loadProfile();
+                await handlePendingInvite(); // claim invite after sign-in
                 showApp();
             } else if (event === 'SIGNED_OUT') {
                 currentUser = null;
@@ -631,6 +649,62 @@ async function init() {
         showToast('Connection error: ' + e.message, 'error');
         showAuth();
     }
+}
+
+// Show invite banner on the auth screen
+async function showInviteBanner(token) {
+    try {
+        const { data, error } = await db.rpc('get_sponsorship_by_token', { p_token: token });
+        if (error || data?.error) {
+            const msg = data?.error || error?.message || 'Invalid invitation';
+            document.getElementById('inviteBannerText').innerHTML =
+                `<strong>Invitation issue:</strong> ${esc(msg)}`;
+            document.getElementById('inviteBanner').classList.remove('hidden');
+            sessionStorage.removeItem('fairshare_invite');
+            return;
+        }
+
+        document.getElementById('inviteBannerText').innerHTML =
+            `<strong>${esc(data.sponsor_name)}</strong> is offering to sponsor your candidacy for ` +
+            `<strong>${esc(data.group_name)}</strong>.` +
+            (data.message ? `<br><em style="color:var(--dark-gray);">"${esc(data.message)}"</em>` : '') +
+            `<br><br>If you haven't yet created an account, start by making one.`;
+        document.getElementById('inviteBanner').classList.remove('hidden');
+
+        // Default to sign-up tab for new users arriving via invite
+        switchAuthTab('signup');
+    } catch (e) {
+        console.error('Failed to load invite details:', e);
+    }
+}
+
+// Claim a pending invite after the user has signed in
+async function handlePendingInvite() {
+    const token = sessionStorage.getItem('fairshare_invite');
+    if (!token) return;
+
+    try {
+        const { data, error } = await db.rpc('claim_sponsorship', { p_token: token });
+        if (error) {
+            showToast('Invite: ' + error.message, 'error');
+        } else if (data?.success) {
+            showToast(`You've been sponsored to join "${data.group_name}"! Awaiting group endorsement.`, 'success');
+        }
+    } catch (e) {
+        console.error('Failed to claim sponsorship:', e);
+    }
+
+    // Always clear the stored token (used or failed)
+    sessionStorage.removeItem('fairshare_invite');
+
+    // Clean the URL
+    if (window.location.search.includes('invite=')) {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+    }
+
+    // Hide the invite banner
+    document.getElementById('inviteBanner').classList.add('hidden');
 }
 
 // ============================================================
@@ -764,9 +838,17 @@ async function selectGroup(group, membership) {
         document.getElementById('balanceAmount').textContent = '--';
         document.getElementById('balanceCurrency').textContent = 'Awaiting endorsement';
         document.getElementById('groupInfoBar').innerHTML = '';
-        document.getElementById('detailPanel').classList.add('hidden');
+        document.getElementById('actionGrid').classList.add('hidden');
+        document.getElementById('detailPanel').classList.remove('hidden');
+        document.getElementById('detailTitle').textContent = 'Pending Membership';
+        document.getElementById('detailContent').innerHTML =
+            '<p style="color:var(--dark-gray);">Your candidacy is being reviewed by the group members. ' +
+            'You will gain access once enough members have endorsed you.</p>';
         return;
     }
+
+    // Show action buttons for active members
+    document.getElementById('actionGrid').classList.remove('hidden');
 
     // Show balance
     document.getElementById('balanceAmount').textContent =
@@ -899,6 +981,23 @@ async function loadCandidates() {
         if (e.endorser_id === currentUser.id) myEndorsements.add(e.candidate_id);
     });
 
+    // Get sponsorship info for each candidate (sponsor name + message)
+    const candidateIds = candidates.map(c => c.user_id);
+    const { data: sponsorships } = await db
+        .from('sponsorships')
+        .select('candidate_id, message, sponsor:profiles!sponsorships_sponsor_id_fkey(display_name)')
+        .eq('group_id', selectedGroup.id)
+        .eq('status', 'claimed')
+        .in('candidate_id', candidateIds);
+
+    const sponsorMap = {};
+    (sponsorships || []).forEach(s => {
+        sponsorMap[s.candidate_id] = {
+            sponsor_name: s.sponsor?.display_name || 'Unknown',
+            message: s.message
+        };
+    });
+
     const { count: activeCount } = await db
         .from('members')
         .select('*', { count: 'exact', head: true })
@@ -910,17 +1009,26 @@ async function loadCandidates() {
     document.getElementById('detailContent').innerHTML = candidates.map(c => {
         const endorsed = myEndorsements.has(c.user_id);
         const count = endorseMap[c.user_id] || 0;
-        return `<div class="member-item">
-            <div>
-                <span class="member-name">${esc(c.profiles?.display_name || 'Unknown')}</span>
-                <span style="font-size:0.8rem;color:var(--dark-gray);margin-left:0.5rem;">${count}/${threshold} endorsements</span>
+        const sponsorInfo = sponsorMap[c.user_id];
+        return `<div class="member-item" style="flex-direction:column;align-items:stretch;gap:0.5rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <span class="member-name">${esc(c.profiles?.display_name || 'Unknown')}</span>
+                    <span style="font-size:0.8rem;color:var(--dark-gray);margin-left:0.5rem;">${count}/${threshold} endorsements</span>
+                </div>
+                <div>
+                    ${endorsed
+                        ? `<button class="btn btn-danger btn-small" onclick="unendorse('${c.user_id}')">Unendorse</button>`
+                        : `<button class="btn btn-success btn-small" onclick="endorse('${c.user_id}')">Endorse</button>`
+                    }
+                </div>
             </div>
-            <div>
-                ${endorsed
-                    ? `<button class="btn btn-danger btn-small" onclick="unendorse('${c.user_id}')">Unendorse</button>`
-                    : `<button class="btn btn-success btn-small" onclick="endorse('${c.user_id}')">Endorse</button>`
-                }
-            </div>
+            ${sponsorInfo ? `
+                <div style="font-size:0.8rem;color:var(--dark-gray);padding-left:0.5rem;border-left:3px solid var(--medium-gray);">
+                    Sponsored by <strong>${esc(sponsorInfo.sponsor_name)}</strong>
+                    ${sponsorInfo.message ? `<br><em>"${esc(sponsorInfo.message)}"</em>` : ''}
+                </div>
+            ` : ''}
         </div>`;
     }).join('');
 }
@@ -1073,21 +1181,6 @@ function showModal(type) {
             `;
             break;
 
-        case 'joinGroup':
-            body.innerHTML = `
-                <h3>Join a Group</h3>
-                <div class="form-group">
-                    <label>Search by name</label>
-                    <input type="text" id="joinSearch" placeholder="Type a group name..." oninput="searchGroups(this.value)">
-                </div>
-                <div id="joinResults" style="max-height:250px;overflow-y:auto;"></div>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                </div>
-            `;
-            searchGroups('');
-            break;
-
         case 'send':
             loadSendModal();
             break;
@@ -1116,6 +1209,28 @@ function showModal(type) {
                         <button type="submit" class="btn btn-primary">Submit Vote</button>
                     </div>
                 </form>
+            `;
+            break;
+
+        case 'sponsor':
+            body.innerHTML = `
+                <h3>Sponsor a New Member</h3>
+                <div id="sponsorFormArea">
+                    <form onsubmit="createSponsorship(event)">
+                        <div class="form-group">
+                            <label>Describe the person you'd like to sponsor</label>
+                            <textarea id="sponsorMessage" rows="3" placeholder="e.g. Jane Smith, my colleague who wants to participate in our group"></textarea>
+                        </div>
+                        <p style="font-size:0.8rem;color:var(--dark-gray);margin-top:0.5rem;">
+                            This will generate a unique invite link you can share with the candidate.
+                            The link expires in 7 days.
+                        </p>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Create Invite Link</button>
+                        </div>
+                    </form>
+                </div>
             `;
             break;
     }
@@ -1167,51 +1282,59 @@ async function createGroup(e) {
 }
 
 // ============================================================
-// JOIN GROUP
+// SPONSOR
 // ============================================================
-async function searchGroups(query) {
-    let q = db.from('groups').select('*').order('name');
-    if (query.trim()) {
-        q = q.ilike('name', `%${query.trim()}%`);
-    }
-    const { data, error } = await q.limit(20);
+async function createSponsorship(e) {
+    e.preventDefault();
+    if (!selectedGroup) return;
 
-    const resultsEl = document.getElementById('joinResults');
-    if (error || !data || data.length === 0) {
-        resultsEl.innerHTML = '<p style="color:var(--dark-gray);padding:0.5rem;">No groups found.</p>';
-        return;
-    }
+    const message = document.getElementById('sponsorMessage').value.trim() || null;
 
-    // Filter out groups user is already in
-    const myGroupIds = new Set(myGroups.map(m => m.group_id));
-
-    resultsEl.innerHTML = data.map(g => {
-        const alreadyIn = myGroupIds.has(g.id);
-        return `<div class="member-item" style="padding:0.8rem 0;">
-            <div>
-                <span class="member-name">${esc(g.name)}</span>
-                <div style="font-size:0.8rem;color:var(--dark-gray);">${esc(g.currency_name)} (${esc(g.currency_symbol)})</div>
-            </div>
-            ${alreadyIn
-                ? '<span style="font-size:0.8rem;color:var(--dark-gray);">Already joined</span>'
-                : `<button class="btn btn-primary btn-small" onclick="requestJoin('${g.id}', '${esc(g.name)}')">Request to Join</button>`
-            }
-        </div>`;
-    }).join('');
-}
-
-async function requestJoin(groupId, groupName) {
-    const { error } = await db.from('members').insert({
-        group_id: groupId,
-        user_id: currentUser.id,
-        status: 'pending',
-        balance: 0
-    });
+    const { data, error } = await db
+        .from('sponsorships')
+        .insert({
+            group_id: selectedGroup.id,
+            sponsor_id: currentUser.id,
+            message: message
+        })
+        .select('token')
+        .single();
 
     if (error) { showToast(error.message, 'error'); return; }
-    showToast(`Join request sent to "${groupName}"`, 'success');
-    closeModal();
-    await loadMyGroups();
+
+    // Build the invite URL
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${data.token}`;
+
+    // Replace the form with the generated link
+    document.getElementById('sponsorFormArea').innerHTML = `
+        <p style="margin-bottom:1rem;color:var(--dark-gray);">
+            Share this invite link with the person you'd like to sponsor.
+            It will expire in 7 days.
+        </p>
+        <div class="form-group">
+            <label>Invite Link</label>
+            <div style="display:flex;gap:0.5rem;">
+                <input type="text" id="inviteLinkField" value="${esc(inviteUrl)}" readonly
+                    style="flex:1;background:var(--light-gray);cursor:text;">
+                <button type="button" class="btn btn-primary" onclick="copyInviteLink()">Copy</button>
+            </div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Done</button>
+        </div>
+    `;
+}
+
+function copyInviteLink() {
+    const field = document.getElementById('inviteLinkField');
+    field.select();
+    navigator.clipboard.writeText(field.value).then(() => {
+        showToast('Invite link copied to clipboard!', 'success');
+    }).catch(() => {
+        // Fallback for older browsers
+        document.execCommand('copy');
+        showToast('Invite link copied!', 'success');
+    });
 }
 
 // ============================================================

@@ -350,35 +350,6 @@
         .empty-state h3 { color: var(--accent-color); margin-bottom: 0.5rem; }
         .empty-state p { margin-bottom: 1.5rem; }
 
-        /* Command reference */
-        .command-ref {
-            max-width: 700px;
-            margin: 3rem auto 0;
-        }
-        .command-ref h3 {
-            text-align: center;
-            color: var(--accent-color);
-            margin-bottom: 1rem;
-        }
-        .command-ref table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .command-ref th, .command-ref td {
-            padding: 0.6rem 1rem;
-            text-align: left;
-            border-bottom: 1px solid var(--medium-gray);
-        }
-        .command-ref th {
-            background: var(--accent-color);
-            color: var(--white);
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .command-ref td:first-child { font-weight: 600; color: var(--primary-color); }
-        .command-ref td { font-size: 0.9rem; }
-
         /* Notification toast */
         .toast {
             position: fixed;
@@ -624,11 +595,9 @@
 
             <!-- Group view (hidden until group selected) -->
             <div id="groupView" class="hidden">
-                <!-- Balance -->
+                <!-- Group name header -->
                 <div class="card balance-card">
-                    <h3>Your Balance</h3>
-                    <div class="balance-amount" id="balanceAmount">0</div>
-                    <div class="balance-currency" id="balanceCurrency"></div>
+                    <div class="balance-amount" id="groupNameDisplay"></div>
                 </div>
 
                 <!-- Info bar -->
@@ -668,9 +637,9 @@
                     </button>
                 </div>
 
-                <!-- Detail panel (transactions, members, candidates, stats) -->
+                <!-- Detail panel (members, candidates, constitution, stats) -->
                 <div class="card" id="detailPanel">
-                    <h3 id="detailTitle">Recent Transactions</h3>
+                    <h3 id="detailTitle"></h3>
                     <div id="detailContent">
                         <!-- Populated dynamically -->
                     </div>
@@ -683,27 +652,18 @@
                         <!-- Populated dynamically -->
                     </div>
                 </div>
+
+                <!-- Recent transactions (below activity) -->
+                <div class="card" id="transactionsPanel">
+                    <h3>Recent Transactions</h3>
+                    <div id="transactionsContent">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Command Reference -->
-    <div class="command-ref">
-        <h3>Command Reference</h3>
-        <table>
-            <tr><th>Command</th><th>Description</th></tr>
-            <tr><td>Create Group</td><td>Create a new group with its own currency name and symbol</td></tr>
-            <tr><td>Sponsor</td><td>Create an invite link for a new candidate you want to sponsor</td></tr>
-            <tr><td>Candidates</td><td>View sponsored candidates awaiting endorsement</td></tr>
-            <tr><td>Endorse</td><td>Vote to accept a candidate (&gt;50% of members needed)</td></tr>
-            <tr><td>Send</td><td>Transfer currency to another member (transaction fee applies)</td></tr>
-            <tr><td>Balance</td><td>View your balance in the group's currency</td></tr>
-            <tr><td>Vote</td><td>Vote on the transaction fee rate or daily income — applied automatically when enough members vote</td></tr>
-            <tr><td>Rates</td><td>View current fee rate and daily income</td></tr>
-            <tr><td>Constitution</td><td>View group constitution, propose amendments, vote on changes</td></tr>
-            <tr><td>Stats</td><td>View group statistics (member count, total supply, etc.)</td></tr>
-        </table>
-    </div>
 </div>
 
 <!-- ===== MODAL CONTAINER ===== -->
@@ -979,8 +939,7 @@ async function selectGroup(group, membership) {
     subscribeToGroup(group.id);
 
     if (membership.status === 'pending') {
-        document.getElementById('balanceAmount').textContent = '--';
-        document.getElementById('balanceCurrency').textContent = 'Awaiting endorsement';
+        document.getElementById('groupNameDisplay').textContent = group.name;
         document.getElementById('groupInfoBar').innerHTML = '';
         document.getElementById('actionGrid').classList.add('hidden');
         document.getElementById('detailPanel').classList.remove('hidden');
@@ -989,16 +948,15 @@ async function selectGroup(group, membership) {
             '<p style="color:var(--dark-gray);">Your candidacy is being reviewed by the group members. ' +
             'You will gain access once enough members have endorsed you.</p>';
         document.getElementById('activityLog').classList.add('hidden');
+        document.getElementById('transactionsPanel').classList.add('hidden');
         return;
     }
 
     // Show action buttons for active members
     document.getElementById('actionGrid').classList.remove('hidden');
 
-    // Show balance
-    document.getElementById('balanceAmount').textContent =
-        group.currency_symbol + ' ' + Number(membership.balance).toFixed(2) + ' ' + group.currency_name;
-    document.getElementById('balanceCurrency').textContent = '';
+    // Show group name at top
+    document.getElementById('groupNameDisplay').textContent = group.name;
 
     // Info bar — also fetch user's pending votes
     const [{ count: memberCount }, { data: myVotes }] = await Promise.all([
@@ -1010,8 +968,13 @@ async function selectGroup(group, membership) {
 
     const myFeeVote = myVotes?.find(v => v.vote_type === 'fee_rate');
     const myIncomeVote = myVotes?.find(v => v.vote_type === 'daily_income');
+    const balanceDisplay = `${group.currency_symbol} ${Number(membership.balance).toFixed(2)} ${esc(group.currency_name)}`;
 
     document.getElementById('groupInfoBar').innerHTML = `
+        <div class="info-item">
+            <div class="info-label">Your Balance</div>
+            <div class="info-value" id="balanceAmount">${balanceDisplay}</div>
+        </div>
         <div class="info-item">
             <div class="info-label">Members</div>
             <div class="info-value">${memberCount || 0}</div>
@@ -1030,6 +993,7 @@ async function selectGroup(group, membership) {
 
     document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('activityLog').classList.remove('hidden');
+    document.getElementById('transactionsPanel').classList.remove('hidden');
 
     // Claim daily income if 24h+ since last claim
     if (membership.status === 'active' && Number(group.daily_income) > 0) {
@@ -1038,8 +1002,9 @@ async function selectGroup(group, membership) {
             if (incomeResult?.claimed) {
                 // Update the displayed balance immediately
                 membership.balance = Number(membership.balance) + Number(incomeResult.amount);
-                document.getElementById('balanceAmount').textContent =
-                    `${group.currency_symbol} ${Number(incomeResult.new_balance).toFixed(2)}`;
+                const balEl = document.getElementById('balanceAmount');
+                if (balEl) balEl.textContent =
+                    `${group.currency_symbol} ${Number(incomeResult.new_balance).toFixed(2)} ${group.currency_name}`;
                 showToast(`Daily income: +${group.currency_symbol} ${Number(incomeResult.amount).toFixed(2)} ${group.currency_name}`, 'success');
             }
         } catch (e) {
@@ -1060,12 +1025,17 @@ function showEmptyState() {
     }
 }
 
+function hideGroupPanels() {
+    document.getElementById('detailPanel').classList.add('hidden');
+    document.getElementById('activityLog').classList.add('hidden');
+    document.getElementById('transactionsPanel').classList.add('hidden');
+}
+
 // ============================================================
 // TRANSACTIONS
 // ============================================================
 async function loadTransactions() {
     if (!selectedGroup) return;
-    document.getElementById('detailTitle').textContent = 'Recent Transactions';
 
     const { data, error } = await db
         .from('transactions')
@@ -1074,12 +1044,13 @@ async function loadTransactions() {
         .order('created_at', { ascending: false })
         .limit(20);
 
+    const txEl = document.getElementById('transactionsContent');
     if (error || !data || data.length === 0) {
-        document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">No transactions yet.</p>';
+        txEl.innerHTML = '<p style="color:var(--dark-gray);">No transactions yet.</p>';
         return;
     }
 
-    document.getElementById('detailContent').innerHTML = `<ul class="tx-list">
+    txEl.innerHTML = `<ul class="tx-list">
         ${data.map(tx => {
             const isMinted = tx.from_user === null;
             const isSender = !isMinted && tx.from_user === currentUser.id;
@@ -1275,14 +1246,35 @@ async function loadStats() {
         .eq('group_id', selectedGroup.id)
         .eq('status', 'pending');
 
+    // 30-day fee sum (fees from person-to-person transactions)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+    const { data: recentTx } = await db
+        .from('transactions')
+        .select('fee, amount, from_user')
+        .eq('group_id', selectedGroup.id)
+        .gte('created_at', thirtyDaysAgo);
+
+    const fees30 = (recentTx || [])
+        .filter(tx => tx.from_user !== null)
+        .reduce((sum, tx) => sum + Number(tx.fee), 0);
+
+    const income30 = (recentTx || [])
+        .filter(tx => tx.from_user === null)
+        .reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+    const sym = selectedGroup.currency_symbol;
+    const cur = esc(selectedGroup.currency_name);
+
     document.getElementById('detailContent').innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
             <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
-            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${selectedGroup.currency_symbol} ${totalSupply.toFixed(2)} ${esc(selectedGroup.currency_name)}</div></div>
+            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${sym} ${totalSupply.toFixed(2)} ${cur}</div></div>
             <div class="info-item"><div class="info-label">Total Transactions</div><div class="info-value">${txCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Fee Rate</div><div class="info-value">${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%</div></div>
-            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)} ${esc(selectedGroup.currency_name)}</div></div>
+            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${sym} ${Number(selectedGroup.daily_income).toFixed(2)} ${cur}</div></div>
+            <div class="info-item"><div class="info-label">30 Day Fees</div><div class="info-value">${sym} ${fees30.toFixed(2)} ${cur}</div></div>
+            <div class="info-item"><div class="info-label">30 Day Income</div><div class="info-value">${sym} ${income30.toFixed(2)} ${cur}</div></div>
         </div>
     `;
 }
@@ -2015,22 +2007,24 @@ async function handleGroupEvent(event) {
     // Don't toast events we triggered ourselves
     const isMine = event.actor_id === currentUser?.id;
 
-    // Prepend to the activity log UI
-    const logEl = document.getElementById('activityContent');
-    if (logEl) {
-        const itemHtml = renderActivityItem(event, true);
-        logEl.insertAdjacentHTML('afterbegin', itemHtml);
-
-        // Trim to 20 items
-        const items = logEl.querySelectorAll('.activity-item');
-        if (items.length > 20) {
-            for (let i = 20; i < items.length; i++) items[i].remove();
-        }
-    }
-
     // Show toast to other members (not the actor)
     if (!isMine) {
         showToast(event.summary, 'info');
+    }
+
+    // Prepend to the activity log UI (skip transactions — they have their own panel)
+    if (event.event_type !== 'payment_received') {
+        const logEl = document.getElementById('activityContent');
+        if (logEl) {
+            const itemHtml = renderActivityItem(event, true);
+            logEl.insertAdjacentHTML('afterbegin', itemHtml);
+
+            // Trim to 20 items
+            const items = logEl.querySelectorAll('.activity-item');
+            if (items.length > 20) {
+                for (let i = 20; i < items.length; i++) items[i].remove();
+            }
+        }
     }
 
     // Refresh relevant UI based on event type
@@ -2069,9 +2063,8 @@ async function handleGroupEvent(event) {
                             `${selectedGroup.currency_symbol} ${Number(myMember.balance).toFixed(2)}`;
                     }
                 }
-                // Refresh transactions list if visible
-                const detailTitle = document.getElementById('detailTitle')?.textContent;
-                if (detailTitle === 'Recent Transactions') await loadTransactions();
+                // Refresh transactions list
+                await loadTransactions();
             }
             break;
         }
@@ -2105,6 +2098,7 @@ async function loadActivityLog() {
         .from('group_events')
         .select('*')
         .eq('group_id', selectedGroup.id)
+        .neq('event_type', 'payment_received')
         .order('created_at', { ascending: false })
         .limit(20);
 

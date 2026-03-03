@@ -313,6 +313,7 @@
         }
         .member-status.active { background: #d4edda; color: #155724; }
         .member-status.pending { background: #fff3cd; color: #856404; }
+        .member-sponsor { font-size: 0.8rem; color: var(--dark-gray); font-style: italic; }
 
         /* Modal overlay */
         .modal-overlay {
@@ -1025,7 +1026,16 @@ async function selectGroup(group, membership) {
         }
     }
 
-    await Promise.all([loadTransactions(), loadActivityLog()]);
+    // Refresh the detail panel if it's showing group-specific content
+    const currentDetail = document.getElementById('detailTitle')?.textContent;
+    const detailRefresh =
+        currentDetail === 'Members' ? loadMembers() :
+        currentDetail === 'Candidates Awaiting Endorsement' ? loadCandidates() :
+        currentDetail === 'Group Statistics' ? loadStats() :
+        currentDetail === 'Constitution' ? loadConstitution() :
+        Promise.resolve();
+
+    await Promise.all([loadTransactions(), loadActivityLog(), detailRefresh]);
 }
 
 function showEmptyState() {
@@ -1090,24 +1100,38 @@ async function loadMembers() {
     if (!selectedGroup) return;
     document.getElementById('detailTitle').textContent = 'Members';
 
-    const { data, error } = await db
-        .from('members')
-        .select('*, profiles(display_name)')
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'active')
-        .order('joined_at', { ascending: true });
+    const [{ data, error }, { data: sponsorships }] = await Promise.all([
+        db.from('members')
+            .select('*, profiles(display_name)')
+            .eq('group_id', selectedGroup.id)
+            .eq('status', 'active')
+            .order('joined_at', { ascending: true }),
+        db.from('sponsorships')
+            .select('candidate_id, sponsor:profiles!sponsorships_sponsor_id_fkey(display_name)')
+            .eq('group_id', selectedGroup.id)
+            .eq('status', 'claimed')
+    ]);
 
     if (error || !data) {
         document.getElementById('detailContent').innerHTML = '<p>Failed to load members.</p>';
         return;
     }
 
-    document.getElementById('detailContent').innerHTML = data.map(m => `
-        <div class="member-item">
+    // Build a map of candidate_id → sponsor name
+    const sponsorMap = {};
+    (sponsorships || []).forEach(s => {
+        if (s.candidate_id) sponsorMap[s.candidate_id] = s.sponsor?.display_name || null;
+    });
+
+    document.getElementById('detailContent').innerHTML = data.map(m => {
+        const sponsor = sponsorMap[m.user_id];
+        const isCreator = m.user_id === selectedGroup.created_by;
+        const sponsorLabel = isCreator ? 'founder' : (sponsor ? `sponsored by ${esc(sponsor)}` : '');
+        return `<div class="member-item">
             <span class="member-name">${esc(m.profiles?.display_name || 'Unknown')}</span>
-            <span class="member-status active">active</span>
-        </div>
-    `).join('');
+            ${sponsorLabel ? `<span class="member-sponsor">${sponsorLabel}</span>` : ''}
+        </div>`;
+    }).join('');
 }
 
 // ============================================================

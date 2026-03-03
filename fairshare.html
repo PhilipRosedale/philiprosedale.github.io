@@ -235,18 +235,57 @@
         }
         .balance-currency { font-size: 0.9rem; opacity: 0.8; }
 
-        /* Group info bar */
+        /* Tab bar */
+        .tab-bar {
+            display: flex;
+            margin-bottom: 0;
+            border-bottom: 2px solid var(--medium-gray);
+            background: var(--white);
+            border-radius: 8px 8px 0 0;
+            box-shadow: var(--shadow);
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 0.8rem 1rem;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--dark-gray);
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+        }
+        .tab-btn:hover { color: var(--primary-color); background: #f0f7fb; }
+        .tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+        .tab-btn .tab-icon { font-size: 1.1rem; }
+
+        /* Tab content card (attached to tab bar, no top radius) */
+        .tab-content-card {
+            background: var(--white);
+            border-radius: 0 0 8px 8px;
+            box-shadow: var(--shadow);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Group info bar (used inside money tab) */
         .group-info-bar {
             display: flex;
             gap: 1.5rem;
             flex-wrap: wrap;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
         }
         .info-item {
-            background: var(--white);
+            background: var(--light-gray);
             padding: 0.8rem 1.2rem;
             border-radius: 8px;
-            box-shadow: var(--shadow);
             text-align: center;
             min-width: 120px;
         }
@@ -258,31 +297,6 @@
             margin-top: 3px; text-decoration: underline; font-weight: 600;
         }
         .info-item .info-vote-link:hover { color: var(--primary-color); }
-
-        /* Action grid */
-        .action-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 0.8rem;
-            margin-bottom: 1.5rem;
-        }
-        .action-btn {
-            padding: 1rem;
-            background: var(--white);
-            border: 2px solid var(--medium-gray);
-            border-radius: 8px;
-            cursor: pointer;
-            text-align: center;
-            transition: var(--transition);
-            font-family: inherit;
-        }
-        .action-btn:hover {
-            border-color: var(--primary-color);
-            background: #f0f7fb;
-            transform: translateY(-2px);
-        }
-        .action-btn .action-icon { font-size: 1.5rem; margin-bottom: 0.3rem; }
-        .action-btn .action-label { font-size: 0.8rem; font-weight: 600; color: var(--accent-color); }
 
         /* Transaction list */
         .tx-list { list-style: none; }
@@ -384,7 +398,7 @@
             .app-layout { flex-direction: column; }
             .main-content { padding: 1rem; }
             .balance-amount { font-size: 2rem; }
-            .action-grid { grid-template-columns: repeat(3, 1fr); }
+            .tab-btn { font-size: 0.8rem; padding: 0.6rem 0.5rem; }
         }
 
         /* Constitution / Diff styles */
@@ -606,59 +620,28 @@
                     <div class="balance-amount" id="groupNameDisplay"></div>
                 </div>
 
-                <!-- Info bar -->
-                <div class="group-info-bar" id="groupInfoBar">
-                    <!-- Populated dynamically -->
-                </div>
-
-                <!-- Actions -->
-                <div class="action-grid" id="actionGrid">
-                    <button class="action-btn" onclick="showModal('send')">
-                        <div class="action-icon">&#10132;</div>
-                        <div class="action-label">Send</div>
+                <!-- Tab bar -->
+                <div class="tab-bar" id="tabBar">
+                    <button class="tab-btn active" data-tab="money" onclick="switchTab('money')">
+                        <span class="tab-icon">💲</span> Money
                     </button>
-                    <button class="action-btn" onclick="showModal('sponsor')">
-                        <div class="action-icon" style="font-weight:bold;font-size:2rem;line-height:1;">+</div>
-                        <div class="action-label">Sponsor</div>
+                    <button class="tab-btn" data-tab="members" onclick="switchTab('members')">
+                        <span class="tab-icon">👥</span> Members
                     </button>
-                    <button class="action-btn" onclick="loadCandidates()">
-                        <div class="action-icon">&#128101;</div>
-                        <div class="action-label">Candidates</div>
-                    </button>
-                    <button class="action-btn" onclick="loadMembers()">
-                        <div class="action-icon">&#128100;</div>
-                        <div class="action-label">Members</div>
-                    </button>
-                    <button class="action-btn" onclick="loadConstitution()">
-                        <div class="action-icon">&#128220;</div>
-                        <div class="action-label">Constitution</div>
-                    </button>
-                    <button class="action-btn" onclick="loadStats()">
-                        <div class="action-icon">&#128202;</div>
-                        <div class="action-label">Stats</div>
+                    <button class="tab-btn" data-tab="constitution" onclick="switchTab('constitution')">
+                        <span class="tab-icon">📜</span> Constitution
                     </button>
                 </div>
 
-                <!-- Detail panel (members, candidates, constitution, stats) — hidden until user opens one -->
-                <div class="card hidden" id="detailPanel">
-                    <h3 id="detailTitle"></h3>
-                    <div id="detailContent">
-                        <!-- Populated dynamically -->
-                    </div>
+                <!-- Tab content -->
+                <div class="tab-content-card" id="tabContent">
+                    <!-- Populated dynamically per active tab -->
                 </div>
 
-                <!-- Activity log (realtime group events) -->
+                <!-- Activity log (always visible below tabs) -->
                 <div class="card" id="activityLog">
                     <h3>Activity</h3>
                     <div id="activityContent">
-                        <!-- Populated dynamically -->
-                    </div>
-                </div>
-
-                <!-- Recent transactions (below activity) -->
-                <div class="card" id="transactionsPanel">
-                    <h3>Recent Transactions</h3>
-                    <div id="transactionsContent">
                         <!-- Populated dynamically -->
                     </div>
                 </div>
@@ -700,6 +683,7 @@ let currentProfile = null;
 let selectedGroup = null;
 let myGroups = [];
 let groupChannel = null; // Supabase Realtime channel for current group
+let activeTab = 'money'; // Current tab: 'money', 'members', 'constitution'
 
 // ============================================================
 // INIT
@@ -984,82 +968,29 @@ async function selectGroup(group, membership) {
     // Subscribe to realtime events for this group
     subscribeToGroup(group.id);
 
-    if (membership.status === 'pending') {
-        document.getElementById('groupNameDisplay').textContent = group.name;
-        document.getElementById('groupInfoBar').innerHTML = '';
-        document.getElementById('actionGrid').classList.add('hidden');
-        document.getElementById('detailPanel').classList.remove('hidden');
-        document.getElementById('detailTitle').textContent = 'Pending Membership';
-        document.getElementById('detailContent').innerHTML =
-            '<p style="color:var(--dark-gray);">Your candidacy is being reviewed by the group members. ' +
-            'You will gain access once enough members have endorsed you.</p>';
-        document.getElementById('activityLog').classList.add('hidden');
-        document.getElementById('transactionsPanel').classList.add('hidden');
-        return;
-    }
-
-    // Show action buttons for active members
-    document.getElementById('actionGrid').classList.remove('hidden');
-
     // Show group name at top
     document.getElementById('groupNameDisplay').textContent = group.name;
 
-    // Info bar — also fetch user's pending votes
-    const [{ count: memberCount }, { data: myVotes }] = await Promise.all([
-        db.from('members').select('*', { count: 'exact', head: true })
-            .eq('group_id', group.id).eq('status', 'active'),
-        db.from('votes').select('vote_type, value')
-            .eq('group_id', group.id).eq('user_id', currentUser.id)
-    ]);
-
-    const myFeeVote = myVotes?.find(v => v.vote_type === 'fee_rate');
-    const myIncomeVote = myVotes?.find(v => v.vote_type === 'daily_income');
-    const balanceDisplay = `${group.currency_symbol} ${Number(membership.balance).toFixed(2)}`;
-
-    document.getElementById('groupInfoBar').innerHTML = `
-        <div class="info-item">
-            <div class="info-label">Your Balance</div>
-            <div class="info-value" id="balanceAmount">${balanceDisplay}</div>
-        </div>
-        <div class="info-item">
-            <div class="info-label">Members</div>
-            <div class="info-value">${memberCount || 0}</div>
-        </div>
-        <div class="info-item">
-            <div class="info-label">Fee Rate</div>
-            <div class="info-value">${(Number(group.fee_rate) * 100).toFixed(1)}%</div>
-            ${myFeeVote
-                ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('fee_rate')">Your vote: ${(Number(myFeeVote.value) * 100).toFixed(1)}%</div>`
-                : `<div class="info-vote-link" onclick="showVoteDialog('fee_rate')">vote</div>`}
-        </div>
-        <div class="info-item">
-            <div class="info-label">Daily Income</div>
-            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)}</div>
-            ${myIncomeVote
-                ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('daily_income')">Your vote: ${group.currency_symbol} ${Number(myIncomeVote.value).toFixed(2)}</div>`
-                : `<div class="info-vote-link" onclick="showVoteDialog('daily_income')">vote</div>`}
-        </div>
-    `;
-
-    document.getElementById('activityLog').classList.remove('hidden');
-    document.getElementById('transactionsPanel').classList.remove('hidden');
-
-    // Only show the detail panel if it was already displaying something for this session;
-    // otherwise keep it hidden until the user clicks Members / Candidates / Constitution / Stats.
-    const currentDetail = document.getElementById('detailTitle')?.textContent;
-    const hasOpenDetail = ['Members', 'Candidates Awaiting Endorsement', 'Group Statistics', 'Constitution'].includes(currentDetail);
-    if (!hasOpenDetail) {
-        document.getElementById('detailPanel').classList.add('hidden');
-        document.getElementById('detailTitle').textContent = '';
-        document.getElementById('detailContent').innerHTML = '';
+    if (membership.status === 'pending') {
+        document.getElementById('tabBar').classList.add('hidden');
+        document.getElementById('tabContent').innerHTML =
+            '<p style="color:var(--dark-gray);padding:1rem;">Your candidacy is being reviewed by the group members. ' +
+            'You will gain access once enough members have endorsed you.</p>';
+        document.getElementById('activityLog').classList.add('hidden');
+        return;
     }
+
+    document.getElementById('tabBar').classList.remove('hidden');
+    document.getElementById('activityLog').classList.remove('hidden');
+
+    // Render current tab
+    await switchTab(activeTab);
 
     // Claim daily income if 24h+ since last claim
     if (membership.status === 'active' && Number(group.daily_income) > 0) {
         try {
             const { data: incomeResult } = await db.rpc('claim_daily_income', { p_group_id: group.id });
             if (incomeResult?.claimed) {
-                // Update the displayed balance immediately
                 membership.balance = Number(membership.balance) + Number(incomeResult.amount);
                 const balEl = document.getElementById('balanceAmount');
                 if (balEl) balEl.textContent =
@@ -1071,16 +1002,7 @@ async function selectGroup(group, membership) {
         }
     }
 
-    // Refresh the detail panel if it was already open with group-specific content
-    const detailRefresh = hasOpenDetail ? (
-        currentDetail === 'Members' ? loadMembers() :
-        currentDetail === 'Candidates Awaiting Endorsement' ? loadCandidates() :
-        currentDetail === 'Group Statistics' ? loadStats() :
-        currentDetail === 'Constitution' ? loadConstitution() :
-        Promise.resolve()
-    ) : Promise.resolve();
-
-    await Promise.all([loadTransactions(), loadActivityLog(), detailRefresh]);
+    await loadActivityLog();
 }
 
 function showEmptyState() {
@@ -1094,9 +1016,96 @@ function showEmptyState() {
 }
 
 function hideGroupPanels() {
-    document.getElementById('detailPanel').classList.add('hidden');
     document.getElementById('activityLog').classList.add('hidden');
-    document.getElementById('transactionsPanel').classList.add('hidden');
+}
+
+// ============================================================
+// TAB MANAGEMENT
+// ============================================================
+async function switchTab(tabName) {
+    activeTab = tabName;
+    document.querySelectorAll('.tab-btn').forEach(btn =>
+        btn.classList.toggle('active', btn.dataset.tab === tabName));
+
+    switch (tabName) {
+        case 'money': await renderMoneyTab(); break;
+        case 'members': await renderMembersTab(); break;
+        case 'constitution': await renderConstitutionTab(); break;
+    }
+}
+
+async function renderMoneyTab() {
+    if (!selectedGroup) return;
+    const membership = myGroups.find(m => m.group_id === selectedGroup.id);
+    if (!membership) return;
+    const content = document.getElementById('tabContent');
+
+    // Fetch user's pending votes
+    const { data: myVotes } = await db.from('votes').select('vote_type, value')
+        .eq('group_id', selectedGroup.id).eq('user_id', currentUser.id);
+
+    const myFeeVote = myVotes?.find(v => v.vote_type === 'fee_rate');
+    const myIncomeVote = myVotes?.find(v => v.vote_type === 'daily_income');
+    const balanceDisplay = `${selectedGroup.currency_symbol} ${Number(membership.balance).toFixed(2)}`;
+
+    content.innerHTML = `
+        <div class="group-info-bar">
+            <div class="info-item">
+                <div class="info-label">Your Balance</div>
+                <div class="info-value" id="balanceAmount">${balanceDisplay}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Fee Rate</div>
+                <div class="info-value">${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%</div>
+                ${myFeeVote
+                    ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('fee_rate')">Your vote: ${(Number(myFeeVote.value) * 100).toFixed(1)}%</div>`
+                    : `<div class="info-vote-link" onclick="showVoteDialog('fee_rate')">vote</div>`}
+            </div>
+            <div class="info-item">
+                <div class="info-label">Daily Income</div>
+                <div class="info-value">${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)}</div>
+                ${myIncomeVote
+                    ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('daily_income')">Your vote: ${selectedGroup.currency_symbol} ${Number(myIncomeVote.value).toFixed(2)}</div>`
+                    : `<div class="info-vote-link" onclick="showVoteDialog('daily_income')">vote</div>`}
+            </div>
+        </div>
+        <div style="margin-bottom:1.2rem;">
+            <button class="btn btn-primary" onclick="showModal('send')">&#10132; Send ${esc(selectedGroup.currency_symbol)}</button>
+        </div>
+        <h4 style="color:var(--accent-color);margin-bottom:0.5rem;">Recent Transactions</h4>
+        <div id="transactionsContent"><p style="color:var(--dark-gray);">Loading…</p></div>
+    `;
+
+    await loadTransactions();
+}
+
+async function renderMembersTab() {
+    if (!selectedGroup) return;
+    const content = document.getElementById('tabContent');
+    content.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+            <span id="memberCountDisplay" style="font-size:0.9rem;color:var(--dark-gray);">Loading…</span>
+            <button class="btn btn-primary btn-small" onclick="showModal('sponsor')">+ Sponsor</button>
+        </div>
+        <h4 style="color:var(--accent-color);margin-bottom:0.5rem;">Members</h4>
+        <div id="membersListContent"><p style="color:var(--dark-gray);">Loading…</p></div>
+        <h4 style="color:var(--accent-color);margin:1.5rem 0 0.5rem;">Candidates Awaiting Endorsement</h4>
+        <div id="candidatesContent"><p style="color:var(--dark-gray);">Loading…</p></div>
+    `;
+
+    await Promise.all([loadMembersList(), loadCandidatesList()]);
+}
+
+async function renderConstitutionTab() {
+    if (!selectedGroup) return;
+    const content = document.getElementById('tabContent');
+    content.innerHTML = `
+        <div id="constitutionContent"><p style="color:var(--dark-gray);">Loading…</p></div>
+        <h4 style="color:var(--accent-color);margin:1.5rem 0 0.5rem;">Group Statistics</h4>
+        <div id="statsContent"><p style="color:var(--dark-gray);">Loading…</p></div>
+    `;
+
+    await Promise.all([loadConstitutionContent(), loadStatsContent()]);
 }
 
 // ============================================================
@@ -1113,6 +1122,7 @@ async function loadTransactions() {
         .limit(20);
 
     const txEl = document.getElementById('transactionsContent');
+    if (!txEl) return;
     if (error || !data || data.length === 0) {
         txEl.innerHTML = '<p style="color:var(--dark-gray);">No transactions yet.</p>';
         return;
@@ -1141,10 +1151,10 @@ async function loadTransactions() {
 // ============================================================
 // MEMBERS
 // ============================================================
-async function loadMembers() {
+async function loadMembersList() {
     if (!selectedGroup) return;
-    document.getElementById('detailPanel').classList.remove('hidden');
-    document.getElementById('detailTitle').textContent = 'Members';
+    const el = document.getElementById('membersListContent');
+    if (!el) return;
 
     const [{ data, error }, { data: sponsorships }] = await Promise.all([
         db.from('members')
@@ -1159,9 +1169,13 @@ async function loadMembers() {
     ]);
 
     if (error || !data) {
-        document.getElementById('detailContent').innerHTML = '<p>Failed to load members.</p>';
+        el.innerHTML = '<p>Failed to load members.</p>';
         return;
     }
+
+    // Update member count display
+    const countEl = document.getElementById('memberCountDisplay');
+    if (countEl) countEl.textContent = `${data.length} active member${data.length === 1 ? '' : 's'}`;
 
     // Build a map of candidate_id → sponsor name
     const sponsorMap = {};
@@ -1169,7 +1183,7 @@ async function loadMembers() {
         if (s.candidate_id) sponsorMap[s.candidate_id] = s.sponsor?.display_name || null;
     });
 
-    document.getElementById('detailContent').innerHTML = data.map(m => {
+    el.innerHTML = data.map(m => {
         const sponsor = sponsorMap[m.user_id];
         const isCreator = m.user_id === selectedGroup.created_by;
         const sponsorLabel = isCreator ? 'founder' : (sponsor ? `sponsored by ${esc(sponsor)}` : '');
@@ -1183,10 +1197,10 @@ async function loadMembers() {
 // ============================================================
 // CANDIDATES (Endorsement)
 // ============================================================
-async function loadCandidates() {
+async function loadCandidatesList() {
     if (!selectedGroup) return;
-    document.getElementById('detailPanel').classList.remove('hidden');
-    document.getElementById('detailTitle').textContent = 'Candidates Awaiting Endorsement';
+    const el = document.getElementById('candidatesContent');
+    if (!el) return;
 
     const { data: candidates, error } = await db
         .from('members')
@@ -1195,7 +1209,7 @@ async function loadCandidates() {
         .eq('status', 'pending');
 
     if (error || !candidates || candidates.length === 0) {
-        document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">No pending candidates.</p>';
+        el.innerHTML = '<p style="color:var(--dark-gray);">No pending candidates.</p>';
         return;
     }
 
@@ -1238,7 +1252,7 @@ async function loadCandidates() {
     const memberPct = parseNewMemberThreshold(selectedGroup.constitution);
     const threshold = Math.max(1, Math.ceil((activeCount || 0) * memberPct));
 
-    document.getElementById('detailContent').innerHTML = candidates.map(c => {
+    el.innerHTML = candidates.map(c => {
         const endorsed = myEndorsements.has(c.user_id);
         const count = endorseMap[c.user_id] || 0;
         const sponsorInfo = sponsorMap[c.user_id];
@@ -1284,7 +1298,7 @@ async function endorse(candidateId) {
     } else {
         showToast('Endorsement recorded', 'info');
     }
-    await loadCandidates();
+    await loadCandidatesList();
 }
 
 async function unendorse(candidateId) {
@@ -1295,41 +1309,29 @@ async function unendorse(candidateId) {
         .eq('endorser_id', currentUser.id);
     if (error) { showToast(error.message, 'error'); return; }
     showToast('Endorsement removed', 'info');
-    await loadCandidates();
+    await loadCandidatesList();
 }
 
 // ============================================================
 // STATS
 // ============================================================
-async function loadStats() {
+async function loadStatsContent() {
     if (!selectedGroup) return;
-    document.getElementById('detailPanel').classList.remove('hidden');
-    document.getElementById('detailTitle').textContent = 'Group Statistics';
+    const el = document.getElementById('statsContent');
+    if (!el) return;
 
-    const { count: memberCount } = await db
-        .from('members')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'active');
-
-    const { data: members } = await db
-        .from('members')
-        .select('balance')
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'active');
+    const [{ count: memberCount }, { data: members }, { count: txCount }, { count: pendingCount }] = await Promise.all([
+        db.from('members').select('*', { count: 'exact', head: true })
+            .eq('group_id', selectedGroup.id).eq('status', 'active'),
+        db.from('members').select('balance')
+            .eq('group_id', selectedGroup.id).eq('status', 'active'),
+        db.from('transactions').select('*', { count: 'exact', head: true })
+            .eq('group_id', selectedGroup.id),
+        db.from('members').select('*', { count: 'exact', head: true })
+            .eq('group_id', selectedGroup.id).eq('status', 'pending')
+    ]);
 
     const totalSupply = (members || []).reduce((sum, m) => sum + Number(m.balance), 0);
-
-    const { count: txCount } = await db
-        .from('transactions')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_id', selectedGroup.id);
-
-    const { count: pendingCount } = await db
-        .from('members')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'pending');
 
     // 30-day fee sum (fees from person-to-person transactions)
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
@@ -1348,7 +1350,7 @@ async function loadStats() {
         .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
     const sym = selectedGroup.currency_symbol;
-    document.getElementById('detailContent').innerHTML = `
+    el.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
             <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
@@ -1649,7 +1651,9 @@ async function sendCurrency(e) {
 
     showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
     closeModal();
-    await loadMyGroups(); // Refresh balances
+    // Refresh balance + transactions
+    await loadMyGroups();
+    if (activeTab === 'money') await renderMoneyTab();
 }
 
 // ============================================================
@@ -1720,21 +1724,18 @@ async function castVote(e, voteType) {
         if (updatedGroup) {
             selectedGroup = updatedGroup;
             const membership = myGroups.find(m => m.group_id === selectedGroup.id);
-            if (membership) {
-                membership.groups = updatedGroup;
-                selectGroup(updatedGroup, membership);
-            }
+            if (membership) membership.groups = updatedGroup;
         }
         const displayVal = voteType === 'fee_rate'
             ? `${(tallyResult.median * 100).toFixed(1)}%`
             : `${selectedGroup.currency_symbol} ${Number(tallyResult.median).toFixed(2)}`;
         showToast(`${label} updated to ${displayVal} (${tallyResult.vote_count}/${tallyResult.active_members} members voted)`, 'success');
     } else {
-        // Refresh info bar so "Your vote" appears
-        const membership = myGroups.find(m => m.group_id === selectedGroup.id);
-        if (membership) selectGroup(selectedGroup, membership);
         showToast(`Vote recorded — ${tallyResult?.vote_count || 0}/${tallyResult?.threshold || '?'} votes needed to apply ${label}`, 'info');
     }
+
+    // Refresh the money tab to show updated rates / "Your vote" line
+    if (activeTab === 'money') await renderMoneyTab();
 }
 
 // ============================================================
@@ -1806,16 +1807,15 @@ function parseNewMemberThreshold(constitutionText) {
     return 1.0;
 }
 
-// Load the Constitution detail panel
+// Load the Constitution content
 let _constitutionLoadGen = 0;  // generation counter to prevent stale writes
-async function loadConstitution() {
+async function loadConstitutionContent() {
     if (!selectedGroup) return;
     const myGen = ++_constitutionLoadGen;       // claim this generation
     const groupId = selectedGroup.id;           // pin the group id
-
-    document.getElementById('detailPanel').classList.remove('hidden');
-    document.getElementById('detailTitle').textContent = 'Constitution';
-    document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">Loading…</p>';
+    const el = document.getElementById('constitutionContent');
+    if (!el) return;
+    el.innerHTML = '<p style="color:var(--dark-gray);">Loading…</p>';
 
     try {
         // Refresh group data to get latest constitution
@@ -1829,8 +1829,7 @@ async function loadConstitution() {
 
         if (groupErr) {
             console.error('loadConstitution group fetch error:', groupErr);
-            document.getElementById('detailContent').innerHTML =
-                `<p style="color:var(--red);">Error loading group data: ${esc(groupErr.message)}</p>`;
+            el.innerHTML = `<p style="color:var(--red);">Error loading group data: ${esc(groupErr.message)}</p>`;
             return;
         }
         if (freshGroup) {
@@ -1911,12 +1910,11 @@ async function loadConstitution() {
         }
 
         if (myGen !== _constitutionLoadGen) return;  // final stale check before DOM write
-        document.getElementById('detailContent').innerHTML = html;
+        el.innerHTML = html;
     } catch (e) {
         console.error('loadConstitution error:', e);
         if (myGen === _constitutionLoadGen) {
-            document.getElementById('detailContent').innerHTML =
-                `<p style="color:var(--red);">Failed to load constitution: ${esc(e.message || e)}</p>`;
+            el.innerHTML = `<p style="color:var(--red);">Failed to load constitution: ${esc(e.message || e)}</p>`;
         }
     }
 }
@@ -2031,7 +2029,7 @@ async function submitAmendment() {
 
     showToast('Amendment proposed! Members have 7 days to vote.', 'success');
     closeModal();
-    await loadConstitution();
+    if (activeTab === 'constitution') await loadConstitutionContent();
 }
 
 async function voteAmendment(amendmentId, approve) {
@@ -2056,13 +2054,13 @@ async function voteAmendment(amendmentId, approve) {
                 if (membership) membership.groups = freshGroup;
                 renderGroupList();
             }
-            await loadConstitution();
+            await loadConstitutionContent();
             return;
         }
     }
 
     showToast(approve ? 'Voted to approve' : 'Voted to reject', 'info');
-    await loadConstitution();
+    await loadConstitutionContent();
 }
 
 async function resolveAmendment(amendmentId) {
@@ -2083,7 +2081,7 @@ async function resolveAmendment(amendmentId) {
     } else {
         showToast(`Amendment failed. (${data.approve_count}/${data.active_members} approved, ${data.ratio}% < ${data.threshold}% needed)`, 'error');
     }
-    await loadConstitution();
+    await loadConstitutionContent();
 }
 
 async function withdrawAmendment(amendmentId) {
@@ -2103,7 +2101,7 @@ async function withdrawAmendment(amendmentId) {
             return;
         }
         showToast('Amendment withdrawn', 'info');
-        await loadConstitution();
+        await loadConstitutionContent();
     } catch (e) {
         console.error('withdrawAmendment exception:', e);
         showToast('Error withdrawing amendment: ' + e.message, 'error');
@@ -2159,22 +2157,21 @@ async function handleGroupEvent(event) {
     // Refresh relevant UI based on event type
     switch (event.event_type) {
         case 'rate_change': {
-            // Re-fetch group data to update info bar
+            // Re-fetch group data to update money tab
             const { data: updatedGroup } = await db.from('groups').select('*').eq('id', selectedGroup.id).single();
             if (updatedGroup) {
                 selectedGroup = updatedGroup;
                 const membership = myGroups.find(m => m.group_id === selectedGroup.id);
-                if (membership) {
-                    membership.groups = updatedGroup;
-                    selectGroup(updatedGroup, membership);
-                }
+                if (membership) membership.groups = updatedGroup;
             }
+            if (activeTab === 'money') await renderMoneyTab();
             break;
         }
         case 'member_joined':
         case 'member_sponsored': {
             // Refresh member count / candidates
             await loadMyGroups();
+            if (activeTab === 'members') await renderMembersTab();
             break;
         }
         case 'payment_received': {
@@ -2183,28 +2180,23 @@ async function handleGroupEvent(event) {
             if (toUser === currentUser?.id) {
                 const membership = myGroups.find(m => m.group_id === selectedGroup.id);
                 if (membership) {
-                    // Re-fetch our updated balance
                     const { data: myMember } = await db.from('members').select('balance')
                         .eq('group_id', selectedGroup.id).eq('user_id', currentUser.id).single();
                     if (myMember) {
                         membership.balance = myMember.balance;
-                        document.getElementById('balanceAmount').textContent =
+                        const balEl = document.getElementById('balanceAmount');
+                        if (balEl) balEl.textContent =
                             `${selectedGroup.currency_symbol} ${Number(myMember.balance).toFixed(2)}`;
                     }
                 }
-                // Refresh transactions list
-                await loadTransactions();
+                if (activeTab === 'money') await loadTransactions();
             }
             break;
         }
         case 'amendment_proposed':
         case 'amendment_passed':
         case 'amendment_failed': {
-            // Refresh constitution panel if it's currently visible
-            const detailTitle = document.getElementById('detailTitle')?.textContent;
-            if (detailTitle === 'Constitution') {
-                await loadConstitution();
-            }
+            if (activeTab === 'constitution') await loadConstitutionContent();
             // Amendment pass may have changed group settings
             if (event.event_type === 'amendment_passed') {
                 const { data: freshGroup } = await db.from('groups').select('*').eq('id', selectedGroup.id).single();
@@ -2214,6 +2206,7 @@ async function handleGroupEvent(event) {
                     if (membership) membership.groups = freshGroup;
                     renderGroupList();
                 }
+                if (activeTab === 'money') await renderMoneyTab();
             }
             break;
         }

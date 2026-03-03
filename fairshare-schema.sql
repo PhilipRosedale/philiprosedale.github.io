@@ -485,9 +485,10 @@ begin
   values (
     v_sponsorship.group_id,
     'member_sponsored',
-    (select display_name from public.profiles where id = v_sponsorship.sponsor_id)
-      || ' sponsored '
-      || (select display_name from public.profiles where id = v_user_id),
+    'New candidate '
+      || (select display_name from public.profiles where id = v_user_id)
+      || ', sponsored by '
+      || (select display_name from public.profiles where id = v_sponsorship.sponsor_id),
     v_sponsorship.sponsor_id,
     json_build_object('sponsor_id', v_sponsorship.sponsor_id, 'candidate_id', v_user_id)::jsonb
   );
@@ -597,6 +598,7 @@ declare
   v_constitution text;
   v_pct_match text[];
   v_pct numeric;
+  v_sponsor_name text;
 begin
   -- Count active members
   select count(*) into v_active_count
@@ -633,12 +635,24 @@ begin
     delete from public.endorsements
     where group_id = p_group_id and candidate_id = p_candidate_id;
 
+    -- Look up the sponsor's name
+    select p.display_name into v_sponsor_name
+    from public.sponsorships s
+    join public.profiles p on p.id = s.sponsor_id
+    where s.group_id = p_group_id
+      and s.candidate_id = p_candidate_id
+      and s.status = 'claimed'
+    limit 1;
+
     -- Log member_joined event
     insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
     values (
       p_group_id,
       'member_joined',
-      (select display_name from public.profiles where id = p_candidate_id) || ' was admitted as a member',
+      'New member '
+        || (select display_name from public.profiles where id = p_candidate_id)
+        || ' accepted'
+        || case when v_sponsor_name is not null then ', sponsored by ' || v_sponsor_name else '' end,
       p_candidate_id,
       json_build_object('user_id', p_candidate_id)::jsonb
     );

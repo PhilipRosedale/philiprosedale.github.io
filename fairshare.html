@@ -638,8 +638,8 @@
                     </button>
                 </div>
 
-                <!-- Detail panel (members, candidates, constitution, stats) -->
-                <div class="card" id="detailPanel">
+                <!-- Detail panel (members, candidates, constitution, stats) — hidden until user opens one -->
+                <div class="card hidden" id="detailPanel">
                     <h3 id="detailTitle"></h3>
                     <div id="detailContent">
                         <!-- Populated dynamically -->
@@ -1005,9 +1005,18 @@ async function selectGroup(group, membership) {
         </div>
     `;
 
-    document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('activityLog').classList.remove('hidden');
     document.getElementById('transactionsPanel').classList.remove('hidden');
+
+    // Only show the detail panel if it was already displaying something for this session;
+    // otherwise keep it hidden until the user clicks Members / Candidates / Constitution / Stats.
+    const currentDetail = document.getElementById('detailTitle')?.textContent;
+    const hasOpenDetail = ['Members', 'Candidates Awaiting Endorsement', 'Group Statistics', 'Constitution'].includes(currentDetail);
+    if (!hasOpenDetail) {
+        document.getElementById('detailPanel').classList.add('hidden');
+        document.getElementById('detailTitle').textContent = '';
+        document.getElementById('detailContent').innerHTML = '';
+    }
 
     // Claim daily income if 24h+ since last claim
     if (membership.status === 'active' && Number(group.daily_income) > 0) {
@@ -1026,14 +1035,14 @@ async function selectGroup(group, membership) {
         }
     }
 
-    // Refresh the detail panel if it's showing group-specific content
-    const currentDetail = document.getElementById('detailTitle')?.textContent;
-    const detailRefresh =
+    // Refresh the detail panel if it was already open with group-specific content
+    const detailRefresh = hasOpenDetail ? (
         currentDetail === 'Members' ? loadMembers() :
         currentDetail === 'Candidates Awaiting Endorsement' ? loadCandidates() :
         currentDetail === 'Group Statistics' ? loadStats() :
         currentDetail === 'Constitution' ? loadConstitution() :
-        Promise.resolve();
+        Promise.resolve()
+    ) : Promise.resolve();
 
     await Promise.all([loadTransactions(), loadActivityLog(), detailRefresh]);
 }

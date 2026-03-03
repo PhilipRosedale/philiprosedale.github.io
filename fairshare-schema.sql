@@ -87,6 +87,7 @@ create table public.members (
   status text not null default 'pending' check (status in ('pending', 'active', 'removed')),
   balance numeric not null default 0,
   joined_at timestamptz default now(),
+  last_income_at timestamptz,              -- last time daily income was claimed (NULL = never)
   unique(group_id, user_id)
 );
 
@@ -164,10 +165,11 @@ create policy "Members can unendorse"
 
 
 -- 5. TRANSACTIONS
+-- from_user is nullable: NULL means currency was minted (e.g. daily income)
 create table public.transactions (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null references public.groups(id) on delete cascade,
-  from_user uuid not null references public.profiles(id),
+  from_user uuid references public.profiles(id),       -- NULL = minted / daily income
   to_user uuid not null references public.profiles(id),
   amount numeric not null check (amount > 0),
   fee numeric not null default 0,
@@ -772,36 +774,53 @@ end;
 $$ language plpgsql security definer;
 
 
--- Distribute daily income to all active members of a group
-create or replace function public.distribute_daily_income(
-  p_group_id uuid
-)
+-- Claim daily income for the calling user in a group
+-- Only succeeds if 24+ hours since last claim (or never claimed)
+create or replace function public.claim_daily_income(p_group_id uuid)
 returns json as $$
 declare
+  v_user_id uuid := auth.uid();
   v_daily_income numeric;
-  v_member_count int;
+  v_last_income timestamptz;
+  v_balance numeric;
 begin
+  -- Get the group's daily income setting
   select daily_income into v_daily_income
   from public.groups where id = p_group_id;
 
-  if v_daily_income <= 0 then
-    return json_build_object('distributed', false, 'reason', 'No daily income set');
+  if v_daily_income is null or v_daily_income <= 0 then
+    return json_build_object('claimed', false, 'reason', 'No daily income set for this group');
   end if;
 
-  -- Add daily income to all active members (new currency is minted)
-  update public.members
-  set balance = balance + v_daily_income
-  where group_id = p_group_id and status = 'active';
-
-  select count(*) into v_member_count
+  -- Get the member's last income timestamp and current balance
+  select last_income_at, balance into v_last_income, v_balance
   from public.members
-  where group_id = p_group_id and status = 'active';
+  where group_id = p_group_id and user_id = v_user_id and status = 'active';
+
+  if not found then
+    return json_build_object('claimed', false, 'reason', 'Not an active member');
+  end if;
+
+  -- Check if 24 hours have passed since last claim
+  if v_last_income is not null and v_last_income > now() - interval '24 hours' then
+    return json_build_object('claimed', false, 'reason', 'Too soon',
+      'next_claim_at', v_last_income + interval '24 hours');
+  end if;
+
+  -- Update balance and last_income_at
+  update public.members
+  set balance = balance + v_daily_income,
+      last_income_at = now()
+  where group_id = p_group_id and user_id = v_user_id and status = 'active';
+
+  -- Record the minting transaction (from_user = NULL means minted)
+  insert into public.transactions (group_id, from_user, to_user, amount, fee, memo)
+  values (p_group_id, null, v_user_id, v_daily_income, 0, 'Daily income');
 
   return json_build_object(
-    'distributed', true,
-    'amount_per_member', v_daily_income,
-    'member_count', v_member_count,
-    'total_minted', v_daily_income * v_member_count
+    'claimed', true,
+    'amount', v_daily_income,
+    'new_balance', v_balance + v_daily_income
   );
 end;
 $$ language plpgsql security definer;

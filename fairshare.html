@@ -1030,6 +1030,23 @@ async function selectGroup(group, membership) {
 
     document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('activityLog').classList.remove('hidden');
+
+    // Claim daily income if 24h+ since last claim
+    if (membership.status === 'active' && Number(group.daily_income) > 0) {
+        try {
+            const { data: incomeResult } = await db.rpc('claim_daily_income', { p_group_id: group.id });
+            if (incomeResult?.claimed) {
+                // Update the displayed balance immediately
+                membership.balance = Number(membership.balance) + Number(incomeResult.amount);
+                document.getElementById('balanceAmount').textContent =
+                    `${group.currency_symbol} ${Number(incomeResult.new_balance).toFixed(2)}`;
+                showToast(`Daily income: +${group.currency_symbol} ${Number(incomeResult.amount).toFixed(2)} ${group.currency_name}`, 'success');
+            }
+        } catch (e) {
+            console.error('Daily income claim error:', e);
+        }
+    }
+
     await Promise.all([loadTransactions(), loadActivityLog()]);
 }
 
@@ -1064,11 +1081,13 @@ async function loadTransactions() {
 
     document.getElementById('detailContent').innerHTML = `<ul class="tx-list">
         ${data.map(tx => {
-            const isSender = tx.from_user === currentUser.id;
+            const isMinted = tx.from_user === null;
+            const isSender = !isMinted && tx.from_user === currentUser.id;
+            const fromLabel = isMinted ? '&#x1F331; Daily Income' : esc(tx.sender?.display_name || '?');
             return `<li class="tx-item">
                 <div class="tx-info">
-                    <div class="tx-parties">${esc(tx.sender?.display_name || '?')} &rarr; ${esc(tx.receiver?.display_name || '?')}</div>
-                    ${tx.memo ? `<div class="tx-memo">${esc(tx.memo)}</div>` : ''}
+                    <div class="tx-parties">${fromLabel} &rarr; ${esc(tx.receiver?.display_name || '?')}</div>
+                    ${tx.memo && !isMinted ? `<div class="tx-memo">${esc(tx.memo)}</div>` : ''}
                     <div class="tx-date">${new Date(tx.created_at).toLocaleString()}</div>
                 </div>
                 <div class="tx-amount ${isSender ? 'sent' : 'received'}">

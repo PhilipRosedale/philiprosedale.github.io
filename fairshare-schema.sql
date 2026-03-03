@@ -127,11 +127,10 @@ create policy "Users can request to join groups"
     )
   );
 
--- Members can update (for balance changes via functions, status changes)
--- In practice, balance updates will go through server functions
-create policy "System can update members"
-  on public.members for update
-  using (public.is_group_member(group_id));
+-- No direct UPDATE policy for members.
+-- All member updates (balance, status, last_income_at) go through SECURITY DEFINER
+-- functions: send_currency, check_endorsements, claim_daily_income, claim_sponsorship.
+-- This prevents clients from manipulating balances directly via the REST API.
 
 
 -- 4. ENDORSEMENTS
@@ -185,11 +184,9 @@ create policy "Group members can view transactions"
   on public.transactions for select
   using (public.is_group_member(group_id));
 
--- Transactions are created via the send_currency function, not direct insert
--- But we allow insert for the function (runs as security definer)
-create policy "Sender can create transactions"
-  on public.transactions for insert
-  with check (auth.uid() = from_user);
+-- No direct INSERT policy for transactions.
+-- All transaction inserts go through SECURITY DEFINER functions: send_currency,
+-- claim_daily_income. This prevents clients from forging ledger entries via the REST API.
 
 
 -- 6. VOTES

@@ -576,6 +576,21 @@ begin
   insert into public.transactions (group_id, from_user, to_user, amount, fee, memo)
   values (p_group_id, v_from_user, p_to_user, p_amount, v_fee, p_memo);
 
+  -- Log event so the recipient gets a realtime notification
+  insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+  values (
+    p_group_id,
+    'payment_received',
+    (select display_name from public.profiles where id = v_from_user)
+      || ' sent '
+      || (select currency_symbol from public.groups where id = p_group_id)
+      || ' ' || round(v_net, 2) || ' to '
+      || (select display_name from public.profiles where id = p_to_user),
+    v_from_user,
+    json_build_object('from_user', v_from_user, 'to_user', p_to_user,
+      'amount', p_amount, 'fee', v_fee, 'net', v_net)::jsonb
+  );
+
   return json_build_object(
     'success', true,
     'amount', p_amount,

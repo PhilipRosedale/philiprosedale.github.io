@@ -2054,6 +2054,27 @@ async function handleGroupEvent(event) {
             await loadMyGroups();
             break;
         }
+        case 'payment_received': {
+            // Refresh balance if we are the recipient
+            const toUser = event.metadata?.to_user;
+            if (toUser === currentUser?.id) {
+                const membership = myGroups.find(m => m.group_id === selectedGroup.id);
+                if (membership) {
+                    // Re-fetch our updated balance
+                    const { data: myMember } = await db.from('members').select('balance')
+                        .eq('group_id', selectedGroup.id).eq('user_id', currentUser.id).single();
+                    if (myMember) {
+                        membership.balance = myMember.balance;
+                        document.getElementById('balanceAmount').textContent =
+                            `${selectedGroup.currency_symbol} ${Number(myMember.balance).toFixed(2)}`;
+                    }
+                }
+                // Refresh transactions list if visible
+                const detailTitle = document.getElementById('detailTitle')?.textContent;
+                if (detailTitle === 'Recent Transactions') await loadTransactions();
+            }
+            break;
+        }
         case 'amendment_proposed':
         case 'amendment_passed':
         case 'amendment_failed': {

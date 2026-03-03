@@ -1098,6 +1098,7 @@ async function loadTransactions() {
 // ============================================================
 async function loadMembers() {
     if (!selectedGroup) return;
+    document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('detailTitle').textContent = 'Members';
 
     const [{ data, error }, { data: sponsorships }] = await Promise.all([
@@ -1139,6 +1140,7 @@ async function loadMembers() {
 // ============================================================
 async function loadCandidates() {
     if (!selectedGroup) return;
+    document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('detailTitle').textContent = 'Candidates Awaiting Endorsement';
 
     const { data: candidates, error } = await db
@@ -1256,6 +1258,7 @@ async function unendorse(candidateId) {
 // ============================================================
 async function loadStats() {
     if (!selectedGroup) return;
+    document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('detailTitle').textContent = 'Group Statistics';
 
     const { count: memberCount } = await db
@@ -1748,85 +1751,118 @@ function parseNewMemberThreshold(constitutionText) {
 }
 
 // Load the Constitution detail panel
+let _constitutionLoadGen = 0;  // generation counter to prevent stale writes
 async function loadConstitution() {
     if (!selectedGroup) return;
+    const myGen = ++_constitutionLoadGen;       // claim this generation
+    const groupId = selectedGroup.id;           // pin the group id
+
+    document.getElementById('detailPanel').classList.remove('hidden');
     document.getElementById('detailTitle').textContent = 'Constitution';
+    document.getElementById('detailContent').innerHTML = '<p style="color:var(--dark-gray);">Loading…</p>';
 
-    // Refresh group data to get latest constitution
-    const { data: freshGroup } = await db
-        .from('groups')
-        .select('*')
-        .eq('id', selectedGroup.id)
-        .single();
-    if (freshGroup) selectedGroup = freshGroup;
+    try {
+        // Refresh group data to get latest constitution
+        const { data: freshGroup, error: groupErr } = await db
+            .from('groups')
+            .select('*')
+            .eq('id', groupId)
+            .single();
 
-    const constitutionHtml = `<div class="constitution-text">${renderConstitution(selectedGroup.constitution)}</div>`;
+        if (myGen !== _constitutionLoadGen) return;  // stale – a newer call took over
 
-    // Load active amendments
-    const { data: activeAmendments } = await db
-        .from('amendments')
-        .select('*, proposer:profiles!amendments_proposed_by_fkey(display_name)')
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'voting')
-        .order('created_at', { ascending: false });
+        if (groupErr) {
+            console.error('loadConstitution group fetch error:', groupErr);
+            document.getElementById('detailContent').innerHTML =
+                `<p style="color:var(--red);">Error loading group data: ${esc(groupErr.message)}</p>`;
+            return;
+        }
+        if (freshGroup) {
+            selectedGroup = freshGroup;   // safe: we checked generation
+        }
 
-    // Load past amendments
-    const { data: pastAmendments } = await db
-        .from('amendments')
-        .select('*, proposer:profiles!amendments_proposed_by_fkey(display_name)')
-        .eq('group_id', selectedGroup.id)
-        .in('status', ['passed', 'failed', 'withdrawn'])
-        .order('resolved_at', { ascending: false })
-        .limit(20);
+        const constitutionHtml = `<div class="constitution-text">${renderConstitution(selectedGroup.constitution)}</div>`;
 
-    // Get vote counts for all amendments we're showing
-    const allAmendmentIds = [
-        ...(activeAmendments || []).map(a => a.id),
-        ...(pastAmendments || []).map(a => a.id)
-    ];
+        // Load active and past amendments in parallel
+        const [activeResult, pastResult, memberResult] = await Promise.all([
+            db.from('amendments')
+                .select('*, proposer:profiles(display_name)')
+                .eq('group_id', groupId)
+                .eq('status', 'voting')
+                .order('created_at', { ascending: false }),
+            db.from('amendments')
+                .select('*, proposer:profiles(display_name)')
+                .eq('group_id', groupId)
+                .in('status', ['passed', 'failed', 'withdrawn'])
+                .order('resolved_at', { ascending: false })
+                .limit(20),
+            db.from('members')
+                .select('*', { count: 'exact', head: true })
+                .eq('group_id', groupId)
+                .eq('status', 'active')
+        ]);
 
-    let votesMap = {};
-    let myVotesMap = {};
-    if (allAmendmentIds.length > 0) {
-        const { data: votes } = await db
-            .from('amendment_votes')
-            .select('amendment_id, user_id, vote')
-            .in('amendment_id', allAmendmentIds);
+        if (myGen !== _constitutionLoadGen) return;  // stale
 
-        (votes || []).forEach(v => {
-            if (!votesMap[v.amendment_id]) votesMap[v.amendment_id] = { approve: 0, reject: 0 };
-            if (v.vote) votesMap[v.amendment_id].approve++;
-            else votesMap[v.amendment_id].reject++;
-            if (v.user_id === currentUser.id) myVotesMap[v.amendment_id] = v.vote;
-        });
+        if (activeResult.error) console.warn('loadConstitution active amendments error:', activeResult.error);
+        if (pastResult.error) console.warn('loadConstitution past amendments error:', pastResult.error);
+
+        const activeAmendments = activeResult.data;
+        const pastAmendments = pastResult.data;
+        const activeMembers = memberResult.count;
+
+        // Get vote counts for all amendments we're showing
+        const allAmendmentIds = [
+            ...(activeAmendments || []).map(a => a.id),
+            ...(pastAmendments || []).map(a => a.id)
+        ];
+
+        let votesMap = {};
+        let myVotesMap = {};
+        if (allAmendmentIds.length > 0) {
+            const { data: votes } = await db
+                .from('amendment_votes')
+                .select('amendment_id, user_id, vote')
+                .in('amendment_id', allAmendmentIds);
+
+            if (myGen !== _constitutionLoadGen) return;  // stale
+
+            (votes || []).forEach(v => {
+                if (!votesMap[v.amendment_id]) votesMap[v.amendment_id] = { approve: 0, reject: 0 };
+                if (v.vote) votesMap[v.amendment_id].approve++;
+                else votesMap[v.amendment_id].reject++;
+                if (v.user_id === currentUser.id) myVotesMap[v.amendment_id] = v.vote;
+            });
+        }
+
+        let html = constitutionHtml;
+
+        // Propose button
+        html += `<div style="margin:1rem 0;">
+            <button class="btn btn-primary" onclick="showModal('proposeAmendment')">Propose an Amendment</button>
+        </div>`;
+
+        // Active amendments
+        if (activeAmendments && activeAmendments.length > 0) {
+            html += `<h4 style="margin:1.5rem 0 0.5rem;color:var(--accent-color);">Active Amendments</h4>`;
+            html += activeAmendments.map(a => renderAmendmentCard(a, votesMap, myVotesMap, activeMembers)).join('');
+        }
+
+        // Past amendments
+        if (pastAmendments && pastAmendments.length > 0) {
+            html += `<h4 style="margin:1.5rem 0 0.5rem;color:var(--accent-color);">Amendment History</h4>`;
+            html += pastAmendments.map(a => renderAmendmentCard(a, votesMap, myVotesMap, activeMembers)).join('');
+        }
+
+        if (myGen !== _constitutionLoadGen) return;  // final stale check before DOM write
+        document.getElementById('detailContent').innerHTML = html;
+    } catch (e) {
+        console.error('loadConstitution error:', e);
+        if (myGen === _constitutionLoadGen) {
+            document.getElementById('detailContent').innerHTML =
+                `<p style="color:var(--red);">Failed to load constitution: ${esc(e.message || e)}</p>`;
+        }
     }
-
-    const { count: activeMembers } = await db
-        .from('members')
-        .select('*', { count: 'exact', head: true })
-        .eq('group_id', selectedGroup.id)
-        .eq('status', 'active');
-
-    let html = constitutionHtml;
-
-    // Propose button
-    html += `<div style="margin:1rem 0;">
-        <button class="btn btn-primary" onclick="showModal('proposeAmendment')">Propose an Amendment</button>
-    </div>`;
-
-    // Active amendments
-    if (activeAmendments && activeAmendments.length > 0) {
-        html += `<h4 style="margin:1.5rem 0 0.5rem;color:var(--accent-color);">Active Amendments</h4>`;
-        html += activeAmendments.map(a => renderAmendmentCard(a, votesMap, myVotesMap, activeMembers)).join('');
-    }
-
-    // Past amendments
-    if (pastAmendments && pastAmendments.length > 0) {
-        html += `<h4 style="margin:1.5rem 0 0.5rem;color:var(--accent-color);">Amendment History</h4>`;
-        html += pastAmendments.map(a => renderAmendmentCard(a, votesMap, myVotesMap, activeMembers)).join('');
-    }
-
-    document.getElementById('detailContent').innerHTML = html;
 }
 
 function renderAmendmentCard(a, votesMap, myVotesMap, activeMemberCount) {

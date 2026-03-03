@@ -849,7 +849,24 @@ async function handleSignup(e) {
 }
 
 async function logout() {
-    await db.auth.signOut();
+    // Clean up realtime subscription
+    if (groupChannel) {
+        db.removeChannel(groupChannel);
+        groupChannel = null;
+    }
+    // Reset client state
+    selectedGroup = null;
+    myGroups = [];
+    currentUser = null;
+    currentProfile = null;
+
+    try {
+        await db.auth.signOut();
+    } catch (e) {
+        console.warn('signOut error (ignored):', e);
+    }
+    // Always return to auth screen, even if signOut failed
+    showAuth();
 }
 
 function showAuth() {

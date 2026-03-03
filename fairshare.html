@@ -892,13 +892,20 @@ async function loadMyGroups() {
     myGroups = data || [];
     renderGroupList();
 
-    // Re-select current group if still valid
+    // Re-select current group if still valid, or restore last viewed group
     if (selectedGroup) {
-        const still = myGroups.find(m => m.group_id === selectedGroup.id && m.status === 'active');
+        const still = myGroups.find(m => m.group_id === selectedGroup.id);
         if (still) {
             selectGroup(still.groups, still);
         } else {
             selectedGroup = null;
+            showEmptyState();
+        }
+    } else if (currentProfile?.last_group_id) {
+        const last = myGroups.find(m => m.group_id === currentProfile.last_group_id);
+        if (last) {
+            selectGroup(last.groups, last);
+        } else {
             showEmptyState();
         }
     } else {
@@ -934,6 +941,12 @@ async function selectGroup(group, membership) {
     document.getElementById('emptyState').classList.add('hidden');
     document.getElementById('groupView').classList.remove('hidden');
     renderGroupList();
+
+    // Remember this group for next visit
+    if (currentProfile?.last_group_id !== group.id) {
+        currentProfile.last_group_id = group.id;
+        db.from('profiles').update({ last_group_id: group.id }).eq('id', currentUser.id).then();
+    }
 
     // Subscribe to realtime events for this group
     subscribeToGroup(group.id);

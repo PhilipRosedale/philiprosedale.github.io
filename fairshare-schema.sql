@@ -10,6 +10,7 @@ create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null,
   public_key text,  -- future: self-custodial identity
+  last_group_id uuid,            -- last group viewed, restored on next visit
   created_at timestamptz default now()
 );
 

@@ -253,6 +253,11 @@
         .info-item .info-label { font-size: 0.75rem; color: var(--dark-gray); text-transform: uppercase; letter-spacing: 0.05em; }
         .info-item .info-value { font-size: 1.2rem; font-weight: 700; color: var(--accent-color); }
         .info-item .info-my-vote { font-size: 0.75rem; color: var(--primary-color); font-weight: 600; margin-top: 2px; }
+        .info-item .info-vote-link {
+            font-size: 0.7rem; color: var(--accent-color); cursor: pointer;
+            margin-top: 3px; text-decoration: underline; font-weight: 600;
+        }
+        .info-item .info-vote-link:hover { color: var(--primary-color); }
 
         /* Action grid */
         .action-grid {
@@ -612,12 +617,8 @@
                         <div class="action-icon">&#10132;</div>
                         <div class="action-label">Send</div>
                     </button>
-                    <button class="action-btn" onclick="showModal('vote')">
-                        <div class="action-icon">&#9745;</div>
-                        <div class="action-label">Vote</div>
-                    </button>
                     <button class="action-btn" onclick="showModal('sponsor')">
-                        <div class="action-icon">&#128279;</div>
+                        <div class="action-icon" style="font-weight:bold;font-size:2rem;line-height:1;">+</div>
                         <div class="action-label">Sponsor</div>
                     </button>
                     <button class="action-btn" onclick="loadCandidates()">
@@ -908,6 +909,20 @@ async function loadMyGroups() {
 
     if (error) { showToast('Failed to load groups', 'error'); return; }
     myGroups = data || [];
+
+    // Fetch member counts for each group
+    const groupIds = myGroups.map(m => m.group_id);
+    if (groupIds.length > 0) {
+        const { data: counts } = await db
+            .from('members')
+            .select('group_id')
+            .in('group_id', groupIds)
+            .eq('status', 'active');
+        const countMap = {};
+        (counts || []).forEach(r => { countMap[r.group_id] = (countMap[r.group_id] || 0) + 1; });
+        myGroups.forEach(m => { m._memberCount = countMap[m.group_id] || 0; });
+    }
+
     renderGroupList();
 
     // Re-select current group if still valid, or restore last viewed group
@@ -944,7 +959,7 @@ function renderGroupList() {
                 ${esc(m.groups.name)}
                 ${m.status === 'pending' ? '<span class="group-status pending">pending</span>' : ''}
             </div>
-            <div class="group-currency">${esc(m.groups.currency_name)} (${esc(m.groups.currency_symbol)})</div>
+            <div class="group-currency">${m._memberCount || 0} member${m._memberCount === 1 ? '' : 's'}</div>
         </div>
     `).join('');
 }
@@ -999,7 +1014,7 @@ async function selectGroup(group, membership) {
 
     const myFeeVote = myVotes?.find(v => v.vote_type === 'fee_rate');
     const myIncomeVote = myVotes?.find(v => v.vote_type === 'daily_income');
-    const balanceDisplay = `${group.currency_symbol} ${Number(membership.balance).toFixed(2)} ${esc(group.currency_name)}`;
+    const balanceDisplay = `${group.currency_symbol} ${Number(membership.balance).toFixed(2)}`;
 
     document.getElementById('groupInfoBar').innerHTML = `
         <div class="info-item">
@@ -1013,12 +1028,16 @@ async function selectGroup(group, membership) {
         <div class="info-item">
             <div class="info-label">Fee Rate</div>
             <div class="info-value">${(Number(group.fee_rate) * 100).toFixed(1)}%</div>
-            ${myFeeVote ? `<div class="info-my-vote">Your vote: ${(Number(myFeeVote.value) * 100).toFixed(1)}%</div>` : ''}
+            ${myFeeVote
+                ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('fee_rate')">Your vote: ${(Number(myFeeVote.value) * 100).toFixed(1)}%</div>`
+                : `<div class="info-vote-link" onclick="showVoteDialog('fee_rate')">vote</div>`}
         </div>
         <div class="info-item">
             <div class="info-label">Daily Income</div>
-            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)} ${esc(group.currency_name)}</div>
-            ${myIncomeVote ? `<div class="info-my-vote">Your vote: ${group.currency_symbol} ${Number(myIncomeVote.value).toFixed(2)}</div>` : ''}
+            <div class="info-value">${group.currency_symbol} ${Number(group.daily_income).toFixed(2)}</div>
+            ${myIncomeVote
+                ? `<div class="info-my-vote info-vote-link" onclick="showVoteDialog('daily_income')">Your vote: ${group.currency_symbol} ${Number(myIncomeVote.value).toFixed(2)}</div>`
+                : `<div class="info-vote-link" onclick="showVoteDialog('daily_income')">vote</div>`}
         </div>
     `;
 
@@ -1044,8 +1063,8 @@ async function selectGroup(group, membership) {
                 membership.balance = Number(membership.balance) + Number(incomeResult.amount);
                 const balEl = document.getElementById('balanceAmount');
                 if (balEl) balEl.textContent =
-                    `${group.currency_symbol} ${Number(incomeResult.new_balance).toFixed(2)} ${group.currency_name}`;
-                showToast(`Daily income: +${group.currency_symbol} ${Number(incomeResult.amount).toFixed(2)} ${group.currency_name}`, 'success');
+                    `${group.currency_symbol} ${Number(incomeResult.new_balance).toFixed(2)}`;
+                showToast(`Daily income: +${group.currency_symbol} ${Number(incomeResult.amount).toFixed(2)}`, 'success');
             }
         } catch (e) {
             console.error('Daily income claim error:', e);
@@ -1111,7 +1130,7 @@ async function loadTransactions() {
                     <div class="tx-date">${new Date(tx.created_at).toLocaleString()}</div>
                 </div>
                 <div class="tx-amount ${isSender ? 'sent' : 'received'}">
-                    ${isSender ? '-' : '+'}${selectedGroup.currency_symbol} ${Number(tx.amount).toFixed(2)} ${esc(selectedGroup.currency_name)}
+                    ${isSender ? '-' : '+'}${selectedGroup.currency_symbol} ${Number(tx.amount).toFixed(2)}
                     ${tx.fee > 0 ? `<div style="font-size:0.7rem;color:var(--dark-gray);">fee: ${Number(tx.fee).toFixed(2)}</div>` : ''}
                 </div>
             </li>`;
@@ -1329,18 +1348,16 @@ async function loadStats() {
         .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
     const sym = selectedGroup.currency_symbol;
-    const cur = esc(selectedGroup.currency_name);
-
     document.getElementById('detailContent').innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
             <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
-            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${sym} ${totalSupply.toFixed(2)} ${cur}</div></div>
+            <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${sym} ${totalSupply.toFixed(2)}</div></div>
             <div class="info-item"><div class="info-label">Total Transactions</div><div class="info-value">${txCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Fee Rate</div><div class="info-value">${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%</div></div>
-            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${sym} ${Number(selectedGroup.daily_income).toFixed(2)} ${cur}</div></div>
-            <div class="info-item"><div class="info-label">30 Day Fees</div><div class="info-value">${sym} ${fees30.toFixed(2)} ${cur}</div></div>
-            <div class="info-item"><div class="info-label">30 Day Income</div><div class="info-value">${sym} ${income30.toFixed(2)} ${cur}</div></div>
+            <div class="info-item"><div class="info-label">Daily Income</div><div class="info-value">${sym} ${Number(selectedGroup.daily_income).toFixed(2)}</div></div>
+            <div class="info-item"><div class="info-label">30 Day Fees</div><div class="info-value">${sym} ${fees30.toFixed(2)}</div></div>
+            <div class="info-item"><div class="info-label">30 Day Income</div><div class="info-value">${sym} ${income30.toFixed(2)}</div></div>
         </div>
     `;
 }
@@ -1357,7 +1374,7 @@ function showModal(type) {
         case 'createGroup':
             body.innerHTML = `
                 <h3>Create a Group</h3>
-                <form onsubmit="createGroup(event)">
+                <form id="createGroupForm">
                     <div class="form-group">
                         <label>Group Name</label>
                         <input type="text" id="newGroupName" required placeholder="e.g. My Community">
@@ -1379,44 +1396,18 @@ function showModal(type) {
                     </div>
                 </form>
             `;
+            document.getElementById('createGroupForm').addEventListener('submit', (e) => createGroup(e));
             break;
 
         case 'send':
             loadSendModal();
             break;
 
-        case 'vote':
-            body.innerHTML = `
-                <h3>Vote on Group Settings</h3>
-                <form onsubmit="castVote(event)">
-                    <div class="form-group">
-                        <label>What to vote on</label>
-                        <select id="voteType">
-                            <option value="fee_rate">Transaction Fee Rate (%)</option>
-                            <option value="daily_income">Daily Income Amount</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Your vote value</label>
-                        <input type="number" id="voteValue" required min="0" step="any" placeholder="e.g. 5 for 5% fee, or 10 for daily income">
-                    </div>
-                    <p style="font-size:0.8rem;color:var(--dark-gray);margin-top:0.5rem;">
-                        The group setting will be the median of all members' votes.
-                        For fee rate, enter a percentage (e.g. 5 for 5%).
-                    </p>
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Submit Vote</button>
-                    </div>
-                </form>
-            `;
-            break;
-
         case 'sponsor':
             body.innerHTML = `
                 <h3>Sponsor a New Member</h3>
                 <div id="sponsorFormArea">
-                    <form onsubmit="createSponsorship(event)">
+                    <form id="sponsorForm">
                         <div class="form-group">
                             <label>Describe the person you'd like to sponsor</label>
                             <textarea id="sponsorMessage" rows="3" placeholder="e.g. Jane Smith, my colleague who wants to participate in our group"></textarea>
@@ -1432,6 +1423,7 @@ function showModal(type) {
                     </form>
                 </div>
             `;
+            document.getElementById('sponsorForm').addEventListener('submit', (e) => createSponsorship(e));
             break;
 
         case 'proposeAmendment':
@@ -1469,6 +1461,13 @@ function closeModal() {
     document.getElementById('modalOverlay').classList.add('hidden');
     document.getElementById('modalBody').classList.remove('modal-wide');
 }
+
+// Allow Escape key to close any open modal
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('modalOverlay').classList.contains('hidden')) {
+        closeModal();
+    }
+});
 
 // ============================================================
 // CREATE GROUP
@@ -1607,8 +1606,8 @@ async function loadSendModal() {
     ).join('');
 
     body.innerHTML = `
-        <h3>Send ${esc(selectedGroup.currency_name)}</h3>
-        <form onsubmit="sendCurrency(event)">
+        <h3>Send ${esc(selectedGroup.currency_symbol)}</h3>
+        <form id="sendForm">
             <div class="form-group">
                 <label>To</label>
                 <select id="sendTo" required>${options || '<option disabled>No other members</option>'}</select>
@@ -1630,6 +1629,7 @@ async function loadSendModal() {
             </div>
         </form>
     `;
+    document.getElementById('sendForm').addEventListener('submit', (e) => sendCurrency(e));
 }
 
 async function sendCurrency(e) {
@@ -1647,7 +1647,7 @@ async function sendCurrency(e) {
 
     if (error) { showToast(error.message, 'error'); return; }
 
-    showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} ${selectedGroup.currency_name} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
+    showToast(`Sent ${selectedGroup.currency_symbol} ${amount.toFixed(2)} (fee: ${selectedGroup.currency_symbol} ${Number(data.fee).toFixed(2)})`, 'success');
     closeModal();
     await loadMyGroups(); // Refresh balances
 }
@@ -1655,9 +1655,39 @@ async function sendCurrency(e) {
 // ============================================================
 // VOTE
 // ============================================================
-async function castVote(e) {
+function showVoteDialog(voteType) {
+    const isFee = voteType === 'fee_rate';
+    const label = isFee ? 'Fee Rate' : 'Daily Income';
+    const currentVal = isFee
+        ? `${(Number(selectedGroup.fee_rate) * 100).toFixed(1)}%`
+        : `${selectedGroup.currency_symbol} ${Number(selectedGroup.daily_income).toFixed(2)}`;
+    const placeholder = isFee ? 'e.g. 5 for 5%' : 'e.g. 10.00';
+    const hint = isFee
+        ? 'Enter a percentage (e.g. 5 for 5%). The group setting will change to the median of all votes once enough members have voted.'
+        : 'Enter an amount. The group setting will change to the median of all votes once enough members have voted.';
+
+    const body = document.getElementById('modalBody');
+    body.innerHTML = `
+        <h3>Vote on ${label}</h3>
+        <p style="font-size:0.85rem;color:var(--dark-gray);margin-bottom:0.75rem;">Current value: <strong>${currentVal}</strong></p>
+        <form id="voteForm">
+            <div class="form-group">
+                <label>Your proposed value</label>
+                <input type="number" id="voteValue" required min="0" step="any" placeholder="${placeholder}">
+            </div>
+            <p style="font-size:0.8rem;color:var(--dark-gray);margin-top:0.5rem;">${hint}</p>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Submit Vote</button>
+            </div>
+        </form>
+    `;
+    document.getElementById('voteForm').addEventListener('submit', (e) => castVote(e, voteType));
+    document.getElementById('modalOverlay').classList.remove('hidden');
+}
+
+async function castVote(e, voteType) {
     e.preventDefault();
-    const voteType = document.getElementById('voteType').value;
     let value = parseFloat(document.getElementById('voteValue').value);
 
     // For fee_rate, user enters percentage, store as decimal

@@ -11,6 +11,7 @@ create table public.profiles (
   display_name text not null,
   public_key text,  -- future: self-custodial identity
   last_group_id uuid,            -- last group viewed, restored on next visit
+  email_notifications boolean default true,  -- opt-out of email notifications
   created_at timestamptz default now()
 );
 
@@ -986,7 +987,87 @@ end;
 $$ language plpgsql security definer;
 
 
--- Log a group event from the client (for events not triggered by DEFINER functions)
+-- ============================================================
+-- EMAIL NOTIFICATIONS (Resend via pg_net)
+-- Requires: pg_net extension enabled, vault extension enabled,
+-- Resend API key stored in vault with name 'resend_api_key':
+--   SELECT vault.create_secret('re_YOUR_KEY_HERE', 'resend_api_key');
+-- ============================================================
+
+-- Low-level helper: send a single email via Resend HTTP API.
+-- Runs asynchronously (fire-and-forget) via pg_net.
+create or replace function public.send_email(
+  p_to text,
+  p_subject text,
+  p_html text
+)
+returns void as $$
+declare
+  v_api_key text;
+  v_from text := 'FairShare <notifications@fairshare.social>';
+begin
+  -- Read the Resend API key from Supabase Vault
+  select decrypted_secret into v_api_key
+  from vault.decrypted_secrets
+  where name = 'resend_api_key'
+  limit 1;
+
+  if v_api_key is null then
+    raise warning 'send_email: Resend API key not found in vault — skipping email to %', p_to;
+    return;
+  end if;
+
+  -- Fire-and-forget HTTP POST to Resend
+  perform net.http_post(
+    url     := 'https://api.resend.com/emails',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || v_api_key,
+      'Content-Type',  'application/json'
+    ),
+    body    := jsonb_build_object(
+      'from',    v_from,
+      'to',      p_to,
+      'subject', p_subject,
+      'html',    p_html
+    )
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- Notify all active members of a group (except the actor) via email.
+-- Respects the email_notifications preference on profiles.
+create or replace function public.notify_group_members(
+  p_group_id uuid,
+  p_actor_id uuid,
+  p_subject text,
+  p_html text
+)
+returns void as $$
+declare
+  v_recipient record;
+begin
+  -- Loop through active members who have email notifications enabled,
+  -- excluding the actor who triggered the event.
+  for v_recipient in
+    select u.email
+    from public.members m
+    join public.profiles p on p.id = m.user_id
+    join auth.users u on u.id = m.user_id
+    where m.group_id = p_group_id
+      and m.status = 'active'
+      and m.user_id <> p_actor_id
+      and (p.email_notifications is null or p.email_notifications = true)
+      and u.email is not null
+  loop
+    perform public.send_email(v_recipient.email, p_subject, p_html);
+  end loop;
+end;
+$$ language plpgsql security definer;
+
+
+-- Log a group event from the client (for events not triggered by DEFINER functions).
+-- Also dispatches email notifications for specific event types.
 create or replace function public.log_group_event(
   p_group_id uuid,
   p_event_type text,
@@ -994,12 +1075,45 @@ create or replace function public.log_group_event(
   p_metadata jsonb default '{}'
 )
 returns void as $$
+declare
+  v_actor_id uuid := auth.uid();
+  v_group_name text;
+  v_subject text;
+  v_html text;
+  v_title text;
 begin
   if not public.is_group_member(p_group_id) then
     raise exception 'You are not an active member of this group';
   end if;
 
+  -- Insert the event row (for Realtime + activity log)
   insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
-  values (p_group_id, p_event_type, p_summary, auth.uid(), p_metadata);
+  values (p_group_id, p_event_type, p_summary, v_actor_id, p_metadata);
+
+  -- Dispatch email notifications for specific event types
+  case p_event_type
+    when 'amendment_proposed' then
+      select name into v_group_name from public.groups where id = p_group_id;
+      v_title := coalesce(p_metadata->>'title', 'Untitled');
+      v_subject := '[' || coalesce(v_group_name, 'FairShare') || '] Amendment proposed: ' || v_title;
+      v_html := '<div style="font-family:sans-serif;max-width:480px;margin:0 auto;">'
+        || '<h2 style="color:#1a5276;">New Amendment Proposed</h2>'
+        || '<p>' || p_summary || '</p>'
+        || '<p style="margin-top:1rem;">Log in to review and vote:</p>'
+        || '<p><a href="https://philiprosedale.github.io/fairshare.html" '
+        || 'style="display:inline-block;padding:0.6rem 1.2rem;background:#1a5276;color:#fff;'
+        || 'border-radius:6px;text-decoration:none;font-weight:600;">Open FairShare</a></p>'
+        || '<p style="font-size:0.8rem;color:#888;margin-top:2rem;">'
+        || 'You are receiving this because you are a member of ' || coalesce(v_group_name, 'a FairShare group') || '. '
+        || 'You can disable email notifications in your profile settings.</p>'
+        || '</div>';
+      perform public.notify_group_members(p_group_id, v_actor_id, v_subject, v_html);
+
+    -- Future: add more WHEN clauses here for other event types
+    -- when 'member_sponsored' then ...
+    -- when 'rate_change_applied' then ...
+    else
+      null;  -- no email for other event types yet
+  end case;
 end;
 $$ language plpgsql security definer;

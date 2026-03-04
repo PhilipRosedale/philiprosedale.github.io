@@ -378,6 +378,30 @@ create policy "Active members can log events"
   );
 
 
+-- 11. CHAT MESSAGES
+create table public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  user_id uuid not null references public.profiles(id),
+  body text not null check (char_length(body) > 0 and char_length(body) <= 2000),
+  created_at timestamptz default now()
+);
+
+create index idx_chat_messages_group_time on public.chat_messages (group_id, created_at desc);
+
+alter table public.chat_messages enable row level security;
+
+-- Active members can read messages
+create policy "Group members can read chat"
+  on public.chat_messages for select
+  using (public.is_group_member(group_id));
+
+-- Active members can send messages
+create policy "Active members can send chat"
+  on public.chat_messages for insert
+  with check (auth.uid() = user_id and public.is_group_member(group_id));
+
+
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================

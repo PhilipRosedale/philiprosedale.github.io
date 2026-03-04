@@ -81,55 +81,58 @@
             color: var(--white);
         }
 
-        /* Layout */
-        .app-layout {
-            display: flex;
+        /* Main content */
+        .main-content {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 2rem;
             min-height: calc(100vh - 60px);
         }
 
-        /* Sidebar */
-        .sidebar {
-            width: 260px;
+        /* Groups screen */
+        .group-card {
             background: var(--white);
-            border-right: 1px solid var(--medium-gray);
-            display: flex;
-            flex-direction: column;
-            flex-shrink: 0;
-        }
-        .sidebar-header {
-            padding: 1rem;
-            border-bottom: 1px solid var(--medium-gray);
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            margin-bottom: 0.8rem;
+            cursor: pointer;
+            transition: var(--transition);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-        .sidebar-header h3 { font-size: 0.9rem; color: var(--dark-gray); text-transform: uppercase; letter-spacing: 0.05em; }
-        .sidebar-actions { display: flex; gap: 0.5rem; }
-        .group-list { flex: 1; overflow-y: auto; }
-        .group-item {
-            padding: 0.8rem 1rem;
-            cursor: pointer;
-            border-bottom: 1px solid var(--light-gray);
-            transition: var(--transition);
+        .group-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
         }
-        .group-item:hover { background: var(--light-gray); }
-        .group-item.active { background: #e3f0f8; border-left: 3px solid var(--primary-color); }
-        .group-item .group-name { font-weight: 600; font-size: 0.95rem; }
-        .group-item .group-currency { font-size: 0.8rem; color: var(--dark-gray); }
-        .group-item .group-status {
+        .group-card .group-card-name { font-weight: 600; font-size: 1rem; }
+        .group-card .group-card-meta { font-size: 0.85rem; color: var(--dark-gray); }
+        .group-card .group-card-status {
             display: inline-block;
             font-size: 0.7rem;
-            padding: 0.1rem 0.4rem;
+            padding: 0.15rem 0.5rem;
             border-radius: 10px;
-            margin-left: 0.3rem;
+            margin-left: 0.5rem;
+            background: var(--yellow);
+            color: #333;
         }
-        .group-item .group-status.pending { background: var(--yellow); color: #333; }
+        .group-card .group-card-arrow {
+            font-size: 1.2rem;
+            color: var(--dark-gray);
+        }
 
-        /* Main content */
-        .main-content {
-            flex: 1;
-            padding: 2rem;
-            overflow-y: auto;
+        /* Clickable group name header */
+        .group-name-link {
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+        .group-name-link:hover { opacity: 0.8; }
+        .group-name-back {
+            font-size: 0.9rem;
+            opacity: 0.7;
+            font-weight: 400;
+            margin-bottom: 0.2rem;
         }
 
         /* Auth screen */
@@ -360,16 +363,6 @@
             margin-bottom: 1.5rem;
         }
 
-        /* Welcome / empty state */
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            color: var(--dark-gray);
-        }
-        .empty-state .empty-icon { font-size: 3rem; margin-bottom: 1rem; }
-        .empty-state h3 { color: var(--accent-color); margin-bottom: 0.5rem; }
-        .empty-state p { margin-bottom: 1.5rem; }
-
         /* Notification toast */
         .toast {
             position: fixed;
@@ -394,8 +387,6 @@
 
         /* Responsive */
         @media (max-width: 768px) {
-            .sidebar { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--medium-gray); }
-            .app-layout { flex-direction: column; }
             .main-content { padding: 1rem; }
             .balance-amount { font-size: 2rem; }
             .tab-btn { font-size: 0.8rem; padding: 0.6rem 0.5rem; }
@@ -589,66 +580,58 @@
 
 <!-- ===== APP (hidden until logged in) ===== -->
 <div id="appScreen" class="hidden">
-    <div class="app-layout">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h3>My Groups</h3>
-                <div class="sidebar-actions">
-                    <button class="btn btn-primary btn-small" onclick="showModal('createGroup')">+ New</button>
-                </div>
+    <div class="main-content">
+
+        <!-- My Groups screen (full-page list) -->
+        <div id="groupsScreen">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+                <h2 style="color:var(--accent-color);">My Groups</h2>
+                <button class="btn btn-primary" onclick="showModal('createGroup')">+ Create Group</button>
             </div>
-            <div class="group-list" id="groupList">
+            <div id="groupList">
                 <!-- Populated dynamically -->
             </div>
+            <p id="groupsEmptyHint" class="hidden" style="text-align:center;color:var(--dark-gray);margin-top:2rem;">
+                Create a new group to get started, or ask an existing member to sponsor you.
+            </p>
         </div>
 
-        <!-- Main -->
-        <div class="main-content" id="mainContent">
-            <!-- Empty state shown when no group selected -->
-            <div id="emptyState" class="empty-state">
-                <div class="empty-icon">&#9878;</div>
-                <h3>Welcome to FairShare</h3>
-                <p>Create a new group to get started, or ask an existing member to sponsor you.</p>
-                <button class="btn btn-primary" onclick="showModal('createGroup')">Create a Group</button>
+        <!-- Group view (hidden until group selected) -->
+        <div id="groupView" class="hidden">
+            <!-- Group name header — click to go back to groups list -->
+            <div class="card balance-card group-name-link" onclick="showGroupsList()">
+                <div class="group-name-back">&#8592; My Groups</div>
+                <div class="balance-amount" id="groupNameDisplay"></div>
             </div>
 
-            <!-- Group view (hidden until group selected) -->
-            <div id="groupView" class="hidden">
-                <!-- Group name header -->
-                <div class="card balance-card">
-                    <div class="balance-amount" id="groupNameDisplay"></div>
-                </div>
+            <!-- Tab bar -->
+            <div class="tab-bar" id="tabBar">
+                <button class="tab-btn active" data-tab="money" onclick="switchTab('money')">
+                    <span class="tab-icon">💲</span> Money
+                </button>
+                <button class="tab-btn" data-tab="members" onclick="switchTab('members')">
+                    <span class="tab-icon">👥</span> Members
+                </button>
+                <button class="tab-btn" data-tab="constitution" onclick="switchTab('constitution')">
+                    <span class="tab-icon">📜</span> Constitution
+                </button>
+            </div>
 
-                <!-- Tab bar -->
-                <div class="tab-bar" id="tabBar">
-                    <button class="tab-btn active" data-tab="money" onclick="switchTab('money')">
-                        <span class="tab-icon">💲</span> Money
-                    </button>
-                    <button class="tab-btn" data-tab="members" onclick="switchTab('members')">
-                        <span class="tab-icon">👥</span> Members
-                    </button>
-                    <button class="tab-btn" data-tab="constitution" onclick="switchTab('constitution')">
-                        <span class="tab-icon">📜</span> Constitution
-                    </button>
-                </div>
+            <!-- Tab content -->
+            <div class="tab-content-card" id="tabContent">
+                <!-- Populated dynamically per active tab -->
+            </div>
 
-                <!-- Tab content -->
-                <div class="tab-content-card" id="tabContent">
-                    <!-- Populated dynamically per active tab -->
-                </div>
-
-                <!-- Activity log (always visible below tabs) -->
-                <div class="card" id="activityLog">
-                    <h3>Activity</h3>
-                    <div id="activityContent">
-                        <!-- Populated dynamically -->
-                    </div>
+            <!-- Activity log (always visible below tabs) -->
+            <div class="card" id="activityLog">
+                <h3>Activity</h3>
+                <div id="activityContent">
+                    <!-- Populated dynamically -->
                 </div>
             </div>
         </div>
+
     </div>
-
 </div>
 
 <!-- ===== MODAL CONTAINER ===== -->
@@ -708,8 +691,8 @@ async function init() {
         if (session) {
             currentUser = session.user;
             await loadProfile();
-            await handlePendingInvite(); // claim invite if one is stored
-            showApp();
+            const claimedGroup = await handlePendingInvite();
+            showApp(claimedGroup);
         } else {
             showAuth();
         }
@@ -719,8 +702,8 @@ async function init() {
             if (event === 'SIGNED_IN' && session) {
                 currentUser = session.user;
                 await loadProfile();
-                await handlePendingInvite(); // claim invite after sign-in
-                showApp();
+                const claimedGroup = await handlePendingInvite();
+                showApp(claimedGroup);
             } else if (event === 'SIGNED_OUT') {
                 currentUser = null;
                 currentProfile = null;
@@ -762,15 +745,18 @@ async function showInviteBanner(token) {
 }
 
 // Claim a pending invite after the user has signed in
+// Returns the group_id if successfully claimed, so the caller can navigate there
 async function handlePendingInvite() {
     const token = sessionStorage.getItem('fairshare_invite');
-    if (!token) return;
+    if (!token) return null;
 
+    let claimedGroupId = null;
     try {
         const { data, error } = await db.rpc('claim_sponsorship', { p_token: token });
         if (error) {
             showToast('Invite: ' + error.message, 'error');
         } else if (data?.success) {
+            claimedGroupId = data.group_id;
             if (data.admitted) {
                 showToast(`Welcome to "${data.group_name}"! You've been admitted as a member.`, 'success');
             } else {
@@ -792,6 +778,7 @@ async function handlePendingInvite() {
 
     // Hide the invite banner
     document.getElementById('inviteBanner').classList.add('hidden');
+    return claimedGroupId;
 }
 
 // ============================================================
@@ -861,12 +848,12 @@ function showAuth() {
     document.getElementById('userDisplay').textContent = '';
 }
 
-async function showApp() {
+async function showApp(navigateToGroupId) {
     document.getElementById('authScreen').classList.add('hidden');
     document.getElementById('appScreen').classList.remove('hidden');
     document.getElementById('logoutBtn').classList.remove('hidden');
     document.getElementById('userDisplay').textContent = currentProfile?.display_name || currentUser.email;
-    await loadMyGroups();
+    await loadMyGroups(navigateToGroupId || null);
 }
 
 // ============================================================
@@ -884,7 +871,7 @@ async function loadProfile() {
 // ============================================================
 // GROUPS
 // ============================================================
-async function loadMyGroups() {
+async function loadMyGroups(autoNavigateGroupId) {
     const { data, error } = await db
         .from('members')
         .select('*, groups(*)')
@@ -909,6 +896,12 @@ async function loadMyGroups() {
 
     renderGroupList();
 
+    // If a specific group was requested (e.g. from sponsorship), navigate there
+    if (autoNavigateGroupId) {
+        const target = myGroups.find(m => m.group_id === autoNavigateGroupId);
+        if (target) { selectGroup(target.groups, target); return; }
+    }
+
     // Re-select current group if still valid, or restore last viewed group
     if (selectedGroup) {
         const still = myGroups.find(m => m.group_id === selectedGroup.id);
@@ -916,34 +909,39 @@ async function loadMyGroups() {
             selectGroup(still.groups, still);
         } else {
             selectedGroup = null;
-            showEmptyState();
+            showGroupsList();
         }
     } else if (currentProfile?.last_group_id) {
         const last = myGroups.find(m => m.group_id === currentProfile.last_group_id);
         if (last) {
             selectGroup(last.groups, last);
         } else {
-            showEmptyState();
+            showGroupsList();
         }
     } else {
-        showEmptyState();
+        showGroupsList();
     }
 }
 
 function renderGroupList() {
     const el = document.getElementById('groupList');
+    const hint = document.getElementById('groupsEmptyHint');
     if (myGroups.length === 0) {
-        el.innerHTML = '<div style="padding:1rem;color:var(--dark-gray);font-size:0.85rem;">No groups yet. Create or join one!</div>';
+        el.innerHTML = '';
+        hint.classList.remove('hidden');
         return;
     }
+    hint.classList.add('hidden');
     el.innerHTML = myGroups.map(m => `
-        <div class="group-item ${selectedGroup && selectedGroup.id === m.group_id ? 'active' : ''}"
-             onclick="selectGroupById('${m.group_id}')">
-            <div class="group-name">
-                ${esc(m.groups.name)}
-                ${m.status === 'pending' ? '<span class="group-status pending">pending</span>' : ''}
+        <div class="group-card" onclick="selectGroupById('${m.group_id}')">
+            <div>
+                <div class="group-card-name">
+                    ${esc(m.groups.name)}
+                    ${m.status === 'pending' ? '<span class="group-card-status">pending</span>' : ''}
+                </div>
+                <div class="group-card-meta">${m._memberCount || 0} member${m._memberCount === 1 ? '' : 's'}</div>
             </div>
-            <div class="group-currency">${m._memberCount || 0} member${m._memberCount === 1 ? '' : 's'}</div>
+            <div class="group-card-arrow">›</div>
         </div>
     `).join('');
 }
@@ -955,9 +953,8 @@ function selectGroupById(groupId) {
 
 async function selectGroup(group, membership) {
     selectedGroup = group;
-    document.getElementById('emptyState').classList.add('hidden');
+    document.getElementById('groupsScreen').classList.add('hidden');
     document.getElementById('groupView').classList.remove('hidden');
-    renderGroupList();
 
     // Remember this group for next visit
     if (currentProfile?.last_group_id !== group.id) {
@@ -1005,18 +1002,16 @@ async function selectGroup(group, membership) {
     await loadActivityLog();
 }
 
-function showEmptyState() {
-    document.getElementById('emptyState').classList.remove('hidden');
+function showGroupsList() {
+    document.getElementById('groupsScreen').classList.remove('hidden');
     document.getElementById('groupView').classList.add('hidden');
+    selectedGroup = null;
     // Unsubscribe from realtime when leaving a group
     if (groupChannel) {
         db.removeChannel(groupChannel);
         groupChannel = null;
     }
-}
-
-function hideGroupPanels() {
-    document.getElementById('activityLog').classList.add('hidden');
+    renderGroupList();
 }
 
 // ============================================================
@@ -1520,8 +1515,7 @@ async function createGroup(e) {
 
     showToast(`Group "${name}" created!`, 'success');
     closeModal();
-    await loadMyGroups();
-    selectGroupById(group.id);
+    await loadMyGroups(group.id);
 }
 
 // ============================================================

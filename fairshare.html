@@ -757,6 +757,29 @@ let activeTab = 'money'; // Current tab: 'money', 'members', 'constitution', 'ch
 let profileCache = {};   // user_id -> display_name cache for chat
 
 // ============================================================
+// SESSION HEALTH CHECK
+// ============================================================
+async function ensureSession() {
+    // Returns true if session is valid, false if expired (and forces re-login)
+    try {
+        const { data: { session }, error } = await db.auth.getSession();
+        if (error || !session) {
+            console.warn('Session expired — redirecting to login');
+            showToast('Session expired. Please log in again.', 'error');
+            await logout();
+            return false;
+        }
+        currentUser = session.user;
+        return true;
+    } catch (e) {
+        console.warn('Session check failed:', e);
+        showToast('Session expired. Please log in again.', 'error');
+        await logout();
+        return false;
+    }
+}
+
+// ============================================================
 // INIT
 // ============================================================
 async function init() {
@@ -796,6 +819,9 @@ async function init() {
                 currentUser = null;
                 currentProfile = null;
                 showAuth();
+            } else if (event === 'TOKEN_REFRESHED' && session) {
+                // Session refreshed successfully — update user reference
+                currentUser = session.user;
             }
         });
     } catch (e) {
@@ -804,6 +830,24 @@ async function init() {
         showAuth();
     }
 }
+
+// When user returns to the tab after it's been in the background, check session health
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || !currentUser) return;
+    try {
+        const { data: { session } } = await db.auth.getSession();
+        if (!session) {
+            showToast('Session expired — please log in again.', 'error');
+            await logout();
+        } else {
+            currentUser = session.user;
+            // Re-subscribe to realtime in case the channel was dropped
+            if (selectedGroup) subscribeToGroup(selectedGroup.id);
+        }
+    } catch (e) {
+        console.warn('Visibility session check failed:', e);
+    }
+});
 
 // Show invite banner on the auth screen
 async function showInviteBanner(token) {
@@ -922,7 +966,9 @@ async function logout() {
     profileCache = {};
 
     try {
-        await db.auth.signOut();
+        // Use local scope so signOut clears the local session immediately
+        // without needing a server round-trip (which can hang if token expired)
+        await db.auth.signOut({ scope: 'local' });
     } catch (e) {
         console.warn('signOut error (ignored):', e);
     }
@@ -961,6 +1007,14 @@ async function loadProfile() {
 // GROUPS
 // ============================================================
 async function loadMyGroups(autoNavigateGroupId) {
+    // Verify session is still valid before fetching data
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) {
+        showToast('Session expired — please log in again.', 'error');
+        await logout();
+        return;
+    }
+
     const { data, error } = await db
         .from('members')
         .select('*, groups(*)')
@@ -1114,6 +1168,14 @@ async function switchTab(tabName) {
     // Hide activity log on chat tab (chat IS the live activity)
     const actLog = document.getElementById('activityLog');
     if (actLog) actLog.classList.toggle('hidden', tabName === 'chat');
+
+    // Check session health before loading data — if expired, bounce to login
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) {
+        showToast('Session expired — please log in again.', 'error');
+        await logout();
+        return;
+    }
 
     switch (tabName) {
         case 'money': await renderMoneyTab(); break;

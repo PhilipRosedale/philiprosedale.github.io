@@ -862,10 +862,11 @@ let profileCache = {};   // user_id -> display_name cache for chat
 // ============================================================
 async function ensureSession() {
     // Returns true if session is valid, false if expired (and forces re-login)
+    // Uses timeout guard in case the Supabase client is deadlocked
     try {
-        const { data: { session }, error } = await db.auth.getSession();
+        const { data: { session }, error } = await getSessionWithTimeout();
         if (error || !session) {
-            console.warn('Session expired — redirecting to login');
+            console.warn('[session] ensureSession: expired — redirecting to login');
             showToast('Session expired. Please log in again.', 'error');
             await logout();
             return false;
@@ -873,7 +874,7 @@ async function ensureSession() {
         currentUser = session.user;
         return true;
     } catch (e) {
-        console.warn('Session check failed:', e);
+        console.warn('[session] ensureSession failed:', e);
         showToast('Session expired. Please log in again.', 'error');
         await logout();
         return false;
@@ -884,6 +885,7 @@ async function ensureSession() {
 // INIT
 // ============================================================
 async function init() {
+    console.log('[init] Starting…');
     if (!db) {
         showToast('Could not connect to database. Check Supabase config.', 'error');
         showAuth();
@@ -910,18 +912,31 @@ async function init() {
         }
 
         // Listen for auth changes
-        db.auth.onAuthStateChange(async (event, session) => {
+        // IMPORTANT: The callback must NOT await Supabase calls inline.
+        // Doing so can corrupt the client's internal lock state, especially
+        // after a tab-switch triggers TOKEN_REFRESHED.  We defer heavy work
+        // via setTimeout so the auth callback returns synchronously.
+        db.auth.onAuthStateChange((event, session) => {
+            console.log('[auth] onAuthStateChange:', event);
             if (event === 'SIGNED_IN' && session) {
                 currentUser = session.user;
-                await loadProfile();
-                const claimedGroup = await handlePendingInvite();
-                showApp(claimedGroup);
+                // Defer async Supabase work outside the callback
+                setTimeout(async () => {
+                    try {
+                        await loadProfile();
+                        const claimedGroup = await handlePendingInvite();
+                        showApp(claimedGroup);
+                    } catch (e) {
+                        console.error('[auth] post-SIGNED_IN error:', e);
+                    }
+                }, 0);
             } else if (event === 'SIGNED_OUT') {
                 currentUser = null;
                 currentProfile = null;
                 showAuth();
             } else if (event === 'TOKEN_REFRESHED' && session) {
                 // Session refreshed successfully — update user reference
+                console.log('[auth] Token refreshed OK');
                 currentUser = session.user;
             }
         });
@@ -946,6 +961,31 @@ async function init() {
 let _lastActiveAt = Date.now();
 const SESSION_STALE_MS = 30 * 60 * 1000; // 30 minutes
 
+// --- Timeout-guarded getSession ---
+// Supabase's internal navigator.locks can deadlock after a tab is
+// backgrounded.  If getSession doesn't resolve within a few seconds,
+// the client is stuck and we must hard-reload to recover.
+const GET_SESSION_TIMEOUT_MS = 5000; // 5 seconds
+
+function getSessionWithTimeout() {
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+            console.error('[session] getSession() hung for ' +
+                GET_SESSION_TIMEOUT_MS + 'ms — Supabase client is stuck, reloading');
+            window.location.reload();
+        }, GET_SESSION_TIMEOUT_MS);
+
+        db.auth.getSession().then(result => {
+            clearTimeout(timer);
+            resolve(result);
+        }).catch(err => {
+            clearTimeout(timer);
+            console.warn('[session] getSession() threw:', err);
+            resolve({ data: { session: null }, error: err });
+        });
+    });
+}
+
 // --- Mechanism 1: visibilitychange ---
 document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'hidden') {
@@ -956,16 +996,18 @@ document.addEventListener('visibilitychange', async () => {
     if (!currentUser) return;
 
     const elapsed = Date.now() - _lastActiveAt;
+    console.log(`[visibility] Tab resumed after ${Math.round(elapsed / 1000)}s`);
+
     if (elapsed > SESSION_STALE_MS) {
         // Been away too long — hard reload lets init() do a clean token refresh
-        console.log(`Page idle for ${Math.round(elapsed / 60000)} min — reloading`);
+        console.log(`[visibility] Idle ${Math.round(elapsed / 60000)} min — reloading`);
         window.location.reload();
         return;
     }
 
     // Short absence — just verify the session and re-subscribe to Realtime
     try {
-        const { data: { session } } = await db.auth.getSession();
+        const { data: { session } } = await getSessionWithTimeout();
         if (!session) {
             showToast('Session expired — please log in again.', 'error');
             await logout();
@@ -975,7 +1017,7 @@ document.addEventListener('visibilitychange', async () => {
             if (selectedGroup) subscribeToGroup(selectedGroup.id);
         }
     } catch (e) {
-        console.warn('Visibility session check failed:', e);
+        console.warn('[visibility] Session check failed:', e);
     }
 });
 
@@ -985,15 +1027,23 @@ document.addEventListener('visibilitychange', async () => {
 const HEARTBEAT_MS = 5 * 60 * 1000; // 5 minutes
 setInterval(async () => {
     if (!currentUser) return;  // not logged in, nothing to check
+    console.log('[heartbeat] checking session…');
     try {
         // Lightweight RPC: select our own profile row (tiny payload, tests auth)
-        const { error } = await db.from('profiles').select('id').eq('id', currentUser.id).single();
+        const { error } = await Promise.race([
+            db.from('profiles').select('id').eq('id', currentUser.id).single(),
+            new Promise((_, reject) => setTimeout(() =>
+                reject(new Error('Heartbeat timed out (10s) — client may be stuck')),
+                10000))
+        ]);
         if (error) {
-            console.warn('Heartbeat failed — session likely expired, reloading', error);
+            console.warn('[heartbeat] failed — session likely expired, reloading', error);
             window.location.reload();
+        } else {
+            console.log('[heartbeat] OK');
         }
     } catch (e) {
-        console.warn('Heartbeat exception — reloading', e);
+        console.warn('[heartbeat] exception — reloading', e);
         window.location.reload();
     }
 }, HEARTBEAT_MS);
@@ -1102,6 +1152,7 @@ async function handleSignup(e) {
 }
 
 async function logout() {
+    console.log('[auth] logout() called');
     // Clean up realtime subscription
     if (groupChannel) {
         db.removeChannel(groupChannel);
@@ -1116,10 +1167,17 @@ async function logout() {
 
     try {
         // Use local scope so signOut clears the local session immediately
-        // without needing a server round-trip (which can hang if token expired)
-        await db.auth.signOut({ scope: 'local' });
+        // without needing a server round-trip (which can hang if token expired).
+        // Add a timeout guard: if signOut hangs (deadlocked locks), fall through.
+        await Promise.race([
+            db.auth.signOut({ scope: 'local' }),
+            new Promise(resolve => setTimeout(() => {
+                console.warn('[auth] signOut hung for 3s — forcing logout');
+                resolve();
+            }, 3000))
+        ]);
     } catch (e) {
-        console.warn('signOut error (ignored):', e);
+        console.warn('[auth] signOut error (ignored):', e);
     }
     // Always return to auth screen, even if signOut failed
     showAuth();
@@ -1158,7 +1216,8 @@ async function loadProfile() {
 // ============================================================
 async function loadMyGroups(autoNavigateGroupId) {
     // Verify session is still valid before fetching data
-    const { data: { session } } = await db.auth.getSession();
+    // Use timeout guard in case Supabase client is hung
+    const { data: { session } } = await getSessionWithTimeout();
     if (!session) {
         showToast('Session expired — please log in again.', 'error');
         await logout();
@@ -1325,7 +1384,8 @@ async function switchTab(tabName) {
     if (actLog) actLog.classList.toggle('hidden', tabName === 'chat');
 
     // Check session health before loading data — if expired, bounce to login
-    const { data: { session } } = await db.auth.getSession();
+    // Use timeout guard in case Supabase client is hung (navigator.locks deadlock)
+    const { data: { session } } = await getSessionWithTimeout();
     if (!session) {
         showToast('Session expired — please log in again.', 'error');
         await logout();

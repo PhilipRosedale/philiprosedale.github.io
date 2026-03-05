@@ -417,6 +417,57 @@ create policy "Active members can send chat"
   with check (auth.uid() = user_id and public.is_group_member(group_id));
 
 
+-- 12. GROUP DOCUMENTS (shared bulletin board / editable doc per group)
+create table public.group_documents (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null unique references public.groups(id) on delete cascade,
+  content text not null default '',
+  updated_at timestamptz default now(),
+  updated_by uuid references public.profiles(id)
+);
+
+alter table public.group_documents enable row level security;
+
+-- Group members can read the document
+create policy "Group members can view document"
+  on public.group_documents for select
+  using (public.is_group_member(group_id));
+
+-- Insert policy for save_document SECURITY DEFINER (also allow direct insert for initial creation)
+create policy "Active members can create document"
+  on public.group_documents for insert
+  with check (public.is_group_member(group_id));
+
+-- Update policy for save_document SECURITY DEFINER
+create policy "Active members can update document"
+  on public.group_documents for update
+  using (public.is_group_member(group_id));
+
+
+-- 13. DOCUMENT HISTORY (revision snapshots for attribution)
+create table public.document_history (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  user_id uuid not null references public.profiles(id),
+  content text not null,
+  created_at timestamptz default now()
+);
+
+create index idx_document_history_group_time on public.document_history (group_id, created_at asc);
+
+alter table public.document_history enable row level security;
+
+-- Group members can read document history
+create policy "Group members can view document history"
+  on public.document_history for select
+  using (public.is_group_member(group_id));
+
+-- History rows are inserted by the save_document SECURITY DEFINER function
+create policy "Active members can insert document history"
+  on public.document_history for insert
+  with check (public.is_group_member(group_id));
+
+
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================
@@ -1101,6 +1152,41 @@ begin
   loop
     perform public.send_email(v_recipient.email, p_subject, p_html);
   end loop;
+end;
+$$ language plpgsql security definer;
+
+
+-- Save group document: upserts current content and appends a history snapshot.
+-- Only active members can save.
+create or replace function public.save_document(
+  p_group_id uuid,
+  p_content text
+)
+returns json as $$
+declare
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then
+    raise exception 'You must be logged in';
+  end if;
+
+  if not public.is_group_member(p_group_id) then
+    raise exception 'You are not an active member of this group';
+  end if;
+
+  -- Upsert the current document
+  insert into public.group_documents (group_id, content, updated_at, updated_by)
+  values (p_group_id, p_content, now(), v_user_id)
+  on conflict (group_id)
+  do update set content = excluded.content,
+               updated_at = excluded.updated_at,
+               updated_by = excluded.updated_by;
+
+  -- Append a history snapshot
+  insert into public.document_history (group_id, user_id, content)
+  values (p_group_id, v_user_id, p_content);
+
+  return json_build_object('success', true);
 end;
 $$ language plpgsql security definer;
 

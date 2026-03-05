@@ -932,9 +932,38 @@ async function init() {
     }
 }
 
-// When user returns to the tab after it's been in the background, check session health
+// ---- Session keep-alive & recovery ----
+// Two mechanisms work together:
+//
+// 1. visibilitychange — when the user returns after the tab was hidden (sleep,
+//    minimised, switched tab).  If idle > 30 min, hard reload.
+//
+// 2. Periodic heartbeat (every 5 min) — catches the case where the tab stays
+//    in the foreground on an awake computer but the session silently expires.
+//    It makes a lightweight DB call; if it fails, the session is dead and we
+//    force a reload.
+
+let _lastActiveAt = Date.now();
+const SESSION_STALE_MS = 30 * 60 * 1000; // 30 minutes
+
+// --- Mechanism 1: visibilitychange ---
 document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible' || !currentUser) return;
+    if (document.visibilityState === 'hidden') {
+        _lastActiveAt = Date.now();
+        return;
+    }
+    // Page just became visible again
+    if (!currentUser) return;
+
+    const elapsed = Date.now() - _lastActiveAt;
+    if (elapsed > SESSION_STALE_MS) {
+        // Been away too long — hard reload lets init() do a clean token refresh
+        console.log(`Page idle for ${Math.round(elapsed / 60000)} min — reloading`);
+        window.location.reload();
+        return;
+    }
+
+    // Short absence — just verify the session and re-subscribe to Realtime
     try {
         const { data: { session } } = await db.auth.getSession();
         if (!session) {
@@ -949,6 +978,25 @@ document.addEventListener('visibilitychange', async () => {
         console.warn('Visibility session check failed:', e);
     }
 });
+
+// --- Mechanism 2: periodic heartbeat ---
+// Every 5 minutes, make a tiny authenticated request. If the session is dead
+// the request will fail and we reload to get a clean start.
+const HEARTBEAT_MS = 5 * 60 * 1000; // 5 minutes
+setInterval(async () => {
+    if (!currentUser) return;  // not logged in, nothing to check
+    try {
+        // Lightweight RPC: select our own profile row (tiny payload, tests auth)
+        const { error } = await db.from('profiles').select('id').eq('id', currentUser.id).single();
+        if (error) {
+            console.warn('Heartbeat failed — session likely expired, reloading', error);
+            window.location.reload();
+        }
+    } catch (e) {
+        console.warn('Heartbeat exception — reloading', e);
+        window.location.reload();
+    }
+}, HEARTBEAT_MS);
 
 // Show invite banner on the auth screen
 async function showInviteBanner(token) {

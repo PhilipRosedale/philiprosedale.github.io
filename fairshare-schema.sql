@@ -1245,6 +1245,104 @@ $$ language plpgsql security definer;
 
 
 -- ============================================================
+-- MEET REQUESTS (short-lived tokens for in-person QR exchange)
+-- ============================================================
+create table public.meet_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  token text unique not null default encode(gen_random_bytes(16), 'hex'),
+  created_at timestamptz default now(),
+  expires_at timestamptz default (now() + interval '10 minutes')
+);
+
+alter table public.meet_requests enable row level security;
+
+-- Users can insert their own meet requests
+create policy "Users can insert own meet requests"
+  on public.meet_requests for insert
+  with check (auth.uid() = user_id);
+
+-- Users can read their own meet requests
+create policy "Users can read own meet requests"
+  on public.meet_requests for select
+  using (auth.uid() = user_id);
+
+-- Users can delete their own meet requests
+create policy "Users can delete own meet requests"
+  on public.meet_requests for delete
+  using (auth.uid() = user_id);
+
+
+-- ============================================================
+-- CONTACTS (permanent record of in-person meetings)
+-- ============================================================
+create table public.contacts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  contact_id uuid not null references public.profiles(id) on delete cascade,
+  met_at timestamptz default now(),
+  unique(user_id, contact_id)
+);
+
+alter table public.contacts enable row level security;
+
+-- Users can read their own contacts
+create policy "Users can read own contacts"
+  on public.contacts for select
+  using (auth.uid() = user_id);
+
+-- Enable Realtime on contacts table so the other phone gets notified
+alter publication supabase_realtime add table public.contacts;
+
+
+-- ============================================================
+-- COMPLETE MEET: server-side function for QR contact exchange
+-- ============================================================
+create or replace function public.complete_meet(p_token text)
+returns json as $$
+declare
+  v_caller_id uuid := auth.uid();
+  v_meet_request record;
+  v_contact_name text;
+begin
+  -- Look up the meet request by token
+  select * into v_meet_request
+  from public.meet_requests
+  where token = p_token
+    and expires_at > now();
+
+  if not found then
+    raise exception 'Meet request not found or expired';
+  end if;
+
+  -- Cannot meet yourself
+  if v_meet_request.user_id = v_caller_id then
+    raise exception 'Cannot create a contact with yourself';
+  end if;
+
+  -- Insert bidirectional contacts (ignore if already exist)
+  insert into public.contacts (user_id, contact_id)
+  values (v_caller_id, v_meet_request.user_id)
+  on conflict (user_id, contact_id) do nothing;
+
+  insert into public.contacts (user_id, contact_id)
+  values (v_meet_request.user_id, v_caller_id)
+  on conflict (user_id, contact_id) do nothing;
+
+  -- Get the other person's display name
+  select display_name into v_contact_name
+  from public.profiles
+  where id = v_meet_request.user_id;
+
+  return json_build_object(
+    'contact_id', v_meet_request.user_id,
+    'contact_name', coalesce(v_contact_name, 'Unknown')
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- ============================================================
 -- STORAGE: Avatars bucket for per-group profile pictures
 -- ============================================================
 -- Run in Supabase SQL Editor:

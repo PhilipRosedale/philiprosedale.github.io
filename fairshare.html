@@ -694,6 +694,90 @@
         }
 
         .hidden { display: none !important; }
+
+        /* Meet / QR contact exchange overlay */
+        .meet-overlay {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .meet-overlay .meet-close {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: #fff;
+            font-size: 1.5rem;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 3001;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .meet-overlay .meet-close:hover {
+            background: rgba(255,255,255,0.35);
+        }
+        .meet-qr-section {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem 1rem 1rem;
+        }
+        .meet-qr-section .meet-label {
+            color: rgba(255,255,255,0.8);
+            font-size: 0.85rem;
+            margin-bottom: 0.75rem;
+        }
+        .meet-qr-box {
+            background: #fff;
+            border-radius: 12px;
+            padding: 12px;
+            display: inline-block;
+        }
+        .meet-camera-section {
+            flex: 1 1 auto;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .meet-camera-section video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .meet-camera-section .meet-scan-hint {
+            position: absolute;
+            bottom: 1.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.8);
+            font-size: 0.85rem;
+            background: rgba(0,0,0,0.5);
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+        .meet-success {
+            color: #4cff88;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-align: center;
+            padding: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -703,7 +787,7 @@
     <h1><a href="index.html">FairShare</a></h1>
     <div class="header-right">
         <img id="headerAvatar" src="" alt="" class="header-avatar hidden">
-        <span class="user-name" id="userDisplay"></span>
+        <span class="user-name" id="userDisplay" onclick="openMeetScreen()" style="cursor:pointer;" title="Tap to exchange contacts"></span>
         <button class="btn btn-outline hidden" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
     </div>
 </div>
@@ -822,6 +906,22 @@
     </div>
 </div>
 
+<!-- ===== MEET / QR CONTACT EXCHANGE OVERLAY ===== -->
+<div id="meetOverlay" class="meet-overlay hidden">
+    <button class="meet-close" onclick="closeMeetScreen()" aria-label="Close">✕</button>
+    <div class="meet-qr-section">
+        <div class="meet-label">Your QR Code</div>
+        <div class="meet-qr-box" id="meetQrBox">
+            <!-- QR code rendered here -->
+        </div>
+    </div>
+    <div class="meet-camera-section">
+        <video id="meetVideo" autoplay playsinline muted></video>
+        <canvas id="meetCanvas" style="display:none;"></canvas>
+        <div class="meet-scan-hint" id="meetScanHint">Point at the other person's QR code</div>
+    </div>
+</div>
+
 <!-- ===== MODAL CONTAINER ===== -->
 <div id="modalOverlay" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
     <div class="modal" id="modalBody">
@@ -834,6 +934,9 @@
 
 <!-- ===== QR CODE GENERATOR ===== -->
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+
+<!-- ===== QR CODE SCANNER (jsQR) ===== -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
 <script>
 // ============================================================
@@ -2207,10 +2310,14 @@ function closeModal() {
     document.getElementById('modalBody').classList.remove('modal-wide');
 }
 
-// Allow Escape key to close any open modal
+// Allow Escape key to close any open modal or the meet overlay
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !document.getElementById('modalOverlay').classList.contains('hidden')) {
-        closeModal();
+    if (e.key === 'Escape') {
+        if (!document.getElementById('meetOverlay').classList.contains('hidden')) {
+            closeMeetScreen();
+        } else if (!document.getElementById('modalOverlay').classList.contains('hidden')) {
+            closeModal();
+        }
     }
 });
 
@@ -3241,6 +3348,194 @@ function formatTimeAgo(date) {
     const days = Math.floor(hours / 24);
     if (days < 30) return `${days}d ago`;
     return date.toLocaleDateString();
+}
+
+// ============================================================
+// MEET / QR CONTACT EXCHANGE
+// ============================================================
+let meetScanTimer = null;
+let meetStream = null;
+let meetChannel = null;
+let meetHandled = false; // prevent duplicate scans
+
+async function openMeetScreen() {
+    if (!currentUser) return;
+
+    meetHandled = false;
+
+    // 1. Create a meet request in the database
+    const { data, error } = await db
+        .from('meet_requests')
+        .insert({ user_id: currentUser.id })
+        .select('token')
+        .single();
+
+    if (error) {
+        showToast('Could not start meet: ' + error.message, 'error');
+        return;
+    }
+
+    const token = data.token;
+
+    // 2. Generate QR code encoding the token
+    const qr = qrcode(0, 'M');
+    qr.addData('fairshare-meet:' + token);
+    qr.make();
+    document.getElementById('meetQrBox').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4 });
+
+    // 3. Show the overlay
+    document.getElementById('meetOverlay').classList.remove('hidden');
+    document.getElementById('meetScanHint').textContent = 'Point at the other person\'s QR code';
+
+    // 4. Subscribe to Realtime on contacts table for this user
+    // (so if the OTHER person scans first, we still get notified)
+    meetChannel = db.channel('meet-contacts')
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'contacts',
+            filter: 'user_id=eq.' + currentUser.id
+        }, (payload) => {
+            if (meetHandled) return;
+            meetHandled = true;
+            const contactId = payload.new.contact_id;
+            // Look up the contact's name
+            db.from('profiles').select('display_name').eq('id', contactId).single()
+                .then(({ data: profile }) => {
+                    const name = profile?.display_name || 'someone';
+                    meetSuccess(name);
+                });
+        })
+        .subscribe();
+
+    // 5. Start the front-facing camera
+    try {
+        meetStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+        const video = document.getElementById('meetVideo');
+        video.srcObject = meetStream;
+        await video.play();
+
+        // 6. Begin scanning loop
+        meetScanLoop();
+    } catch (camErr) {
+        console.warn('[meet] Camera access denied or unavailable:', camErr);
+        document.getElementById('meetScanHint').textContent = 'Camera unavailable — ask the other person to scan your code';
+    }
+}
+
+function meetScanLoop() {
+    if (meetHandled) return;
+
+    const video = document.getElementById('meetVideo');
+    const canvas = document.getElementById('meetCanvas');
+
+    if (video.readyState < video.HAVE_ENOUGH_DATA) {
+        meetScanTimer = requestAnimationFrame(meetScanLoop);
+        return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert'
+    });
+
+    if (code && code.data && code.data.startsWith('fairshare-meet:')) {
+        const scannedToken = code.data.replace('fairshare-meet:', '');
+        if (!meetHandled) {
+            meetHandled = true;
+            handleMeetScan(scannedToken);
+        }
+        return;
+    }
+
+    // Continue scanning
+    meetScanTimer = requestAnimationFrame(meetScanLoop);
+}
+
+async function handleMeetScan(token) {
+    document.getElementById('meetScanHint').textContent = 'Connecting...';
+
+    try {
+        const { data, error } = await db.rpc('complete_meet', { p_token: token });
+
+        if (error) {
+            showToast('Meet failed: ' + error.message, 'error');
+            meetHandled = false; // allow retry
+            meetScanLoop();
+            return;
+        }
+
+        const contactName = data?.contact_name || 'New contact';
+        meetSuccess(contactName);
+    } catch (e) {
+        showToast('Meet error: ' + e.message, 'error');
+        meetHandled = false;
+        meetScanLoop();
+    }
+}
+
+function meetSuccess(contactName) {
+    // Vibrate the phone
+    if (navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+    }
+
+    // Show success in the overlay
+    document.getElementById('meetScanHint').textContent = '';
+    const qrBox = document.getElementById('meetQrBox');
+    qrBox.outerHTML = `<div class="meet-success">✓ Connected with ${esc(contactName)}!</div>`;
+
+    showToast('Contact added: ' + contactName, 'success');
+
+    // Auto-close after a short delay
+    setTimeout(() => {
+        closeMeetScreen();
+    }, 2500);
+}
+
+function closeMeetScreen() {
+    // Stop camera
+    if (meetStream) {
+        meetStream.getTracks().forEach(t => t.stop());
+        meetStream = null;
+    }
+    const video = document.getElementById('meetVideo');
+    if (video) video.srcObject = null;
+
+    // Stop scanning
+    if (meetScanTimer) {
+        cancelAnimationFrame(meetScanTimer);
+        meetScanTimer = null;
+    }
+
+    // Unsubscribe from Realtime
+    if (meetChannel) {
+        db.removeChannel(meetChannel);
+        meetChannel = null;
+    }
+
+    meetHandled = false;
+
+    // Reset QR area (in case meetSuccess replaced it)
+    const overlay = document.getElementById('meetOverlay');
+    const qrSection = overlay.querySelector('.meet-qr-section');
+    if (qrSection && !document.getElementById('meetQrBox')) {
+        // Restore the QR box element if it was replaced by success message
+        const successEl = qrSection.querySelector('.meet-success');
+        if (successEl) {
+            successEl.outerHTML = '<div class="meet-qr-box" id="meetQrBox"></div>';
+        }
+    }
+
+    // Hide overlay
+    overlay.classList.add('hidden');
 }
 
 // ============================================================

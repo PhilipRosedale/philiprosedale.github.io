@@ -3363,7 +3363,35 @@ async function openMeetScreen() {
 
     meetHandled = false;
 
-    // 1. Create a meet request in the database
+    // 1. Request camera FIRST — iOS Safari requires getUserMedia to be called
+    //    in the direct user-gesture call stack (before any await to network).
+    //    Use ideal facingMode so it falls back gracefully on all devices.
+    let cameraOk = false;
+    try {
+        meetStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'user' }, width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+        cameraOk = true;
+    } catch (camErr) {
+        console.warn('[meet] Camera access denied or unavailable:', camErr);
+    }
+
+    // 2. Show the overlay immediately (camera preview + loading QR)
+    document.getElementById('meetOverlay').classList.remove('hidden');
+    document.getElementById('meetScanHint').textContent = cameraOk
+        ? 'Point at the other person\'s QR code'
+        : 'Camera unavailable — ask the other person to scan your code';
+    document.getElementById('meetQrBox').innerHTML =
+        '<div style="color:var(--dark-gray);font-size:0.85rem;padding:1rem;">Loading…</div>';
+
+    // 3. Attach camera to video element if available
+    if (cameraOk) {
+        const video = document.getElementById('meetVideo');
+        video.srcObject = meetStream;
+        try { await video.play(); } catch (_) { /* iOS sometimes ignores this */ }
+    }
+
+    // 4. Create a meet request in the database (network call after camera)
     const { data, error } = await db
         .from('meet_requests')
         .insert({ user_id: currentUser.id })
@@ -3372,22 +3400,20 @@ async function openMeetScreen() {
 
     if (error) {
         showToast('Could not start meet: ' + error.message, 'error');
+        closeMeetScreen();
         return;
     }
 
     const token = data.token;
 
-    // 2. Generate QR code encoding the token
+    // 5. Generate QR code encoding the token
     const qr = qrcode(0, 'M');
     qr.addData('fairshare-meet:' + token);
     qr.make();
-    document.getElementById('meetQrBox').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4 });
+    const qrBox = document.getElementById('meetQrBox');
+    if (qrBox) qrBox.innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4 });
 
-    // 3. Show the overlay
-    document.getElementById('meetOverlay').classList.remove('hidden');
-    document.getElementById('meetScanHint').textContent = 'Point at the other person\'s QR code';
-
-    // 4. Subscribe to Realtime on contacts table for this user
+    // 6. Subscribe to Realtime on contacts table for this user
     // (so if the OTHER person scans first, we still get notified)
     meetChannel = db.channel('meet-contacts')
         .on('postgres_changes', {
@@ -3408,20 +3434,9 @@ async function openMeetScreen() {
         })
         .subscribe();
 
-    // 5. Start the front-facing camera
-    try {
-        meetStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
-        });
-        const video = document.getElementById('meetVideo');
-        video.srcObject = meetStream;
-        await video.play();
-
-        // 6. Begin scanning loop
+    // 7. Begin scanning loop if camera is active
+    if (cameraOk) {
         meetScanLoop();
-    } catch (camErr) {
-        console.warn('[meet] Camera access denied or unavailable:', camErr);
-        document.getElementById('meetScanHint').textContent = 'Camera unavailable — ask the other person to scan your code';
     }
 }
 

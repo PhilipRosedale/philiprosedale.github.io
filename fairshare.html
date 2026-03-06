@@ -2481,8 +2481,8 @@ async function castVote(e, voteType) {
 // CONSTITUTION & AMENDMENTS
 // ============================================================
 
-// Word-level diff: produces HTML with <ins> and <del> spans
-function wordDiff(oldText, newText) {
+// Word-level diff: returns array of { type: 'same'|'ins'|'del', text } objects
+function wordDiffRaw(oldText, newText) {
     const oldWords = oldText.split(/(\s+)/);
     const newWords = newText.split(/(\s+)/);
 
@@ -2516,7 +2516,12 @@ function wordDiff(oldText, newText) {
         }
     }
 
-    return result.map(r => {
+    return result;
+}
+
+// Word-level diff: produces HTML with <ins> and <del> spans
+function wordDiff(oldText, newText) {
+    return wordDiffRaw(oldText, newText).map(r => {
         const t = esc(r.text);
         if (r.type === 'ins') return `<ins>${t}</ins>`;
         if (r.type === 'del') return `<del>${t}</del>`;
@@ -2567,7 +2572,7 @@ function buildWordAttribution(history) {
     for (let h = 1; h < history.length; h++) {
         const rev = history[h];
         const newWords = rev.content.split(/(\s+)/);
-        const diff = wordDiff(
+        const diff = wordDiffRaw(
             prevWords.join(''),
             newWords.join('')
         );

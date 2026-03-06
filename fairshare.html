@@ -832,6 +832,9 @@
 <!-- ===== SUPABASE SDK ===== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 
+<!-- ===== QR CODE GENERATOR ===== -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+
 <script>
 // ============================================================
 // CONFIG - Replace these with your Supabase project values
@@ -2296,7 +2299,7 @@ async function createSponsorship(e) {
     // Build the invite URL
     const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${data.token}`;
 
-    // Replace the form with the generated link
+    // Replace the form with the generated link and QR code
     document.getElementById('sponsorFormArea').innerHTML = `
         <p style="margin-bottom:1rem;color:var(--dark-gray);">
             Share this invite link with the person you'd like to sponsor.
@@ -2310,10 +2313,17 @@ async function createSponsorship(e) {
                 <button type="button" class="btn btn-primary" onclick="copyInviteLink()">Copy</button>
             </div>
         </div>
+        <div id="qrCode" style="display:flex;justify-content:center;margin:1rem 0;"></div>
         <div class="form-actions">
             <button type="button" class="btn btn-secondary" onclick="closeModal()">Done</button>
         </div>
     `;
+
+    // Render QR code for the invite URL
+    const qr = qrcode(0, 'M');
+    qr.addData(inviteUrl);
+    qr.make();
+    document.getElementById('qrCode').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4 });
 }
 
 function copyInviteLink() {

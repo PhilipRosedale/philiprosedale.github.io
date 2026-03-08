@@ -17,9 +17,9 @@ Features planned for the FairShare group currency app.
 - Contacts see mutual groups, Friends-in-common
 - Direct Messaging 
 
-## Bugs 
+## Bugs To Fix
 
-- Not getting notifications or refresh on new chat messages?
+
 
 ## Changelog
 

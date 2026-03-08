@@ -1294,6 +1294,11 @@ create policy "Users can read own contacts"
 -- Enable Realtime on contacts table so the other phone gets notified
 alter publication supabase_realtime add table public.contacts;
 
+-- Enable Realtime for group chat, activity log, and document history
+alter publication supabase_realtime add table public.chat_messages;
+alter publication supabase_realtime add table public.group_events;
+alter publication supabase_realtime add table public.document_history;
+
 
 -- ============================================================
 -- COMPLETE MEET: server-side function for QR contact exchange

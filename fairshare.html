@@ -46,8 +46,26 @@
         }
         .header h1 { font-size: 1.5rem; font-weight: 700; }
         .header h1 a { color: var(--white); text-decoration: none; }
-        .header-right { display: flex; align-items: center; gap: 1rem; }
-        .header .user-name { font-size: 0.9rem; opacity: 0.9; }
+        .header-right { display: flex; align-items: center; gap: 0.5rem; }
+        .header .user-name { font-size: 0.9rem; opacity: 0.9; cursor: pointer; }
+        .header .user-name:hover { opacity: 1; }
+        .header-icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255,255,255,0.25);
+            color: var(--white);
+            font-size: 1.1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+        .header-icon-btn:hover {
+            background: rgba(255,255,255,0.4);
+        }
 
         /* Avatars */
         .header-avatar {
@@ -430,7 +448,7 @@
         .member-status.pending { background: #fff3cd; color: #856404; }
         .member-sponsor { font-size: 0.8rem; color: var(--dark-gray); font-style: italic; }
 
-        /* Modal overlay */
+        /* Modal overlay (above contact list and meet overlay so dialogs are visible) */
         .modal-overlay {
             position: fixed;
             inset: 0;
@@ -438,7 +456,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            z-index: 1000;
+            z-index: 4000;
         }
         .modal {
             background: var(--white);
@@ -778,6 +796,110 @@
             text-align: center;
             padding: 1rem;
         }
+
+        /* Contact list overlay */
+        .contacts-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--light-gray);
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+        }
+        .contacts-overlay .contacts-header {
+            background: var(--primary-color);
+            color: var(--white);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: var(--shadow);
+        }
+        .contacts-overlay .contacts-header h2 { font-size: 1.2rem; font-weight: 600; }
+        .contacts-overlay .contacts-close {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: #fff;
+            font-size: 1.5rem;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .contacts-overlay .contacts-close:hover { background: rgba(255,255,255,0.35); }
+        .contacts-overlay .contacts-list-wrap {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            max-width: 700px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        .contact-row {
+            background: var(--white);
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .contact-row:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+        .contact-row-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.9rem 1rem;
+        }
+        .contact-row-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            flex-shrink: 0;
+        }
+        .contact-row-avatar-placeholder {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--medium-gray);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            color: var(--dark-gray);
+            flex-shrink: 0;
+        }
+        .contact-row-name { font-weight: 600; font-size: 1rem; flex: 1; }
+        .contact-row-chevron { font-size: 0.9rem; color: var(--dark-gray); transition: transform 0.2s; }
+        .contact-row.expanded .contact-row-chevron { transform: rotate(90deg); }
+        .contact-detail {
+            padding: 0 1rem 1rem;
+            border-top: 1px solid var(--light-gray);
+            display: none;
+        }
+        .contact-row.expanded .contact-detail { display: block; }
+        .contact-detail-line { padding: 0.4rem 0; font-size: 0.9rem; color: var(--dark-gray); }
+        .contact-detail-line a { color: var(--primary-color); text-decoration: none; }
+        .contact-selfie-wrap {
+            margin: 0.75rem 0;
+            width: 120px;
+            height: 120px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--medium-gray);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: var(--dark-gray);
+        }
+        .contact-selfie-wrap img { width: 100%; height: 100%; object-fit: cover; }
+        .contact-detail-actions { margin-top: 1rem; }
+        .contact-detail-actions .btn { margin-right: 0.5rem; }
     </style>
 </head>
 <body>
@@ -786,8 +908,9 @@
 <div class="header">
     <h1><a href="index.html">FairShare</a></h1>
     <div class="header-right">
-        <img id="headerAvatar" src="" alt="" class="header-avatar hidden">
-        <span class="user-name" id="userDisplay" onclick="openMeetScreen()" style="cursor:pointer;" title="Tap to exchange contacts"></span>
+        <button type="button" class="header-icon-btn" onclick="openMeetScreen()" title="Exchange contacts (show QR)" aria-label="Exchange contacts">🤝</button>
+        <button type="button" class="header-icon-btn" onclick="openContactListScreen()" title="Contacts" aria-label="Contacts">👥</button>
+        <span class="user-name" id="userDisplay" onclick="openPreferences()" title="Profile &amp; preferences"></span>
         <button class="btn btn-outline hidden" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
     </div>
 </div>
@@ -922,6 +1045,17 @@
     </div>
 </div>
 
+<!-- ===== CONTACT LIST OVERLAY ===== -->
+<div id="contactsOverlay" class="contacts-overlay hidden">
+    <div class="contacts-header">
+        <h2>Contacts</h2>
+        <button type="button" class="contacts-close" onclick="closeContactListScreen()" aria-label="Close">✕</button>
+    </div>
+    <div class="contacts-list-wrap" id="contactsListContent">
+        <p style="color:var(--dark-gray);text-align:center;padding:2rem;">Loading…</p>
+    </div>
+</div>
+
 <!-- ===== MODAL CONTAINER ===== -->
 <div id="modalOverlay" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
     <div class="modal" id="modalBody">
@@ -960,7 +1094,12 @@ let currentProfile = null;
 let selectedGroup = null;
 let myGroups = [];
 let groupChannel = null; // Supabase Realtime channel for current group
+let contactSharesChannel = null; // Realtime for "X shared Y with you" toasts
 let activeTab = 'money'; // Current tab: 'money', 'members', 'constitution', 'chat'
+let shareWithContactId = null;
+let shareWithContactName = '';
+let contactSelfieId = null;
+let contactSelfieStream = null;
 let profileCache = {};   // user_id -> display_name cache for chat
 
 // ============================================================
@@ -1259,10 +1398,14 @@ async function handleSignup(e) {
 
 async function logout() {
     console.log('[auth] logout() called');
-    // Clean up realtime subscription
+    // Clean up realtime subscriptions
     if (groupChannel) {
         db.removeChannel(groupChannel);
         groupChannel = null;
+    }
+    if (contactSharesChannel) {
+        db.removeChannel(contactSharesChannel);
+        contactSharesChannel = null;
     }
     // Reset client state
     selectedGroup = null;
@@ -1302,7 +1445,32 @@ async function showApp(navigateToGroupId) {
     document.getElementById('appScreen').classList.remove('hidden');
     document.getElementById('logoutBtn').classList.remove('hidden');
     document.getElementById('userDisplay').textContent = currentProfile?.display_name || currentUser.email;
+    subscribeToContactShares();
     await loadMyGroups(navigateToGroupId || null);
+}
+
+function subscribeToContactShares() {
+    if (contactSharesChannel) {
+        db.removeChannel(contactSharesChannel);
+        contactSharesChannel = null;
+    }
+    if (!currentUser) return;
+    contactSharesChannel = db.channel('contact-shares')
+        .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'contact_shares',
+            filter: 'to_user_id=eq.' + currentUser.id
+        }, async (payload) => {
+            const fromId = payload.new?.from_user_id;
+            const sharedType = payload.new?.shared_type;
+            if (!fromId || !sharedType) return;
+            const { data: profile } = await db.from('profiles').select('display_name').eq('id', fromId).single();
+            const name = profile?.display_name || 'Someone';
+            const msg = sharedType === 'phone' ? (name + ' shared phone number with you.') : (name + ' shared email with you.');
+            showToast(msg, 'info');
+        })
+        .subscribe();
 }
 
 // ============================================================
@@ -2274,6 +2442,98 @@ function showModal(type) {
             document.getElementById('sponsorForm').addEventListener('submit', (e) => createSponsorship(e));
             break;
 
+        case 'preferences':
+            body.innerHTML = `
+                <h3>Profile &amp; Preferences</h3>
+                <form id="preferencesForm">
+                    <div class="form-group">
+                        <label>Email (for contacts)</label>
+                        <input type="email" id="prefEmail" placeholder="you@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Phone (for contacts)</label>
+                        <input type="tel" id="prefPhone" placeholder="+1 234 567 8900">
+                    </div>
+                    <div class="form-group">
+                        <label>Profile photo (shown to new contacts)</label>
+                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+                            <div id="prefPhotoPreview" class="contact-selfie-wrap" style="width:80px;height:80px;cursor:pointer;" onclick="document.getElementById('prefPhotoInput').click()">📷</div>
+                            <input type="file" id="prefPhotoInput" accept="image/*" capture="user" style="display:none;">
+                            <span style="font-size:0.85rem;color:var(--dark-gray);">Tap to take or choose photo</span>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </div>
+                </form>
+            `;
+            document.getElementById('prefEmail').value = currentProfile?.email || '';
+            document.getElementById('prefPhone').value = currentProfile?.phone || '';
+            const prefPreview = document.getElementById('prefPhotoPreview');
+            if (currentProfile?.profile_image_url) {
+                const img = document.createElement('img');
+                img.src = currentProfile.profile_image_url;
+                img.style.width = img.style.height = '100%';
+                img.style.objectFit = 'cover';
+                prefPreview.innerHTML = '';
+                prefPreview.appendChild(img);
+            }
+            document.getElementById('prefPhotoInput').addEventListener('change', (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const url = URL.createObjectURL(file);
+                prefPreview.innerHTML = '';
+                const img = document.createElement('img');
+                img.src = url;
+                img.style.width = img.style.height = '100%';
+                img.style.objectFit = 'cover';
+                prefPreview.appendChild(img);
+                prefPreview._pendingFile = file;
+            });
+            document.getElementById('preferencesForm').addEventListener('submit', (e) => savePreferences(e));
+            break;
+
+        case 'shareWithContact':
+            body.innerHTML = `
+                <h3>Share with ${esc(shareWithContactName || 'contact')}</h3>
+                <p style="font-size:0.9rem;color:var(--dark-gray);margin-bottom:1rem;">Choose what to share. They will be notified.</p>
+                <form id="shareWithContactForm" style="min-width:0;">
+                    <div class="form-group" style="display:flex;align-items:flex-start;gap:0.5rem;max-width:100%;min-width:0;">
+                        <input type="checkbox" id="sharePhone" style="flex-shrink:0;margin-top:0.2rem;" ${(currentProfile?.phone) ? '' : 'disabled'}>
+                        <label for="sharePhone" style="margin:0;flex:1;min-width:0;">Share my phone number</label>
+                    </div>
+                    ${!(currentProfile?.phone) ? '<p style="font-size:0.8rem;color:var(--dark-gray);">Add your phone in Profile first.</p>' : ''}
+                    <div class="form-group" style="display:flex;align-items:flex-start;gap:0.5rem;max-width:100%;min-width:0;">
+                        <input type="checkbox" id="shareEmail" style="flex-shrink:0;margin-top:0.2rem;" ${(currentProfile?.email) ? '' : 'disabled'}>
+                        <label for="shareEmail" style="margin:0;flex:1;min-width:0;">Share my email</label>
+                    </div>
+                    ${!(currentProfile?.email) ? '<p style="font-size:0.8rem;color:var(--dark-gray);">Add your email in Profile first.</p>' : ''}
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Share</button>
+                    </div>
+                </form>
+            `;
+            document.getElementById('shareWithContactForm').addEventListener('submit', (e) => submitShareWithContact(e));
+            break;
+
+        case 'contactSelfie':
+            body.innerHTML = `
+                <h3>Take a selfie</h3>
+                <p style="font-size:0.9rem;color:var(--dark-gray);margin-bottom:0.75rem;">Position both of you in frame, then capture.</p>
+                <div style="background:#000;border-radius:8px;overflow:hidden;margin-bottom:1rem;aspect-ratio:1;max-height:320px;">
+                    <video id="contactSelfieVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeContactSelfieModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="contactSelfieCaptureBtn">Capture</button>
+                </div>
+            `;
+            document.getElementById('contactSelfieCaptureBtn').addEventListener('click', captureContactSelfie);
+            startContactSelfieStream();
+            break;
+
         case 'proposeAmendment':
             document.getElementById('modalBody').classList.add('modal-wide');
             body.innerHTML = `
@@ -2306,15 +2566,60 @@ function showModal(type) {
 }
 
 function closeModal() {
+    if (contactSelfieStream) {
+        stopContactSelfieStream();
+        contactSelfieId = null;
+        if (document.getElementById('contactsListContent') && document.getElementById('contactsOverlay') && !document.getElementById('contactsOverlay').classList.contains('hidden')) {
+            loadAndRenderContactList();
+        }
+    }
     document.getElementById('modalOverlay').classList.add('hidden');
     document.getElementById('modalBody').classList.remove('modal-wide');
 }
 
-// Allow Escape key to close any open modal or the meet overlay
+async function savePreferences(e) {
+    e.preventDefault();
+    const email = document.getElementById('prefEmail').value.trim();
+    const phone = document.getElementById('prefPhone').value.trim();
+    const prefPreview = document.getElementById('prefPhotoPreview');
+    let profileImageUrl = currentProfile?.profile_image_url || null;
+    if (prefPreview._pendingFile) {
+        try {
+            const file = prefPreview._pendingFile;
+            const ext = (file.name && file.name.split('.').pop()) || 'jpg';
+            const filePath = `${currentUser.id}/profile.${ext}`;
+            const { error: upErr } = await db.storage.from('avatars').upload(filePath, file, { upsert: true });
+            if (upErr) throw upErr;
+            const { data: urlData } = db.storage.from('avatars').getPublicUrl(filePath);
+            profileImageUrl = urlData.publicUrl;
+        } catch (err) {
+            console.error('Profile photo upload error:', err);
+            showToast('Could not upload photo: ' + (err.message || 'error'), 'error');
+        }
+    }
+    const payload = { email: email || null, phone: phone || null };
+    if (profileImageUrl !== undefined) payload.profile_image_url = profileImageUrl;
+    const { error } = await db.from('profiles').update(payload).eq('id', currentUser.id);
+    if (error) {
+        showToast('Could not save: ' + error.message, 'error');
+        return;
+    }
+    if (currentProfile) {
+        currentProfile.email = email || null;
+        currentProfile.phone = phone || null;
+        currentProfile.profile_image_url = profileImageUrl;
+    }
+    showToast('Preferences saved.', 'success');
+    closeModal();
+}
+
+// Allow Escape key to close any open modal or overlays
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (!document.getElementById('meetOverlay').classList.contains('hidden')) {
             closeMeetScreen();
+        } else if (!document.getElementById('contactsOverlay').classList.contains('hidden')) {
+            closeContactListScreen();
         } else if (!document.getElementById('modalOverlay').classList.contains('hidden')) {
             closeModal();
         }
@@ -3510,9 +3815,10 @@ function meetSuccess(contactName) {
 
     showToast('Contact added: ' + contactName, 'success');
 
-    // Auto-close after a short delay
+    // Auto-close after a short delay, then open contact list so user sees new contact at top
     setTimeout(() => {
         closeMeetScreen();
+        openContactListScreen();
     }, 2500);
 }
 
@@ -3552,6 +3858,229 @@ function closeMeetScreen() {
 
     // Hide overlay
     overlay.classList.add('hidden');
+}
+
+// ============================================================
+// CONTACT LIST OVERLAY
+// ============================================================
+async function openContactListScreen() {
+    if (!currentUser) return;
+    const overlay = document.getElementById('contactsOverlay');
+    const content = document.getElementById('contactsListContent');
+    overlay.classList.remove('hidden');
+    content.innerHTML = '<p style="color:var(--dark-gray);text-align:center;padding:2rem;">Loading…</p>';
+    await loadAndRenderContactList();
+}
+
+function closeContactListScreen() {
+    document.getElementById('contactsOverlay').classList.add('hidden');
+}
+
+async function loadAndRenderContactList() {
+    const content = document.getElementById('contactsListContent');
+    try {
+        const { data: contacts, error } = await db
+            .from('contacts')
+            .select('*')
+            .eq('user_id', currentUser.id)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        if (!contacts || contacts.length === 0) {
+            content.innerHTML = '<p style="color:var(--dark-gray);text-align:center;padding:2rem;">No contacts yet. Use the handshake icon to add someone.</p>';
+            return;
+        }
+
+        const contactIds = [...new Set(contacts.map(c => c.contact_id))];
+        let profileMap = {};
+        if (contactIds.length > 0) {
+            const { data: profiles } = await db.from('profiles').select('id, display_name, avatar_url, profile_image_url, phone, email').in('id', contactIds);
+            if (profiles) profiles.forEach(p => { profileMap[p.id] = p; });
+        }
+
+        let sharedByThemMap = {};
+        try {
+            const { data: sharedRows } = await db.from('contact_shared').select('user_id, shared_phone, shared_email').eq('contact_id', currentUser.id).in('user_id', contactIds);
+            if (sharedRows) sharedRows.forEach(r => { sharedByThemMap[r.user_id] = r; });
+        } catch (_) { /* contact_shared table may not exist yet */ }
+
+        content.innerHTML = contacts.map(c => {
+            const profile = profileMap[c.contact_id] || {};
+            const shared = sharedByThemMap[c.contact_id] || {};
+            return renderContactRow(c, profile, shared);
+        }).join('');
+
+        content.querySelectorAll('.contact-row').forEach((row) => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.contact-detail-actions') || e.target.closest('.contact-selfie-wrap') || e.target.closest('input') || e.target.closest('button')) return;
+                row.classList.toggle('expanded');
+            });
+        });
+        content.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-share-with-contact');
+            if (btn) {
+                e.stopPropagation();
+                openShareWithContact(btn.dataset.contactId || '', btn.dataset.contactName || 'contact');
+            }
+        });
+    } catch (e) {
+        console.error('Load contacts error:', e);
+        content.innerHTML = '<p style="color:var(--red);text-align:center;padding:2rem;">Failed to load contacts.</p>';
+    }
+}
+
+function renderContactRow(contact, profile, shared) {
+    const name = profile.display_name || 'Unknown';
+    const avatarUrl = profile.avatar_url || profile.profile_image_url || null;
+    const phone = (shared.shared_phone != null && shared.shared_phone !== '') ? shared.shared_phone : '';
+    const email = (shared.shared_email != null && shared.shared_email !== '') ? shared.shared_email : '';
+    const cid = esc(contact.contact_id);
+    const selfieUrl = contact.selfie_url || null;
+    const avatarHtml = avatarUrl
+        ? `<img class="contact-row-avatar" src="${esc(avatarUrl)}" alt="">`
+        : '<div class="contact-row-avatar-placeholder">👤</div>';
+    const selfieHtml = selfieUrl
+        ? `<img src="${esc(selfieUrl)}" alt="Selfie">`
+        : '<span title="Tap to take a selfie">📷</span>';
+    return `
+        <div class="contact-row" data-contact-id="${cid}">
+            <div class="contact-row-header">
+                ${avatarHtml}
+                <span class="contact-row-name">${esc(name)}</span>
+                <span class="contact-row-chevron">›</span>
+            </div>
+            <div class="contact-detail">
+                <div class="contact-detail-line"><strong>${esc(name)}</strong></div>
+                ${phone ? `<div class="contact-detail-line">📞 <a href="tel:${esc(phone)}">${esc(phone)}</a></div>` : ''}
+                ${email ? `<div class="contact-detail-line">✉ <a href="mailto:${esc(email)}">${esc(email)}</a></div>` : ''}
+                <div class="contact-detail-line">Selfie</div>
+                <div class="contact-selfie-wrap" onclick="event.stopPropagation();openContactSelfie('${cid}')">${selfieHtml}</div>
+                <div class="contact-detail-actions">
+                    <button type="button" class="btn btn-primary btn-small btn-share-with-contact" data-contact-id="${cid}" data-contact-name="${esc(name)}">Share</button>
+                </div>
+            </div>
+        </div>`;
+}
+
+function openContactSelfie(contactId) {
+    contactSelfieId = contactId;
+    showModal('contactSelfie');
+}
+
+function closeContactSelfieModal() {
+    stopContactSelfieStream();
+    contactSelfieId = null;
+    closeModal();
+    if (document.getElementById('contactsListContent') && !document.getElementById('contactsOverlay').classList.contains('hidden')) {
+        loadAndRenderContactList();
+    }
+}
+
+async function startContactSelfieStream() {
+    stopContactSelfieStream();
+    const video = document.getElementById('contactSelfieVideo');
+    if (!video) return;
+    try {
+        contactSelfieStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } }
+        });
+        video.srcObject = contactSelfieStream;
+        await video.play();
+    } catch (e) {
+        console.error('Contact selfie camera error:', e);
+        showToast('Camera unavailable: ' + (e.message || 'error'), 'error');
+        closeContactSelfieModal();
+    }
+}
+
+function stopContactSelfieStream() {
+    if (contactSelfieStream) {
+        contactSelfieStream.getTracks().forEach(t => t.stop());
+        contactSelfieStream = null;
+    }
+    const video = document.getElementById('contactSelfieVideo');
+    if (video) video.srcObject = null;
+}
+
+async function captureContactSelfie() {
+    if (!contactSelfieId || !currentUser) return;
+    const video = document.getElementById('contactSelfieVideo');
+    if (!video || video.readyState < 2) return;
+    const btn = document.getElementById('contactSelfieCaptureBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+        const file = new File([blob], 'selfie.jpg', { type: 'image/jpeg' });
+        const filePath = `contact_selfies/${currentUser.id}_${contactSelfieId}_${Date.now()}.jpg`;
+        const { error: upErr } = await db.storage.from('avatars').upload(filePath, file, { upsert: false });
+        if (upErr) throw upErr;
+        const { data: urlData } = db.storage.from('avatars').getPublicUrl(filePath);
+        const selfieUrl = urlData.publicUrl;
+        await db.from('contacts').update({ selfie_url: selfieUrl }).eq('user_id', currentUser.id).eq('contact_id', contactSelfieId);
+        const { data: reverseRow } = await db.from('contacts').select('id').eq('user_id', contactSelfieId).eq('contact_id', currentUser.id).maybeSingle();
+        if (reverseRow) {
+            await db.from('contacts').update({ selfie_url: selfieUrl }).eq('user_id', contactSelfieId).eq('contact_id', currentUser.id);
+        }
+        showToast('Selfie saved and shared with contact.', 'success');
+    } catch (e) {
+        console.error('Capture selfie error:', e);
+        showToast('Could not save selfie: ' + (e.message || 'error'), 'error');
+    }
+    if (btn) btn.disabled = false;
+    closeContactSelfieModal();
+}
+
+function openShareWithContact(contactId, contactName) {
+    shareWithContactId = contactId;
+    shareWithContactName = contactName || 'contact';
+    showModal('shareWithContact');
+}
+
+async function submitShareWithContact(e) {
+    e.preventDefault();
+    if (!shareWithContactId) { closeModal(); return; }
+    const sharePhone = document.getElementById('sharePhone').checked;
+    const shareEmail = document.getElementById('shareEmail').checked;
+    const phone = sharePhone ? (currentProfile?.phone || '') : null;
+    const email = shareEmail ? (currentProfile?.email || '') : null;
+    try {
+        await db.from('contact_shared').upsert({
+            user_id: currentUser.id,
+            contact_id: shareWithContactId,
+            shared_phone: phone,
+            shared_email: email
+        }, { onConflict: 'user_id,contact_id' });
+        if (sharePhone) {
+            await db.from('contact_shares').insert({ from_user_id: currentUser.id, to_user_id: shareWithContactId, shared_type: 'phone' });
+        }
+        if (shareEmail) {
+            await db.from('contact_shares').insert({ from_user_id: currentUser.id, to_user_id: shareWithContactId, shared_type: 'email' });
+        }
+        showToast('Shared.', 'success');
+    } catch (err) {
+        console.error('Share with contact error:', err);
+        showToast('Could not save: ' + (err.message || 'error'), 'error');
+    }
+    closeModal();
+    shareWithContactId = null;
+    shareWithContactName = '';
+    if (document.getElementById('contactsListContent') && !document.getElementById('contactsOverlay').classList.contains('hidden')) {
+        await loadAndRenderContactList();
+    }
+}
+
+// ============================================================
+// PREFERENCES (profile)
+// ============================================================
+function openPreferences() {
+    if (!currentUser) return;
+    showModal('preferences');
 }
 
 // ============================================================

@@ -10,12 +10,14 @@ Features planned for the FairShare group currency app.
 - Shared Community Doc 
 - Currency
 - Handshake/Contact creation (in progress - pointing two phones at each other works!)
+- Contacts and handshake icons at top of app
+- Contact List with history of contacts, sorted by most recent
+- Selfie option with contacts (front camera, shared with both)
+- Profile/Preferences (email, phone, profile image) via clicking your name
+- Share with contact (phone/email checkboxes, toast notification to other party)
 
 ## Next
 
-- Contacts and handshake icons at top of app
-- Contact List with history of contacts, ability to 'refresh' contacts, sorted by last conact 
-- Selfie option with contacts 
 - Contacts can see mutual groups, Friends-in-common
 - Direct Messaging 
 

@@ -4011,9 +4011,13 @@ function stopContactSelfieStream() {
 }
 
 async function captureContactSelfie() {
-    if (!contactSelfieId || !currentUser) return;
+    const cid = contactSelfieId;
+    if (!cid || !currentUser) return;
     const video = document.getElementById('contactSelfieVideo');
-    if (!video || video.readyState < 2) return;
+    if (!video || video.readyState < 2) {
+        showToast('Camera not ready — please wait a moment and try again.', 'error');
+        return;
+    }
     const btn = document.getElementById('contactSelfieCaptureBtn');
     if (btn) btn.disabled = true;
     try {
@@ -4023,18 +4027,19 @@ async function captureContactSelfie() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+        if (!blob) throw new Error('Could not capture image from camera');
         const file = new File([blob], 'selfie.jpg', { type: 'image/jpeg' });
-        const filePath = `contact_selfies/${currentUser.id}_${contactSelfieId}_${Date.now()}.jpg`;
-        const { error: upErr } = await db.storage.from('avatars').upload(filePath, file, { upsert: false });
+        const filePath = `${currentUser.id}/selfie_${cid}_${Date.now()}.jpg`;
+        const { error: upErr } = await db.storage.from('avatars').upload(filePath, file, { upsert: true });
         if (upErr) throw upErr;
         const { data: urlData } = db.storage.from('avatars').getPublicUrl(filePath);
         const selfieUrl = urlData.publicUrl;
-        await db.from('contacts').update({ selfie_url: selfieUrl }).eq('user_id', currentUser.id).eq('contact_id', contactSelfieId);
-        const { data: reverseRow } = await db.from('contacts').select('id').eq('user_id', contactSelfieId).eq('contact_id', currentUser.id).maybeSingle();
-        if (reverseRow) {
-            await db.from('contacts').update({ selfie_url: selfieUrl }).eq('user_id', contactSelfieId).eq('contact_id', currentUser.id);
-        }
-        showToast('Selfie saved and shared with contact.', 'success');
+        const { error: rpcErr } = await db.rpc('set_contact_selfie', {
+            p_contact_id: cid,
+            p_selfie_url: selfieUrl
+        });
+        if (rpcErr) throw rpcErr;
+        showToast('Selfie saved!', 'success');
     } catch (e) {
         console.error('Capture selfie error:', e);
         showToast('Could not save selfie: ' + (e.message || 'error'), 'error');

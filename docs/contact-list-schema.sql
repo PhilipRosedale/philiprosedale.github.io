@@ -10,6 +10,24 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS profile_image_url text;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS selfie_url text;
 
+-- 2b. Allow users to update their own contacts rows (needed for selfie_url, etc.)
+DROP POLICY IF EXISTS "Users can update own contacts" ON contacts;
+CREATE POLICY "Users can update own contacts"
+  ON contacts FOR UPDATE USING (auth.uid() = user_id);
+
+-- 2c. RPC: set selfie on both sides of a contact pair (SECURITY DEFINER to bypass RLS)
+CREATE OR REPLACE FUNCTION set_contact_selfie(p_contact_id uuid, p_selfie_url text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE contacts SET selfie_url = p_selfie_url
+  WHERE (user_id = auth.uid() AND contact_id = p_contact_id)
+     OR (user_id = p_contact_id AND contact_id = auth.uid());
+END;
+$$;
+
 -- 3. contact_shared: what each user has shared with each contact
 CREATE TABLE IF NOT EXISTS contact_shared (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,

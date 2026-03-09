@@ -3897,7 +3897,7 @@ async function loadAndRenderContactList() {
         const contactIds = [...new Set(contacts.map(c => c.contact_id))];
         let profileMap = {};
         if (contactIds.length > 0) {
-            const { data: profiles } = await db.from('profiles').select('id, display_name, avatar_url, profile_image_url, phone, email').in('id', contactIds);
+            const { data: profiles } = await db.from('profiles').select('id, display_name, profile_image_url, phone, email').in('id', contactIds);
             if (profiles) profiles.forEach(p => { profileMap[p.id] = p; });
         }
 
@@ -3934,7 +3934,7 @@ async function loadAndRenderContactList() {
 
 function renderContactRow(contact, profile, shared) {
     const name = profile.display_name || 'Unknown';
-    const avatarUrl = profile.avatar_url || profile.profile_image_url || null;
+    const avatarUrl = profile.profile_image_url || null;
     const phone = (shared.shared_phone != null && shared.shared_phone !== '') ? shared.shared_phone : '';
     const email = (shared.shared_email != null && shared.shared_email !== '') ? shared.shared_email : '';
     const cid = esc(contact.contact_id);

@@ -12,9 +12,33 @@
     overflow: hidden;
     background: #1a1a1a;
   }
+  #controls {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 13px/1 system-ui, sans-serif;
+    color: #ccc;
+    background: rgba(0,0,0,0.55);
+    padding: 6px 12px;
+    border-radius: 6px;
+    user-select: none;
+  }
+  #controls input[type=range] {
+    width: 140px;
+    accent-color: #888;
+  }
 </style>
 </head>
 <body>
+<div id="controls">
+  <label for="contrarianSlider">Contrarian</label>
+  <input id="contrarianSlider" type="range" min="0" max="100" value="2">
+  <span id="contrarianValue">2%</span>
+</div>
 <script>
 // Ising-style vector grid: each cell has a unit vector; each frame many random
 // cells update their vector toward the average of their four immediate neighbors.
@@ -26,12 +50,22 @@ const UPDATES_PER_FRAME_SCALE = 1; // updates per frame = scale * (cols * rows)
 
 let cols, rows;
 let cells = [];
+let contrarianFraction = 0.02;
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
   colorMode(HSB, 360, 100, 100);
   cols = max(1, floor(width / CELL_SIZE));
   rows = max(1, floor(height / CELL_SIZE));
+
+  const slider = document.getElementById('contrarianSlider');
+  const label  = document.getElementById('contrarianValue');
+  slider.addEventListener('input', () => {
+    contrarianFraction = parseInt(slider.value) / 100;
+    label.textContent = slider.value + '%';
+    initGrid();
+  });
+
   initGrid();
 }
 
@@ -43,7 +77,8 @@ function initGrid() {
       const angle = random(TWO_PI);
       cells[i][j] = {
         vx: cos(angle),
-        vy: sin(angle)
+        vy: sin(angle),
+        contrarian: random() < contrarianFraction
       };
     }
   }
@@ -76,8 +111,11 @@ function updateOneCell() {
   if (avg === null) return;
 
   const c = cells[i][j];
-  const vxNew = c.vx + BLEND_ALPHA * (avg.vx - c.vx);
-  const vyNew = c.vy + BLEND_ALPHA * (avg.vy - c.vy);
+  const sign = c.contrarian ? -1 : 1;
+  const targetVx = avg.vx * sign;
+  const targetVy = avg.vy * sign;
+  const vxNew = c.vx + BLEND_ALPHA * (targetVx - c.vx);
+  const vyNew = c.vy + BLEND_ALPHA * (targetVy - c.vy);
   const n = normalize(vxNew, vyNew);
   if (n !== null) {
     c.vx = n.vx;
@@ -90,6 +128,17 @@ function draw() {
 
   const half = CELL_SIZE * 0.5;
   const len = half * VECTOR_SCALE;
+
+  noStroke();
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const c = cells[i][j];
+      if (c.contrarian) {
+        fill(0, 0, 22);
+        rect(i * CELL_SIZE, j * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+      }
+    }
+  }
 
   for (let i = 0; i < cols; i++) {
     for (let j = 0; j < rows; j++) {

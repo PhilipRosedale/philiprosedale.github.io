@@ -919,7 +919,6 @@
         <button type="button" class="header-icon-btn" onclick="openMeetScreen()" title="Exchange contacts (show QR)" aria-label="Exchange contacts">🤝</button>
         <button type="button" class="header-icon-btn" onclick="openContactListScreen()" title="Contacts" aria-label="Contacts">👥</button>
         <span class="user-name" id="userDisplay" onclick="openPreferences()" title="Profile &amp; preferences"></span>
-        <button class="btn btn-outline hidden" id="logoutBtn" style="border-color: rgba(255,255,255,0.5); color: var(--white);" onclick="logout()">Log Out</button>
     </div>
 </div>
 
@@ -1443,7 +1442,6 @@ async function logout() {
 function showAuth() {
     document.getElementById('authScreen').classList.remove('hidden');
     document.getElementById('appScreen').classList.add('hidden');
-    document.getElementById('logoutBtn').classList.add('hidden');
     document.getElementById('userDisplay').textContent = '';
     setHeaderAvatar(null);
 }
@@ -1451,7 +1449,6 @@ function showAuth() {
 async function showApp(navigateToGroupId) {
     document.getElementById('authScreen').classList.add('hidden');
     document.getElementById('appScreen').classList.remove('hidden');
-    document.getElementById('logoutBtn').classList.remove('hidden');
     document.getElementById('userDisplay').textContent = currentProfile?.display_name || currentUser.email;
     subscribeToContactShares();
     await loadMyGroups(navigateToGroupId || null);
@@ -2474,6 +2471,8 @@ function showModal(type) {
                         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                         <button type="submit" class="btn btn-primary">Save</button>
                     </div>
+                    <hr style="margin:1.2rem 0 1rem;border:none;border-top:1px solid var(--light-gray);">
+                    <button type="button" class="btn btn-outline" style="width:100%;color:var(--dark-gray);border-color:var(--dark-gray);" onclick="closeModal();logout();">Log Out</button>
                 </form>
             `;
             document.getElementById('prefEmail').value = currentProfile?.email || '';

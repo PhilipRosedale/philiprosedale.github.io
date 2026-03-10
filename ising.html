@@ -31,6 +31,18 @@
     width: 140px;
     accent-color: #888;
   }
+  #controls button {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #ccc;
+    font: 13px/1 system-ui, sans-serif;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #controls button:hover {
+    background: rgba(255,255,255,0.22);
+  }
 </style>
 </head>
 <body>
@@ -38,6 +50,7 @@
   <label for="contrarianSlider">Contrarian</label>
   <input id="contrarianSlider" type="range" min="0" max="100" value="2">
   <span id="contrarianValue">2%</span>
+  <button id="resetBtn">Reset</button>
 </div>
 <script>
 // Ising-style vector grid: each cell has a unit vector; each frame many random
@@ -45,7 +58,7 @@
 
 const CELL_SIZE = 14;
 const BLEND_ALPHA = 0.3;
-const VECTOR_SCALE = 0.45; // fraction of cell half-size for drawing the vector
+const VECTOR_SCALE = 0.675; // fraction of cell half-size for drawing the vector
 const UPDATES_PER_FRAME_SCALE = 1; // updates per frame = scale * (cols * rows)
 
 let cols, rows;
@@ -65,6 +78,8 @@ function setup() {
     label.textContent = slider.value + '%';
     initGrid();
   });
+
+  document.getElementById('resetBtn').addEventListener('click', () => initGrid());
 
   initGrid();
 }
@@ -160,8 +175,50 @@ function draw() {
   }
 }
 
+let dragging = false;
+let dragStartX, dragStartY;
+let dragCellI, dragCellJ;
+
+function getCellUnderMouse() {
+  const i = floor(mouseX / CELL_SIZE);
+  const j = floor(mouseY / CELL_SIZE);
+  if (i >= 0 && i < cols && j >= 0 && j < rows) return { i, j };
+  return null;
+}
+
 function mousePressed() {
-  initGrid();
+  if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
+  const cell = getCellUnderMouse();
+  if (!cell) return;
+  dragging = true;
+  dragStartX = mouseX;
+  dragStartY = mouseY;
+  dragCellI = cell.i;
+  dragCellJ = cell.j;
+}
+
+function mouseDragged() {
+  if (!dragging) return;
+  const dx = mouseX - dragStartX;
+  const dy = mouseY - dragStartY;
+  const len = sqrt(dx * dx + dy * dy);
+  if (len < 2) return;
+  const c = cells[dragCellI][dragCellJ];
+  c.vx = dx / len;
+  c.vy = dy / len;
+}
+
+function mouseReleased() {
+  if (!dragging) return;
+  const dx = mouseX - dragStartX;
+  const dy = mouseY - dragStartY;
+  const len = sqrt(dx * dx + dy * dy);
+  if (len >= 2) {
+    const c = cells[dragCellI][dragCellJ];
+    c.vx = dx / len;
+    c.vy = dy / len;
+  }
+  dragging = false;
 }
 </script>
 </body>

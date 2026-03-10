@@ -588,11 +588,76 @@
             box-shadow: 0 0 0 3px rgba(58, 124, 165, 0.15);
         }
 
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .main-content { padding: 1rem; }
             .balance-amount { font-size: 2rem; }
             .tab-btn { font-size: 0.8rem; padding: 0.6rem 0.5rem; }
+        }
+
+        @media (max-width: 480px) {
+            /* Header */
+            .header { padding: 0.7rem 0.8rem; }
+            .header h1 { font-size: 1.25rem; }
+            .header .user-name {
+                max-width: 90px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            /* Tab bar: icon-only */
+            .tab-btn .tab-label { display: none; }
+            .tab-btn .tab-icon { font-size: 1.3rem; }
+            .tab-btn { padding: 0.7rem 0.3rem; }
+
+            /* Group info bar */
+            .group-info-bar { gap: 0.5rem; }
+            .info-item { min-width: 0; flex: 1 1 30%; padding: 0.6rem 0.5rem; }
+            .info-item .info-value { font-size: 1rem; }
+
+            /* Balance card */
+            .balance-amount { font-size: 1.5rem !important; }
+            .balance-card { padding: 1rem !important; }
+
+            /* Modals */
+            .modal { width: 95%; min-width: 0; padding: 1.2rem; }
+            .modal.modal-wide { max-width: 95vw; }
+
+            /* Form action buttons */
+            .form-actions { flex-wrap: wrap; }
+            .form-actions .btn { min-width: 0; }
+
+            /* Stats grid */
+            .stats-grid { gap: 0.5rem; }
+
+            /* Activity log */
+            .activity-item { gap: 0.4rem; font-size: 0.8rem; }
+            .activity-time { min-width: 60px; font-size: 0.7rem; }
+
+            /* Toasts */
+            .toast { right: 0.5rem; left: 0.5rem; max-width: none; }
+
+            /* Cards and tab content */
+            .card { padding: 1rem; }
+            .tab-content-card { padding: 1rem; }
+            .auth-container { padding: 1.5rem; margin: 1.5rem auto; }
+
+            /* Contacts overlay */
+            .contacts-overlay .contacts-header { padding: 0.8rem 1rem; }
+            .contact-row-header { padding: 0.7rem 0.8rem; }
+        }
+
+        @media (max-width: 360px) {
+            .stats-grid { grid-template-columns: 1fr; }
+            .info-item { flex: 1 1 100%; }
         }
 
         /* Constitution / Diff styles */
@@ -1006,16 +1071,16 @@
             <!-- Tab bar -->
             <div class="tab-bar" id="tabBar">
                 <button class="tab-btn active" data-tab="money" onclick="switchTab('money')">
-                    <span class="tab-icon">💲</span> Money
+                    <span class="tab-icon">💲</span><span class="tab-label"> Money</span>
                 </button>
                 <button class="tab-btn" data-tab="members" onclick="switchTab('members')">
-                    <span class="tab-icon">👥</span> Members
+                    <span class="tab-icon">👥</span><span class="tab-label"> Members</span>
                 </button>
                 <button class="tab-btn" data-tab="constitution" onclick="switchTab('constitution')">
-                    <span class="tab-icon">📄</span> Docs
+                    <span class="tab-icon">📄</span><span class="tab-label"> Docs</span>
                 </button>
                 <button class="tab-btn" data-tab="chat" onclick="switchTab('chat')">
-                    <span class="tab-icon">💬</span> Chat
+                    <span class="tab-icon">💬</span><span class="tab-label"> Chat</span>
                 </button>
             </div>
 
@@ -2370,7 +2435,7 @@ async function loadStatsContent() {
 
     const sym = selectedGroup.currency_symbol;
     el.innerHTML = `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+        <div class="stats-grid">
             <div class="info-item"><div class="info-label">Active Members</div><div class="info-value">${memberCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Pending Candidates</div><div class="info-value">${pendingCount || 0}</div></div>
             <div class="info-item"><div class="info-label">Total Supply</div><div class="info-value">${sym} ${totalSupply.toFixed(2)}</div></div>

@@ -63,12 +63,15 @@ create table public.sponsorships (
 
 ## Client-Side Flow
 
-The invite token is preserved across the authentication flow using `sessionStorage`:
+The invite token is preserved across the authentication flow using `localStorage` (with a JSON wrapper containing a timestamp):
 
-1. `?invite=TOKEN` in the URL → stored in `sessionStorage`
+1. `?invite=TOKEN` in the URL → stored in `localStorage` as `{ token, savedAt }`
 2. URL parameter is cleaned via `history.replaceState`
-3. After login/signup, `handlePendingInvite()` reads from `sessionStorage` and calls `claim_sponsorship`
-4. Token is cleared from `sessionStorage` regardless of success/failure
+3. After login/signup, `handlePendingInvite()` reads from `localStorage` and calls `claim_sponsorship`
+4. Token is cleared from `localStorage` regardless of success/failure
+5. Tokens older than 7 days (matching server-side expiry) are discarded
+
+**Why `localStorage` instead of `sessionStorage`?** When a new user signs up, they must confirm their email. The confirmation link opens in a new browser tab, where `sessionStorage` would be empty — causing the sponsorship claim to silently fail. `localStorage` persists across tabs within the same origin.
 
 ## Security
 

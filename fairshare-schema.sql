@@ -1294,6 +1294,10 @@ create policy "Users can read own contacts"
 -- Enable Realtime on contacts table so the other phone gets notified
 alter publication supabase_realtime add table public.contacts;
 
+-- Need FULL replica identity so Realtime UPDATE events include all columns
+-- (required for filter: 'user_id=eq.X' to work on UPDATEs, not just INSERTs)
+alter table public.contacts replica identity full;
+
 -- Enable Realtime for group chat, activity log, and document history
 alter publication supabase_realtime add table public.chat_messages;
 alter publication supabase_realtime add table public.group_events;
@@ -1325,14 +1329,14 @@ begin
     raise exception 'Cannot create a contact with yourself';
   end if;
 
-  -- Insert bidirectional contacts (ignore if already exist)
-  insert into public.contacts (user_id, contact_id)
-  values (v_caller_id, v_meet_request.user_id)
-  on conflict (user_id, contact_id) do nothing;
+  -- Insert bidirectional contacts, or update met_at ("Last Seen") if already exist
+  insert into public.contacts (user_id, contact_id, met_at)
+  values (v_caller_id, v_meet_request.user_id, now())
+  on conflict (user_id, contact_id) do update set met_at = now();
 
-  insert into public.contacts (user_id, contact_id)
-  values (v_meet_request.user_id, v_caller_id)
-  on conflict (user_id, contact_id) do nothing;
+  insert into public.contacts (user_id, contact_id, met_at)
+  values (v_meet_request.user_id, v_caller_id, now())
+  on conflict (user_id, contact_id) do update set met_at = now();
 
   -- Get the other person's display name
   select display_name into v_contact_name

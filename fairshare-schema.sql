@@ -1125,20 +1125,20 @@ end;
 $$ language plpgsql security definer;
 
 
--- Notify all active members of a group (except the actor) via email.
+-- Notify active members of a group via email.
+-- By default excludes the actor; pass p_include_actor := true to include them.
 -- Respects the email_notifications preference on profiles.
 create or replace function public.notify_group_members(
   p_group_id uuid,
   p_actor_id uuid,
   p_subject text,
-  p_html text
+  p_html text,
+  p_include_actor boolean default false
 )
 returns void as $$
 declare
   v_recipient record;
 begin
-  -- Loop through active members who have email notifications enabled,
-  -- excluding the actor who triggered the event.
   for v_recipient in
     select u.email
     from public.members m
@@ -1146,7 +1146,7 @@ begin
     join auth.users u on u.id = m.user_id
     where m.group_id = p_group_id
       and m.status = 'active'
-      and m.user_id <> p_actor_id
+      and (p_include_actor or m.user_id <> p_actor_id)
       and (p.email_notifications is null or p.email_notifications = true)
       and u.email is not null
   loop
@@ -1232,7 +1232,7 @@ begin
         || 'You are receiving this because you are a member of ' || coalesce(v_group_name, 'a FairShare group') || '. '
         || 'You can disable email notifications in your profile settings.</p>'
         || '</div>';
-      perform public.notify_group_members(p_group_id, v_actor_id, v_subject, v_html);
+      perform public.notify_group_members(p_group_id, v_actor_id, v_subject, v_html, p_include_actor := true);
 
     -- Future: add more WHEN clauses here for other event types
     -- when 'member_sponsored' then ...

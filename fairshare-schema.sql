@@ -1225,7 +1225,7 @@ begin
         || '<h2 style="color:#1a5276;">New Amendment Proposed</h2>'
         || '<p>' || p_summary || '</p>'
         || '<p style="margin-top:1rem;">Log in to review and vote:</p>'
-        || '<p><a href="https://philiprosedale.github.io/fairshare/" '
+        || '<p><a href="https://rosedales.com/fairshare/" '
         || 'style="display:inline-block;padding:0.6rem 1.2rem;background:#1a5276;color:#fff;'
         || 'border-radius:6px;text-decoration:none;font-weight:600;">Open FairShare</a></p>'
         || '<p style="font-size:0.8rem;color:#888;margin-top:2rem;">'

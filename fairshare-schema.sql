@@ -1343,6 +1343,151 @@ $$ language plpgsql security definer;
 
 
 -- ============================================================
+-- PUSH SUBSCRIPTIONS (Web Push notifications)
+-- ============================================================
+create table public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  endpoint text not null,
+  keys_p256dh text not null,
+  keys_auth text not null,
+  created_at timestamptz default now(),
+  unique(user_id, endpoint)
+);
+
+alter table public.push_subscriptions enable row level security;
+
+create policy "Users can manage own push subscriptions"
+  on public.push_subscriptions for all
+  using (auth.uid() = user_id);
+
+-- Add push_notifications preference to profiles (default true)
+alter table public.profiles add column if not exists push_notifications boolean default true;
+
+
+-- ============================================================
+-- PUSH NOTIFICATION DISPATCH FUNCTION
+-- Looks up push subscriptions for group members and calls the
+-- Edge Function via pg_net to deliver Web Push messages.
+-- ============================================================
+create or replace function public.send_push_to_group(
+  p_group_id uuid,
+  p_actor_id uuid,
+  p_title text,
+  p_body text,
+  p_url text default '/fairshare/',
+  p_include_actor boolean default false
+)
+returns void as $$
+declare
+  v_edge_fn_url text;
+  v_anon_key text;
+  v_subscriptions jsonb;
+begin
+  -- Collect push subscriptions for group members who have push enabled
+  select jsonb_agg(jsonb_build_object(
+    'endpoint', ps.endpoint,
+    'keys', jsonb_build_object('p256dh', ps.keys_p256dh, 'auth', ps.keys_auth)
+  ))
+  into v_subscriptions
+  from public.push_subscriptions ps
+  join public.members m on m.user_id = ps.user_id
+  join public.profiles p on p.id = ps.user_id
+  where m.group_id = p_group_id
+    and m.status = 'active'
+    and (p_include_actor or ps.user_id <> p_actor_id)
+    and (p.push_notifications is null or p.push_notifications = true);
+
+  if v_subscriptions is null then
+    return;
+  end if;
+
+  -- Read Edge Function URL and anon key from Vault
+  select decrypted_secret into v_edge_fn_url
+  from vault.decrypted_secrets where name = 'push_edge_fn_url' limit 1;
+
+  select decrypted_secret into v_anon_key
+  from vault.decrypted_secrets where name = 'supabase_anon_key' limit 1;
+
+  if v_edge_fn_url is null or v_anon_key is null then
+    raise warning 'send_push_to_group: push_edge_fn_url or supabase_anon_key not in vault — skipping push';
+    return;
+  end if;
+
+  perform net.http_post(
+    url     := v_edge_fn_url,
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || v_anon_key,
+      'Content-Type',  'application/json'
+    ),
+    body    := jsonb_build_object(
+      'subscriptions', v_subscriptions,
+      'title', p_title,
+      'body', p_body,
+      'url', p_url
+    )
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- ============================================================
+-- TRIGGERS: Auto-dispatch push on group_events and chat_messages
+-- ============================================================
+
+-- Push on any group_events insert (covers payments, joins, amendments, rate changes, etc.)
+create or replace function public.trigger_push_on_group_event()
+returns trigger as $$
+declare
+  v_group_name text;
+begin
+  select name into v_group_name from public.groups where id = NEW.group_id;
+  perform public.send_push_to_group(
+    NEW.group_id,
+    NEW.actor_id,
+    coalesce(v_group_name, 'FairShare'),
+    NEW.summary,
+    '/fairshare/'
+  );
+  return NEW;
+end;
+$$ language plpgsql security definer;
+
+create trigger on_group_event_push
+  after insert on public.group_events
+  for each row execute function public.trigger_push_on_group_event();
+
+
+-- Push on new chat messages (separate from group_events)
+create or replace function public.trigger_push_on_chat_message()
+returns trigger as $$
+declare
+  v_group_name text;
+  v_sender_name text;
+  v_preview text;
+begin
+  select name into v_group_name from public.groups where id = NEW.group_id;
+  select display_name into v_sender_name from public.profiles where id = NEW.user_id;
+  v_preview := left(NEW.body, 80);
+  if length(NEW.body) > 80 then v_preview := v_preview || '...'; end if;
+
+  perform public.send_push_to_group(
+    NEW.group_id,
+    NEW.user_id,
+    coalesce(v_group_name, 'FairShare') || ' Chat',
+    coalesce(v_sender_name, 'Someone') || ': ' || v_preview,
+    '/fairshare/'
+  );
+  return NEW;
+end;
+$$ language plpgsql security definer;
+
+create trigger on_chat_message_push
+  after insert on public.chat_messages
+  for each row execute function public.trigger_push_on_chat_message();
+
+
+-- ============================================================
 -- STORAGE: Avatars bucket for per-group profile pictures
 -- ============================================================
 -- Run in Supabase SQL Editor:

@@ -6,17 +6,19 @@ Each group has a text constitution with machine-readable tagged variables. Any a
 
 ## Constitution Format
 
-The constitution is a plain text document stored in the `groups.constitution` column. Lines can end with `$IDENTIFIER` tags that link human-readable values to system variables:
+The constitution is a rich plain text document stored in the `groups.constitution` column. `$IDENTIFIER` tags can appear anywhere in the text to link human-readable values to system variables. Each tagged value is the text between the nearest preceding colon and the `$TAG`:
 
 ```
-Group Name: My Community $GROUP_NAME
-Currency Name: dollars $CURRENCY_NAME
-Currency Symbol: $ $CURRENCY_SYMBOL
-Approve New Member: 100% members $NEW_MEMBER_PERCENTAGE
-Approve Amendment: 100% members $AMENDMENT_PERCENTAGE
+We, the people, hereby give this Group Name: My Community $GROUP_NAME
+
+In economic matters, we choose the Currency Name: dollars $CURRENCY_NAME, and the Currency Symbol: $ $CURRENCY_SYMBOL, and to Change Currency Rates: 66% $CHANGE_CURRENCY_RATES_PERCENTAGE of member's vote is required.
+
+To Approve New Member: 100% $NEW_MEMBER_PERCENTAGE of member's vote is required.
+
+Any member may propose amendment to this constitution. To Approve Amendment: 100% $AMENDMENT_PERCENTAGE of member's vote is required.
 ```
 
-When an amendment changes a tagged value and passes, the `resolve_amendment` function parses the new text, extracts the value between the colon and the tag, and applies it to the corresponding database column.
+When an amendment changes a tagged value and passes, the `resolve_amendment` function uses a global regex (`:\s*([^:]*?)\s*\$([A-Z_]+)`) to find all tags and extract values, then applies changes to the corresponding database columns.
 
 ### Supported Tags
 
@@ -35,7 +37,7 @@ The tag system is extensible. To add a new tag:
 
 1. Add a `WHEN` clause to the `CASE` block in the `resolve_amendment` SQL function
 2. Map the tag to the appropriate database column update
-3. Add the line to the default constitution in `createGroup()` in `fairshare.html`
+3. Add the tag to the default constitution in `createGroup()` in `fairshare/index.html`
 
 Tags that don't map to a database column (like `$AMENDMENT_PERCENTAGE`) can be read directly from the constitution text at the point they're needed.
 

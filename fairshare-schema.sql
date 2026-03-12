@@ -818,7 +818,7 @@ begin
 
   v_pct := 0.66; -- default 66%
   if v_constitution is not null then
-    v_pct_match := regexp_match(v_constitution, ':\s*(\d+)%\s*members?\s*\$CHANGE_CURRENCY_RATES_PERCENTAGE');
+    v_pct_match := regexp_match(v_constitution, '(\d+)%\s*(?:members?\s*)?\$CHANGE_CURRENCY_RATES_PERCENTAGE');
     if v_pct_match is not null then
       v_pct := v_pct_match[1]::numeric / 100.0;
     end if;
@@ -940,10 +940,9 @@ declare
   v_approve_count int;
   v_ratio numeric;
   v_passed boolean;
-  v_line text;
   v_tag text;
   v_value text;
-  v_parts text[];
+  v_parts record;
 begin
   -- Fetch the amendment
   select * into v_amendment
@@ -1001,36 +1000,28 @@ begin
     where id = v_amendment.group_id;
 
     -- Parse tagged variables from new_text and apply changes
-    -- Format: each line may end with $TAG_NAME
-    -- The value is everything between the colon and the tag
-    foreach v_line in array string_to_array(v_amendment.new_text, E'\n')
+    -- Tags appear as $TAG_NAME anywhere in the text (not necessarily at end of line)
+    -- The value is everything between the nearest preceding colon and the $TAG
+    for v_parts in
+      select (m)[1] as val, (m)[2] as tag
+      from regexp_matches(v_amendment.new_text, ':\s*([^:]*?)\s*\$([A-Z_]+)', 'g') as m
     loop
-      -- Match lines ending with $IDENTIFIER
-      if v_line ~ '\$[A-Z_]+\s*$' then
-        -- Extract the tag name (last $WORD on the line)
-        v_tag := (regexp_match(v_line, '\$([A-Z_]+)\s*$'))[1];
-        -- Extract the value: everything after first colon, before the $TAG
-        v_parts := regexp_match(v_line, ':\s*(.*?)\s*\$[A-Z_]+\s*$');
-        if v_parts is not null then
-          v_value := v_parts[1];
+      v_value := v_parts.val;
+      v_tag := v_parts.tag;
 
-          -- Apply known tags
-          case v_tag
-            when 'GROUP_NAME' then
-              update public.groups set name = v_value where id = v_amendment.group_id;
-            when 'CURRENCY_NAME' then
-              update public.groups set currency_name = v_value where id = v_amendment.group_id;
-            when 'CURRENCY_SYMBOL' then
-              update public.groups set currency_symbol = v_value where id = v_amendment.group_id;
-            -- AMENDMENT_PERCENTAGE, NEW_MEMBER_PERCENTAGE, and
-            -- CHANGE_CURRENCY_RATES_PERCENTAGE are read from constitution text
-            -- at runtime, no separate column to update
-            -- Future tags can be added here:
-            else
-              null; -- Unknown tag, ignore
-          end case;
-        end if;
-      end if;
+      case v_tag
+        when 'GROUP_NAME' then
+          update public.groups set name = v_value where id = v_amendment.group_id;
+        when 'CURRENCY_NAME' then
+          update public.groups set currency_name = v_value where id = v_amendment.group_id;
+        when 'CURRENCY_SYMBOL' then
+          update public.groups set currency_symbol = v_value where id = v_amendment.group_id;
+        -- AMENDMENT_PERCENTAGE, NEW_MEMBER_PERCENTAGE, and
+        -- CHANGE_CURRENCY_RATES_PERCENTAGE are read from constitution text
+        -- at runtime, no separate column to update
+        else
+          null;
+      end case;
     end loop;
 
     -- Mark as passed

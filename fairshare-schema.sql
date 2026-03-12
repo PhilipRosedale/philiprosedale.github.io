@@ -1243,7 +1243,7 @@ create table public.meet_requests (
   user_id uuid not null references public.profiles(id) on delete cascade,
   token text unique not null default encode(gen_random_bytes(16), 'hex'),
   created_at timestamptz default now(),
-  expires_at timestamptz default (now() + interval '10 minutes')
+  expires_at timestamptz default (now() + interval '1 hour')
 );
 
 alter table public.meet_requests enable row level security;
@@ -1337,6 +1337,36 @@ begin
   return json_build_object(
     'contact_id', v_meet_request.user_id,
     'contact_name', coalesce(v_contact_name, 'Unknown')
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- ============================================================
+-- GET MEET BY TOKEN: public lookup so non-members see who wants
+-- to connect (no auth required, like get_sponsorship_by_token)
+-- ============================================================
+create or replace function public.get_meet_by_token(p_token text)
+returns json as $$
+declare
+  v_meet record;
+  v_name text;
+begin
+  select * into v_meet
+  from public.meet_requests
+  where token = p_token
+    and expires_at > now();
+
+  if not found then
+    return json_build_object('error', 'Meet request not found or expired');
+  end if;
+
+  select display_name into v_name
+  from public.profiles
+  where id = v_meet.user_id;
+
+  return json_build_object(
+    'user_name', coalesce(v_name, 'A FairShare member')
   );
 end;
 $$ language plpgsql security definer;

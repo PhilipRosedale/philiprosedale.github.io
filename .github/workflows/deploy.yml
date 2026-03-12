@@ -30,7 +30,7 @@ jobs:
       - name: Stamp build version
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          TIMESTAMP=$(date -u +"%b %d %H:%M UTC")
+          TIMESTAMP=$(TZ='America/Los_Angeles' date +"%b %d %H:%M %Z")
           VERSION="${SHORT_SHA} ${TIMESTAMP}"
 
           echo "Build version: ${VERSION}"

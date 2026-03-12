@@ -16,6 +16,8 @@ Features planned for the FairShare group currency app.
 - Profile/Preferences (email, phone, profile image) via clicking your name
 - Share with contact (phone/email checkboxes, toast notification to other party)
 
+- Web of Trust: Trust and Love attestation buttons on contacts, heart icon in header showing aggregate counts (see [web-of-trust.md](web-of-trust.md))
+
 ## Next
 
 - Contacts can see mutual groups, Friends-in-common
@@ -24,6 +26,7 @@ Features planned for the FairShare group currency app.
 ## Bugs To Fix
 
 - Get email working (DNS should be fixed now?  Test both signup and amendments flow)
+- Contact Selfie doesn't update other person with toast (it should)
 
 
 ## Changelog

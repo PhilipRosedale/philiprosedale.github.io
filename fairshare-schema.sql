@@ -723,7 +723,7 @@ begin
 
   v_pct := 1.0; -- default 100%
   if v_constitution is not null then
-    v_pct_match := regexp_match(v_constitution, ':\s*(\d+)%\s*members?\s*\$NEW_MEMBER_PERCENTAGE');
+    v_pct_match := regexp_match(v_constitution, ':\s*(\d+)%\s*(?:members?\s*)?\$NEW_MEMBER_PERCENTAGE');
     if v_pct_match is not null then
       v_pct := v_pct_match[1]::numeric / 100.0;
     end if;

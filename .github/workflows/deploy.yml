@@ -35,7 +35,7 @@ jobs:
 
           echo "Build version: ${VERSION}"
 
-          # Replace version placeholder in FairShare app
+          # Replace version placeholder in Union app
           sed -i "s|__BUILD_VERSION__|${VERSION}|g" fairshare/index.html
 
           # Replace hash placeholder in service worker (cache-bust)

@@ -90,7 +90,6 @@ create table public.members (
   balance numeric not null default 0,
   joined_at timestamptz default now(),
   last_income_at timestamptz,              -- last time daily income was claimed (NULL = never)
-  avatar_url text,                          -- per-group profile picture (Supabase Storage public URL)
   unique(group_id, user_id)
 );
 
@@ -133,20 +132,6 @@ create policy "Users can request to join groups"
 -- All member updates (balance, status, last_income_at) go through SECURITY DEFINER
 -- functions: send_currency, check_endorsements, claim_daily_income, claim_sponsorship.
 -- This prevents clients from manipulating balances directly via the REST API.
-
--- Avatar update is also via SECURITY DEFINER to keep the blanket "no UPDATE" policy:
-create or replace function public.update_avatar(
-    p_group_id uuid,
-    p_avatar_url text
-) returns void as $$
-begin
-    update public.members
-       set avatar_url = p_avatar_url
-     where group_id = p_group_id
-       and user_id  = auth.uid()
-       and status   = 'active';
-end;
-$$ language plpgsql security definer;
 
 
 -- 4. ENDORSEMENTS
@@ -1518,19 +1503,19 @@ create trigger on_chat_message_push
 
 
 -- ============================================================
--- STORAGE: Avatars bucket for per-group profile pictures
+-- STORAGE: Avatars bucket for public profile photos and contact selfies
 -- ============================================================
 -- Run in Supabase SQL Editor:
 -- insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true);
 --
--- create policy "Users can upload own avatar"
+-- create policy "Users can upload own media"
 --   on storage.objects for insert
 --   with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 --
--- create policy "Users can update own avatar"
+-- create policy "Users can update own media"
 --   on storage.objects for update
 --   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 --
--- create policy "Public avatar read"
+-- create policy "Public avatars read"
 --   on storage.objects for select
 --   using (bucket_id = 'avatars');

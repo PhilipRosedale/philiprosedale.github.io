@@ -46,6 +46,25 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
     document.head.appendChild(style);
 
+    // Writings: show only first 8, expand on "More..."
+    const writingItems = document.querySelectorAll('.writing-item');
+    const moreBtn = document.getElementById('writings-more-btn');
+    const VISIBLE_COUNT = 8;
+
+    if (writingItems.length > VISIBLE_COUNT) {
+        writingItems.forEach((item, i) => {
+            if (i >= VISIBLE_COUNT) item.classList.add('writing-hidden');
+        });
+        if (moreBtn) {
+            moreBtn.addEventListener('click', () => {
+                writingItems.forEach(item => item.classList.remove('writing-hidden'));
+                moreBtn.classList.add('hidden');
+            });
+        }
+    } else if (moreBtn) {
+        moreBtn.classList.add('hidden');
+    }
+
     // Add hover effects to cards
     const cards = document.querySelectorAll('.writing-card, .video-card, .patent-card');
     

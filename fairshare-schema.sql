@@ -54,6 +54,7 @@ create trigger on_auth_user_created
 create table public.groups (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
+  logo_url text,
   currency_name text not null,
   currency_symbol text not null default '$',
   fee_rate numeric not null default 0,        -- current voted fee rate (0-1)
@@ -64,6 +65,8 @@ create table public.groups (
 );
 
 alter table public.groups enable row level security;
+
+alter table public.groups add column if not exists logo_url text;
 
 -- Anyone can read groups (needed to browse/join)
 create policy "Groups are viewable by everyone"
@@ -1216,6 +1219,53 @@ begin
     else
       null;  -- no email for other event types yet
   end case;
+end;
+$$ language plpgsql security definer;
+
+-- Update a group's logo URL (active members only) and log activity.
+create or replace function public.update_group_logo(
+  p_group_id uuid,
+  p_logo_url text
+)
+returns json as $$
+declare
+  v_actor_id uuid := auth.uid();
+  v_display_name text;
+begin
+  if v_actor_id is null then
+    raise exception 'You must be logged in';
+  end if;
+
+  if p_logo_url is null or btrim(p_logo_url) = '' then
+    raise exception 'Logo URL is required';
+  end if;
+
+  if not public.is_group_member(p_group_id) then
+    raise exception 'You are not an active member of this group';
+  end if;
+
+  update public.groups
+  set logo_url = p_logo_url
+  where id = p_group_id;
+
+  if not found then
+    raise exception 'Group not found';
+  end if;
+
+  select display_name into v_display_name
+  from public.profiles
+  where id = v_actor_id;
+
+  insert into public.group_events (group_id, event_type, summary, actor_id, metadata)
+  values (
+    p_group_id,
+    'group_logo_changed',
+    coalesce(v_display_name, 'Someone') || ' changed the group logo',
+    v_actor_id,
+    json_build_object('logo_url', p_logo_url)::jsonb
+  );
+
+  return json_build_object('success', true, 'logo_url', p_logo_url);
 end;
 $$ language plpgsql security definer;
 

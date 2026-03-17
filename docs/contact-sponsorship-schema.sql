@@ -85,6 +85,7 @@ RETURNS json AS $$
 DECLARE
   v_meet record;
   v_name text;
+  v_profile_image_url text;
 BEGIN
   SELECT * INTO v_meet
   FROM public.meet_requests
@@ -99,12 +100,13 @@ BEGIN
     RETURN json_build_object('error', 'This meet link has already been used');
   END IF;
 
-  SELECT display_name INTO v_name
+  SELECT display_name, profile_image_url INTO v_name, v_profile_image_url
   FROM public.profiles
   WHERE id = v_meet.user_id;
 
   RETURN json_build_object(
-    'user_name', COALESCE(v_name, 'A FairShare member')
+    'user_name', COALESCE(v_name, 'A Union member'),
+    'profile_image_url', v_profile_image_url
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

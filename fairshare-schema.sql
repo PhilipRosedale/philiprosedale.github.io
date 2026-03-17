@@ -461,7 +461,7 @@ create policy "Active members can insert document history"
 -- ============================================================
 
 -- Look up a sponsorship by its token (bypasses RLS for invite landing page)
--- Returns sponsor name, group name, message -- safe public info only
+-- Returns sponsor name/avatar, group name, message -- safe public info only
 create or replace function public.get_sponsorship_by_token(p_token text)
 returns json as $$
 declare
@@ -475,6 +475,7 @@ begin
     s.message,
     s.expires_at,
     p.display_name as sponsor_name,
+    p.profile_image_url as sponsor_profile_image_url,
     g.name as group_name,
     g.currency_name,
     g.currency_symbol
@@ -500,6 +501,7 @@ begin
     'id', v_record.id,
     'group_id', v_record.group_id,
     'sponsor_name', v_record.sponsor_name,
+    'profile_image_url', v_record.sponsor_profile_image_url,
     'group_name', v_record.group_name,
     'currency_name', v_record.currency_name,
     'currency_symbol', v_record.currency_symbol,
@@ -1386,6 +1388,7 @@ returns json as $$
 declare
   v_meet record;
   v_name text;
+  v_profile_image_url text;
 begin
   select * into v_meet
   from public.meet_requests
@@ -1396,12 +1399,13 @@ begin
     return json_build_object('error', 'Meet request not found or expired');
   end if;
 
-  select display_name into v_name
+  select display_name, profile_image_url into v_name, v_profile_image_url
   from public.profiles
   where id = v_meet.user_id;
 
   return json_build_object(
-    'user_name', coalesce(v_name, 'A FairShare member')
+    'user_name', coalesce(v_name, 'A Union member'),
+    'profile_image_url', v_profile_image_url
   );
 end;
 $$ language plpgsql security definer;

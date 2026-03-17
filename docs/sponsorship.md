@@ -57,7 +57,7 @@ create table public.sponsorships (
 
 | Function | Purpose |
 |----------|---------|
-| `get_sponsorship_by_token(token)` | Public lookup for the invite landing page (no auth required, returns sponsor name + group info) |
+| `get_sponsorship_by_token(token)` | Public lookup for the invite landing page (no auth required, returns sponsor name/avatar + group info) |
 | `claim_sponsorship(token)` | Validates token, creates pending member, auto-endorses, checks threshold |
 | `check_endorsements(group_id, candidate_id)` | Counts endorsements, reads threshold from constitution, admits if met |
 

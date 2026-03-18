@@ -90,3 +90,91 @@ CREATE POLICY "Users can read profiles of contacts" ON profiles
 -- DELETE FROM contact_shares;
 -- DELETE FROM contact_shared;
 -- DELETE FROM contacts;
+
+-- 6. Shared trust helpers for contact detail
+--    Aggregates only; does not expose full social graph rows to clients.
+
+-- Count mutual contacts between caller and p_contact_id.
+-- Excludes the caller and p_contact_id from the shared set.
+CREATE OR REPLACE FUNCTION public.get_shared_contacts_count(p_contact_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+  v_count integer := 0;
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'You must be logged in';
+  END IF;
+
+  IF p_contact_id IS NULL THEN
+    RAISE EXCEPTION 'Contact is required';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.contacts
+    WHERE user_id = v_caller_id
+      AND contact_id = p_contact_id
+  ) THEN
+    RAISE EXCEPTION 'You can only view shared trust for your contacts';
+  END IF;
+
+  SELECT COUNT(DISTINCT c1.contact_id)
+  INTO v_count
+  FROM public.contacts c1
+  JOIN public.contacts c2
+    ON c1.contact_id = c2.contact_id
+  WHERE c1.user_id = v_caller_id
+    AND c2.user_id = p_contact_id
+    AND c1.contact_id NOT IN (v_caller_id, p_contact_id);
+
+  RETURN COALESCE(v_count, 0);
+END;
+$$;
+
+-- List groups where both caller and p_contact_id are active members.
+CREATE OR REPLACE FUNCTION public.get_shared_groups(p_contact_id uuid)
+RETURNS TABLE (
+  id uuid,
+  name text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'You must be logged in';
+  END IF;
+
+  IF p_contact_id IS NULL THEN
+    RAISE EXCEPTION 'Contact is required';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.contacts
+    WHERE user_id = v_caller_id
+      AND contact_id = p_contact_id
+  ) THEN
+    RAISE EXCEPTION 'You can only view shared trust for your contacts';
+  END IF;
+
+  RETURN QUERY
+  SELECT DISTINCT g.id, g.name
+  FROM public.members m1
+  JOIN public.members m2
+    ON m1.group_id = m2.group_id
+  JOIN public.groups g
+    ON g.id = m1.group_id
+  WHERE m1.user_id = v_caller_id
+    AND m2.user_id = p_contact_id
+    AND m1.status = 'active'
+    AND m2.status = 'active'
+  ORDER BY lower(g.name), g.id;
+END;
+$$;

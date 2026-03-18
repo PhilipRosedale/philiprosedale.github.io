@@ -96,3 +96,44 @@ BEGIN
   );
 END;
 $$;
+
+-- 4. RPC: get_shared_attesters_count
+-- Returns number of distinct "other people" who have attested to both caller and p_contact_id.
+CREATE OR REPLACE FUNCTION public.get_shared_attesters_count(p_contact_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+  v_count integer := 0;
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'You must be logged in';
+  END IF;
+
+  IF p_contact_id IS NULL THEN
+    RAISE EXCEPTION 'Contact is required';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.contacts
+    WHERE user_id = v_caller_id
+      AND contact_id = p_contact_id
+  ) THEN
+    RAISE EXCEPTION 'You can only view shared trust for your contacts';
+  END IF;
+
+  SELECT COUNT(DISTINCT a1.from_user_id)
+  INTO v_count
+  FROM public.attestations a1
+  JOIN public.attestations a2
+    ON a1.from_user_id = a2.from_user_id
+  WHERE a1.to_user_id = v_caller_id
+    AND a2.to_user_id = p_contact_id
+    AND a1.from_user_id NOT IN (v_caller_id, p_contact_id);
+
+  RETURN COALESCE(v_count, 0);
+END;
+$$;

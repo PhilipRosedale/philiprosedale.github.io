@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.attestations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   from_user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   to_user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  attestation_type text NOT NULL CHECK (attestation_type IN ('trust', 'love')),
+  attestation_type text NOT NULL CHECK (attestation_type IN ('profile_picture_accurate', 'respect', 'trust', 'love')),
   created_at timestamptz DEFAULT now()
 );
 
@@ -47,7 +47,7 @@ BEGIN
     RAISE EXCEPTION 'You must be logged in';
   END IF;
 
-  IF p_attestation_type NOT IN ('trust', 'love') THEN
+  IF p_attestation_type NOT IN ('profile_picture_accurate', 'respect', 'trust', 'love') THEN
     RAISE EXCEPTION 'Invalid attestation type';
   END IF;
 

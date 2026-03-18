@@ -175,6 +175,6 @@ BEGIN
     AND m2.user_id = p_contact_id
     AND m1.status = 'active'
     AND m2.status = 'active'
-  ORDER BY lower(g.name), g.id;
+  ORDER BY g.name, g.id;
 END;
 $$;

@@ -23,6 +23,7 @@ FairShare uses an invite-only membership model. There is no "join" button — ne
    - Marks the sponsorship as claimed
    - Creates a pending membership
    - Auto-inserts an endorsement from the sponsor
+   - Adds **bidirectional contacts** (sponsor ↔ candidate), same as a meet handshake
    - Checks if the endorsement threshold is already met (and admits immediately if so)
 
 ### Endorsement and Admission
@@ -58,7 +59,7 @@ create table public.sponsorships (
 | Function | Purpose |
 |----------|---------|
 | `get_sponsorship_by_token(token)` | Public lookup for the invite landing page (no auth required, returns sponsor name/avatar + group info) |
-| `claim_sponsorship(token)` | Validates token, creates pending member, auto-endorses, checks threshold |
+| `claim_sponsorship(token)` | Validates token, creates pending member, auto-endorses, adds mutual contacts, checks threshold |
 | `check_endorsements(group_id, candidate_id)` | Counts endorsements, reads threshold from constitution, admits if met |
 
 ## Client-Side Flow

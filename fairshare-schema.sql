@@ -578,6 +578,17 @@ begin
   insert into public.endorsements (group_id, candidate_id, endorser_id)
   values (v_sponsorship.group_id, v_user_id, v_sponsorship.sponsor_id);
 
+  -- Sponsor ↔ candidate as contacts (same pattern as complete_meet)
+  if v_sponsorship.sponsor_id <> v_user_id then
+    insert into public.contacts (user_id, contact_id, met_at)
+    values (v_sponsorship.sponsor_id, v_user_id, now())
+    on conflict (user_id, contact_id) do update set met_at = now();
+
+    insert into public.contacts (user_id, contact_id, met_at)
+    values (v_user_id, v_sponsorship.sponsor_id, now())
+    on conflict (user_id, contact_id) do update set met_at = now();
+  end if;
+
   -- Immediately check if this endorsement meets the threshold
   perform public.check_endorsements(v_sponsorship.group_id, v_user_id);
 

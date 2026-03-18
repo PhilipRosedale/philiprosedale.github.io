@@ -137,3 +137,41 @@ BEGIN
   RETURN COALESCE(v_count, 0);
 END;
 $$;
+
+-- 5. RPC: get_profile_picture_attesters_count
+-- Returns number of distinct people who attested that the contact's profile picture is accurate.
+CREATE OR REPLACE FUNCTION public.get_profile_picture_attesters_count(p_contact_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+  v_count integer := 0;
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'You must be logged in';
+  END IF;
+
+  IF p_contact_id IS NULL THEN
+    RAISE EXCEPTION 'Contact is required';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.contacts
+    WHERE user_id = v_caller_id
+      AND contact_id = p_contact_id
+  ) THEN
+    RAISE EXCEPTION 'You can only view trust for your contacts';
+  END IF;
+
+  SELECT COUNT(DISTINCT from_user_id)
+  INTO v_count
+  FROM public.attestations
+  WHERE to_user_id = p_contact_id
+    AND attestation_type = 'profile_picture_accurate';
+
+  RETURN COALESCE(v_count, 0);
+END;
+$$;

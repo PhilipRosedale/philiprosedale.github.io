@@ -55,6 +55,7 @@ create table public.groups (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   logo_url text,
+  logo_updated_at timestamptz, -- bumps when logo changes; client uses for image cache-busting
   currency_name text not null,
   currency_symbol text not null default '$',
   fee_rate numeric not null default 0,        -- current voted fee rate (0-1)
@@ -67,6 +68,7 @@ create table public.groups (
 alter table public.groups enable row level security;
 
 alter table public.groups add column if not exists logo_url text;
+alter table public.groups add column if not exists logo_updated_at timestamptz;
 
 -- Anyone can read groups (needed to browse/join)
 create policy "Groups are viewable by everyone"
@@ -1244,6 +1246,7 @@ returns json as $$
 declare
   v_actor_id uuid := auth.uid();
   v_display_name text;
+  v_logo_updated_at timestamptz;
 begin
   if v_actor_id is null then
     raise exception 'You must be logged in';
@@ -1258,8 +1261,10 @@ begin
   end if;
 
   update public.groups
-  set logo_url = p_logo_url
-  where id = p_group_id;
+  set logo_url = p_logo_url,
+      logo_updated_at = now()
+  where id = p_group_id
+  returning logo_updated_at into v_logo_updated_at;
 
   if not found then
     raise exception 'Group not found';
@@ -1275,10 +1280,14 @@ begin
     'group_logo_changed',
     coalesce(v_display_name, 'Someone') || ' changed the group logo',
     v_actor_id,
-    json_build_object('logo_url', p_logo_url)::jsonb
+    json_build_object('logo_url', p_logo_url, 'logo_updated_at', v_logo_updated_at)::jsonb
   );
 
-  return json_build_object('success', true, 'logo_url', p_logo_url);
+  return json_build_object(
+    'success', true,
+    'logo_url', p_logo_url,
+    'logo_updated_at', v_logo_updated_at
+  );
 end;
 $$ language plpgsql security definer;
 

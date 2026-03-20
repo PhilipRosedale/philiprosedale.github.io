@@ -2,6 +2,8 @@
 
 FairShare is a static single-page application for creating and managing groups with their own digital currencies. It runs entirely on GitHub Pages with [Supabase](https://supabase.com) providing the backend.
 
+**See also:** [fairshare-overview.md](fairshare-overview.md) — product summary (contacts, handshake, trust, groups).
+
 ## Technology Stack
 
 | Layer | Technology |

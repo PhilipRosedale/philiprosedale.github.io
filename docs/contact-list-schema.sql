@@ -84,12 +84,60 @@ CREATE POLICY "Users can read profiles of contacts" ON profiles
 -- you may need to drop it and use this combined one, or add this as an additional SELECT policy
 -- only if your RLS allows multiple policies for the same command (OR together).
 
+-- 7. contact_selfies: multiple selfies per contact pair with GPS metadata
+CREATE TABLE IF NOT EXISTS contact_selfies (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  contact_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  selfie_url     text NOT NULL,
+  captured_at    timestamptz DEFAULT now(),
+  lat            double precision,
+  lng            double precision,
+  location_label text,
+  created_at     timestamptz DEFAULT now()
+);
+
+ALTER TABLE contact_selfies ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users read own selfies" ON contact_selfies;
+CREATE POLICY "Users read own selfies" ON contact_selfies
+  FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users insert own selfies" ON contact_selfies;
+CREATE POLICY "Users insert own selfies" ON contact_selfies
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- RPC: insert a selfie row for both sides of the contact pair (SECURITY DEFINER bypasses RLS for the other side)
+CREATE OR REPLACE FUNCTION add_contact_selfie(
+  p_contact_id    uuid,
+  p_selfie_url    text,
+  p_captured_at   timestamptz DEFAULT now(),
+  p_lat           double precision DEFAULT NULL,
+  p_lng           double precision DEFAULT NULL,
+  p_location_label text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  -- Row for the caller
+  INSERT INTO contact_selfies (user_id, contact_id, selfie_url, captured_at, lat, lng, location_label)
+  VALUES (auth.uid(), p_contact_id, p_selfie_url, p_captured_at, p_lat, p_lng, p_location_label);
+
+  -- Mirrored row for the contact so they also see the selfie
+  INSERT INTO contact_selfies (user_id, contact_id, selfie_url, captured_at, lat, lng, location_label)
+  VALUES (p_contact_id, auth.uid(), p_selfie_url, p_captured_at, p_lat, p_lng, p_location_label);
+END;
+$$;
+
 -- =============================================================================
 -- Reset contacts (for testing): run in SQL Editor to delete all contact data
 -- =============================================================================
 -- DELETE FROM contact_shares;
 -- DELETE FROM contact_shared;
 -- DELETE FROM contacts;
+-- DELETE FROM contact_selfies;
 
 -- 6. Shared trust helpers for contact detail
 --    Aggregates only; does not expose full social graph rows to clients.

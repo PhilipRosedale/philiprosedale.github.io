@@ -6,9 +6,10 @@ ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone text;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email text;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS profile_image_url text;
 
--- 2. Extend contacts (created_at, selfie_url)
+-- 2. Extend contacts (created_at, selfie_url, first_met_at)
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS selfie_url text;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS first_met_at timestamptz;
 
 -- 2b. Allow users to update their own contacts rows (needed for selfie_url, etc.)
 DROP POLICY IF EXISTS "Users can update own contacts" ON contacts;

@@ -1614,6 +1614,179 @@ create trigger on_chat_message_push
 
 
 -- ============================================================
+-- CONTACT NOTIFICATIONS
+-- In-app and push notifications sent between contacts when
+-- a profile picture changes or a "met on" date is set/updated.
+-- ============================================================
+
+create table if not exists public.contact_notifications (
+  id uuid primary key default gen_random_uuid(),
+  to_user_id uuid not null references public.profiles(id) on delete cascade,
+  from_user_id uuid not null references public.profiles(id) on delete cascade,
+  notification_type text not null check (notification_type in ('profile_picture_updated', 'met_date_set')),
+  message text not null,
+  created_at timestamptz default now()
+);
+
+alter table public.contact_notifications enable row level security;
+
+create policy "Users can read own contact notifications"
+  on public.contact_notifications for select
+  using (auth.uid() = to_user_id);
+
+create policy "Authenticated users can insert contact notifications"
+  on public.contact_notifications for insert
+  with check (auth.uid() = from_user_id);
+
+-- Allow the SECURITY DEFINER notify functions to insert on behalf of a user
+create policy "Service role can insert contact notifications"
+  on public.contact_notifications for insert
+  with check (true);
+
+
+-- Helper: send a Web Push notification to a list of specific user IDs.
+-- Similar to send_push_to_group but targets arbitrary users instead of group members.
+create or replace function public.send_push_to_users(
+  p_user_ids uuid[],
+  p_actor_id uuid,
+  p_title text,
+  p_body text,
+  p_url text default '/fairshare/'
+)
+returns void as $$
+declare
+  v_edge_fn_url text;
+  v_anon_key text;
+  v_subscriptions jsonb;
+begin
+  select jsonb_agg(jsonb_build_object(
+    'endpoint', ps.endpoint,
+    'keys', jsonb_build_object('p256dh', ps.keys_p256dh, 'auth', ps.keys_auth)
+  ))
+  into v_subscriptions
+  from public.push_subscriptions ps
+  join public.profiles p on p.id = ps.user_id
+  where ps.user_id = any(p_user_ids)
+    and ps.user_id <> p_actor_id
+    and (p.push_notifications is null or p.push_notifications = true);
+
+  if v_subscriptions is null then
+    return;
+  end if;
+
+  select decrypted_secret into v_edge_fn_url
+  from vault.decrypted_secrets where name = 'push_edge_fn_url' limit 1;
+
+  select decrypted_secret into v_anon_key
+  from vault.decrypted_secrets where name = 'supabase_anon_key' limit 1;
+
+  if v_edge_fn_url is null or v_anon_key is null then
+    raise warning 'send_push_to_users: push_edge_fn_url or supabase_anon_key not in vault — skipping push';
+    return;
+  end if;
+
+  perform net.http_post(
+    url     := v_edge_fn_url,
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || v_anon_key,
+      'Content-Type',  'application/json'
+    ),
+    body    := jsonb_build_object(
+      'subscriptions', v_subscriptions,
+      'title', p_title,
+      'body', p_body,
+      'url', p_url
+    )
+  );
+end;
+$$ language plpgsql security definer;
+
+
+-- Notify all contacts when a user updates their profile picture.
+-- Inserts a contact_notification row for each contact (Realtime in-app toast)
+-- and sends a Web Push to contacts who have push enabled.
+create or replace function public.notify_contacts_of_profile_picture_change(
+  p_actor_id uuid
+)
+returns void as $$
+declare
+  v_name text;
+  v_contact_ids uuid[];
+  v_msg text;
+  v_cid uuid;
+begin
+  if auth.uid() is distinct from p_actor_id then
+    raise exception 'Unauthorized';
+  end if;
+
+  select display_name into v_name from public.profiles where id = p_actor_id;
+  v_msg := coalesce(v_name, 'Someone') || ' updated their profile picture';
+
+  -- All users who have p_actor_id as a contact
+  select array_agg(user_id) into v_contact_ids
+  from public.contacts
+  where contact_id = p_actor_id;
+
+  if v_contact_ids is null or cardinality(v_contact_ids) = 0 then
+    return;
+  end if;
+
+  -- Insert in-app notification rows
+  foreach v_cid in array v_contact_ids loop
+    insert into public.contact_notifications (to_user_id, from_user_id, notification_type, message)
+    values (v_cid, p_actor_id, 'profile_picture_updated', v_msg);
+  end loop;
+
+  -- Send Web Push to subscribed contacts
+  perform public.send_push_to_users(v_contact_ids, p_actor_id, 'FairShare', v_msg);
+end;
+$$ language plpgsql security definer;
+
+
+-- Notify a contact when the user sets or updates the date they first met.
+-- Only fires when a date is provided (not when clearing).
+create or replace function public.notify_contact_of_met_date(
+  p_actor_id uuid,
+  p_contact_id uuid,
+  p_met_date timestamptz
+)
+returns void as $$
+declare
+  v_name text;
+  v_date_str text;
+  v_msg text;
+begin
+  if auth.uid() is distinct from p_actor_id then
+    raise exception 'Unauthorized';
+  end if;
+
+  if p_met_date is null then
+    return;
+  end if;
+
+  -- Verify p_contact_id is actually a contact of p_actor_id
+  if not exists (
+    select 1 from public.contacts
+    where user_id = p_actor_id and contact_id = p_contact_id
+  ) then
+    raise exception 'Not a contact';
+  end if;
+
+  select display_name into v_name from public.profiles where id = p_actor_id;
+  v_date_str := trim(to_char(p_met_date, 'Month DD, YYYY'));
+  v_msg := coalesce(v_name, 'Someone') || ' says you met on ' || v_date_str;
+
+  -- Insert in-app notification row
+  insert into public.contact_notifications (to_user_id, from_user_id, notification_type, message)
+  values (p_contact_id, p_actor_id, 'met_date_set', v_msg);
+
+  -- Send Web Push
+  perform public.send_push_to_users(ARRAY[p_contact_id], p_actor_id, 'FairShare', v_msg);
+end;
+$$ language plpgsql security definer;
+
+
+-- ============================================================
 -- STORAGE: Avatars bucket for public profile photos and contact selfies
 -- ============================================================
 -- Run in Supabase SQL Editor:

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.attestations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   from_user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   to_user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  attestation_type text NOT NULL CHECK (attestation_type IN ('profile_picture_accurate', 'respect', 'trust', 'love')),
+  attestation_type text NOT NULL CHECK (attestation_type IN ('profile_picture_accurate', 'respect', 'trust', 'love', 'help')),
   created_at timestamptz DEFAULT now()
 );
 
@@ -47,7 +47,7 @@ BEGIN
     RAISE EXCEPTION 'You must be logged in';
   END IF;
 
-  IF p_attestation_type NOT IN ('profile_picture_accurate', 'respect', 'trust', 'love') THEN
+  IF p_attestation_type NOT IN ('profile_picture_accurate', 'respect', 'trust', 'love', 'help') THEN
     RAISE EXCEPTION 'Invalid attestation type';
   END IF;
 
@@ -71,7 +71,7 @@ $$;
 
 
 -- 3. RPC: get_my_attestation_counts
--- Returns the number of distinct people who have attested love/trust for the caller.
+-- Returns aggregate vouch/attestation counts for the caller, plus sponsor tree depth.
 -- Only aggregate counts are returned — never individual attestation details.
 CREATE OR REPLACE FUNCTION public.get_my_attestation_counts()
 RETURNS json
@@ -79,20 +79,64 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
+  v_caller_id uuid := auth.uid();
   v_love_count int;
   v_trust_count int;
+  v_respect_count int;
+  v_help_count int;
+  v_profile_picture_count int;
+  v_sponsored_direct int;
+  v_sponsored_indirect int;
 BEGIN
   SELECT COUNT(DISTINCT from_user_id) INTO v_love_count
   FROM public.attestations
-  WHERE to_user_id = auth.uid() AND attestation_type = 'love';
+  WHERE to_user_id = v_caller_id AND attestation_type = 'love';
 
   SELECT COUNT(DISTINCT from_user_id) INTO v_trust_count
   FROM public.attestations
-  WHERE to_user_id = auth.uid() AND attestation_type = 'trust';
+  WHERE to_user_id = v_caller_id AND attestation_type = 'trust';
+
+  SELECT COUNT(DISTINCT from_user_id) INTO v_respect_count
+  FROM public.attestations
+  WHERE to_user_id = v_caller_id AND attestation_type = 'respect';
+
+  SELECT COUNT(DISTINCT from_user_id) INTO v_help_count
+  FROM public.attestations
+  WHERE to_user_id = v_caller_id AND attestation_type = 'help';
+
+  SELECT COUNT(DISTINCT from_user_id) INTO v_profile_picture_count
+  FROM public.attestations
+  WHERE to_user_id = v_caller_id AND attestation_type = 'profile_picture_accurate';
+
+  -- Direct sponsors: simple count of profiles pointing directly at the caller.
+  SELECT COUNT(*) INTO v_sponsored_direct
+  FROM public.profiles
+  WHERE sponsor_id = v_caller_id;
+
+  -- Full sponsor subtree using UNION (not UNION ALL) so each profile is
+  -- visited at most once, preventing cycles and duplicate counts.
+  -- Subtract the direct tier to get the indirect total.
+  WITH RECURSIVE descendants AS (
+    SELECT id
+    FROM public.profiles
+    WHERE sponsor_id = v_caller_id
+    UNION
+    SELECT p.id
+    FROM public.profiles p
+    JOIN descendants d ON p.sponsor_id = d.id
+  )
+  SELECT GREATEST(COUNT(*) - v_sponsored_direct, 0)
+  INTO v_sponsored_indirect
+  FROM descendants;
 
   RETURN json_build_object(
-    'love_count', COALESCE(v_love_count, 0),
-    'trust_count', COALESCE(v_trust_count, 0)
+    'love_count',            COALESCE(v_love_count, 0),
+    'trust_count',           COALESCE(v_trust_count, 0),
+    'respect_count',         COALESCE(v_respect_count, 0),
+    'help_count',            COALESCE(v_help_count, 0),
+    'profile_picture_count', COALESCE(v_profile_picture_count, 0),
+    'sponsored_direct',      COALESCE(v_sponsored_direct, 0),
+    'sponsored_indirect',    COALESCE(v_sponsored_indirect, 0)
   );
 END;
 $$;

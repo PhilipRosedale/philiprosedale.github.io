@@ -35,12 +35,6 @@ jobs:
 
           echo "Build version: ${VERSION}"
 
-          # Replace version placeholder in Union app
-          sed -i "s|__BUILD_VERSION__|${VERSION}|g" fairshare/index.html
-
-          # Replace hash placeholder in service worker (cache-bust)
-          sed -i "s|__BUILD_HASH__|${SHORT_SHA}|g" fairshare/sw.js
-
       - name: Setup Pages
         uses: actions/configure-pages@v5
 

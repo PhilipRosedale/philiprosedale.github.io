@@ -78,6 +78,7 @@ let pheroCanvas, pheroCtx, pheroImg;
 let ants = [];
 let body = {};
 let walls = [];
+let nest = {};
 let frameCount = 0;
 let fps = 0, lastFpsTime = 0, fpsFrames = 0;
 
@@ -245,6 +246,7 @@ function initWalls() {
     { x: wallX, y: 0,      w: wallW, h: gapTop },
     { x: wallX, y: gapBot,  w: wallW, h: H - gapBot }
   ];
+  nest = { x: W - 40, y: H / 2, r: 30 };
 }
 
 function pointInRect(px, py, r) {
@@ -335,18 +337,21 @@ function initAnts() {
   for (let i = 0; i < CFG.antCount; i++) ants.push(spawnSafe());
 }
 
+// States: 0=wander (no pheromone, follows green+blue)
+//         1=push  (attached to body, emits blue)
+//         2=return home (emits green, ignores blue, heads right → state 0 at right edge)
+
 function updateAnt(ant) {
   const dist = distToBody(ant.x, ant.y);
 
+  // ---- STATE 1: PUSHING ----
   if (ant.state === 1) {
-    // PUSHING: attached to body, exert force
     const [wx, wy] = localToWorld(ant.attachLx, ant.attachLy);
     ant.x = wx;
     ant.y = wy;
 
     addForce(ant.pushDx * CFG.pushForce, ant.pushDy * CFG.pushForce, wx, wy);
     deposit(ant.x, ant.y, pushGrid, CFG.pushDeposit);
-    deposit(ant.x, ant.y, trailGrid, CFG.trailDeposit * 0.5);
 
     ant.timer++;
     const detachChance = ant.timer > 250 ? 0.015 : 0.002;
@@ -368,58 +373,82 @@ function updateAnt(ant) {
     return;
   }
 
-  // WANDERING: move with pheromone + goal bias + noise
-  const [gTx, gTy] = gradient(ant.x, ant.y, trailGrid);
-  const [gPx, gPy] = gradient(ant.x, ant.y, pushGrid);
+  // ---- STATE 2: RETURN HOME ----
+  if (ant.state === 2) {
+    deposit(ant.x, ant.y, trailGrid, CFG.trailDeposit);
 
-  let dx = ant.vx;
-  let dy = ant.vy;
+    // Random walk only — emit green but don't follow it
+    let heading = Math.atan2(ant.vy, ant.vx);
+    heading += (Math.random() - 0.5) * CFG.wanderNoise * 0.8;
 
-  dx += gTx * 1.5 + gPx * 4.0;
-  dy += gTy * 1.5 + gPy * 4.0;
+    ant.vx = Math.cos(heading) * ant.speed;
+    ant.vy = Math.sin(heading) * ant.speed;
 
-  dx += CFG.goalBias;
+    ant.x += ant.vx;
+    ant.y += ant.vy;
 
-  dx += (Math.random() - 0.5) * CFG.wanderNoise * 2;
-  dy += (Math.random() - 0.5) * CFG.wanderNoise * 2;
+    antWallBounce(ant);
 
-  let len = Math.sqrt(dx * dx + dy * dy);
-  if (len > 0.01) {
-    ant.vx = dx / len * ant.speed;
-    ant.vy = dy / len * ant.speed;
-  }
-
-  deposit(ant.x, ant.y, trailGrid, CFG.trailDeposit);
-
-  // If close to the body, attach and push
-  if (dist < CFG.contactDist) {
-    ant.state = 1;
-    ant.timer = 0;
-    len = Math.sqrt(ant.vx * ant.vx + ant.vy * ant.vy);
-    if (len > 0.01) {
-      ant.pushDx = ant.vx / len;
-      ant.pushDy = ant.vy / len;
-    } else {
-      ant.pushDx = 1; ant.pushDy = 0;
+    // Reached nest → back to wander
+    const ndx = ant.x - nest.x, ndy = ant.y - nest.y;
+    if (ndx * ndx + ndy * ndy < nest.r * nest.r) {
+      ant.state = 0;
+      ant.timer = 0;
     }
-    const [lx, ly] = worldToLocal(ant.x, ant.y);
-    ant.attachLx = lx;
-    ant.attachLy = ly;
     return;
   }
 
-  // If sensing push pheromone, steer toward body (recruitment)
-  const pVal = sample(ant.x, ant.y, pushGrid);
-  if (pVal > 0.2 && dist < 250) {
-    const tdx = body.x - ant.x, tdy = body.y - ant.y;
-    const tl = Math.sqrt(tdx * tdx + tdy * tdy);
-    if (tl > 1) {
-      ant.vx += tdx / tl * 0.4;
-      ant.vy += tdy / tl * 0.4;
+  // ---- STATE 0: WANDER ----
+  let heading = Math.atan2(ant.vy, ant.vx);
+
+  // Forward-facing sensors: follow green (trail) + blue (push) pheromone
+  const SD = 14, SA = 0.5;
+  const phAt = (x, y) => sample(x, y, trailGrid) + sample(x, y, pushGrid) * 2.5;
+  const sL = phAt(ant.x + Math.cos(heading - SA) * SD, ant.y + Math.sin(heading - SA) * SD);
+  const sC = phAt(ant.x + Math.cos(heading)      * SD, ant.y + Math.sin(heading)      * SD);
+  const sR = phAt(ant.x + Math.cos(heading + SA) * SD, ant.y + Math.sin(heading + SA) * SD);
+
+  if (sL > sC && sL > sR) heading -= 0.3;
+  else if (sR > sC && sR > sL) heading += 0.3;
+
+  heading += (Math.random() - 0.5) * CFG.wanderNoise;
+
+  ant.vx = Math.cos(heading) * ant.speed;
+  ant.vy = Math.sin(heading) * ant.speed;
+
+  // No pheromone deposit while wandering
+
+  // Contact with body: 75% push, 25% return home
+  if (dist < CFG.contactDist) {
+    if (Math.random() < 0.25) {
+      ant.state = 2;
+      ant.vx = ant.speed;
+      ant.vy = (Math.random() - 0.5) * ant.speed * 0.3;
+    } else {
+      ant.state = 1;
+      ant.timer = 0;
+      let len = Math.sqrt(ant.vx * ant.vx + ant.vy * ant.vy);
+      if (len > 0.01) {
+        ant.pushDx = ant.vx / len;
+        ant.pushDy = ant.vy / len;
+      } else {
+        ant.pushDx = 1; ant.pushDy = 0;
+      }
+      const [lx, ly] = worldToLocal(ant.x, ant.y);
+      ant.attachLx = lx;
+      ant.attachLy = ly;
     }
+    return;
   }
 
-  // Gentle wall avoidance (steer away before collision)
+  ant.x += ant.vx;
+  ant.y += ant.vy;
+
+  antWallBounce(ant);
+}
+
+function antWallBounce(ant) {
+  // Gentle wall avoidance
   for (const wall of walls) {
     const nearX = ant.x > wall.x - 25 && ant.x < wall.x + wall.w + 25;
     const nearY = ant.y > wall.y - 10 && ant.y < wall.y + wall.h + 10;
@@ -429,10 +458,7 @@ function updateAnt(ant) {
     }
   }
 
-  ant.x += ant.vx;
-  ant.y += ant.vy;
-
-  // Hard wall collision for ants
+  // Hard wall collision
   for (const wall of walls) {
     if (pointInRect(ant.x, ant.y, wall)) {
       if (ant.vx > 0) ant.x = wall.x - 1;
@@ -441,14 +467,10 @@ function updateAnt(ant) {
     }
   }
 
-  // Boundary: wrap horizontally to maintain rightward flow, bounce vertically
+  // Boundary bounce
   const m = 4;
   if (ant.x < m) { ant.x = m; ant.vx = Math.abs(ant.vx); }
-  if (ant.x > W - m) {
-    ant.x = m + Math.random() * 20;
-    ant.y = Math.random() * H;
-    ant.state = 0;
-  }
+  if (ant.x > W - m) { ant.x = W - m; ant.vx = -Math.abs(ant.vx); }
   if (ant.y < m) { ant.y = m; ant.vy = Math.abs(ant.vy); }
   if (ant.y > H - m) { ant.y = H - m; ant.vy = -Math.abs(ant.vy); }
 }
@@ -492,6 +514,20 @@ function renderWalls() {
   ctx.lineTo(wallX + wallW, gapBot);
   ctx.stroke();
   ctx.setLineDash([]);
+
+  // Nest
+  ctx.beginPath();
+  ctx.arc(nest.x, nest.y, nest.r, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('nest', nest.x, nest.y);
 }
 
 function renderBody() {
@@ -520,23 +556,17 @@ function renderBody() {
 
 function renderAnts() {
   const r = CFG.antSize;
-  ctx.beginPath();
-  ctx.fillStyle = '#b09070';
-  for (const ant of ants) {
-    if (ant.state === 1) continue;
-    ctx.moveTo(ant.x + r, ant.y);
-    ctx.arc(ant.x, ant.y, r, 0, Math.PI * 2);
+  const colors = ['#b09070', '#60cc50', '#ccaa30']; // wander, push, return home
+  for (let s = 0; s < 3; s++) {
+    ctx.beginPath();
+    ctx.fillStyle = colors[s];
+    for (const ant of ants) {
+      if (ant.state !== s) continue;
+      ctx.moveTo(ant.x + r, ant.y);
+      ctx.arc(ant.x, ant.y, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
   }
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.fillStyle = '#60cc50';
-  for (const ant of ants) {
-    if (ant.state !== 1) continue;
-    ctx.moveTo(ant.x + r, ant.y);
-    ctx.arc(ant.x, ant.y, r, 0, Math.PI * 2);
-  }
-  ctx.fill();
 }
 
 function renderInfo() {
@@ -548,9 +578,10 @@ function renderInfo() {
     fpsFrames = 0;
   }
   const pushing = ants.filter(a => a.state === 1).length;
+  const homing = ants.filter(a => a.state === 2).length;
   const deg = ((body.angle * 180 / Math.PI) % 360).toFixed(1);
   const speed = Math.sqrt(body.vx * body.vx + body.vy * body.vy).toFixed(2);
-  info.textContent = `${fps} fps | pushing: ${pushing}/${ants.length} | angle: ${deg}° | speed: ${speed}`;
+  info.textContent = `${fps} fps | push: ${pushing} home: ${homing} wander: ${ants.length - pushing - homing} | angle: ${deg}° | speed: ${speed}`;
 }
 
 // ===================== SIMULATION STEP =====================

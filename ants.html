@@ -37,6 +37,7 @@
   <div class="row"><label>Push force</label><input id="sForce" type="range" min="1" max="30" value="12"><span class="val" id="vForce">0.12</span></div>
   <div class="row"><label>Phero decay</label><input id="sDecay" type="range" min="980" max="999" value="995"><span class="val" id="vDecay">.995</span></div>
   <div class="row"><label>Speed</label><input id="sSpeed" type="range" min="1" max="8" value="1"><span class="val" id="vSpeed">1x</span></div>
+  <div class="row"><label>Barrier wall</label><input id="cbWall" type="checkbox" checked></div>
   <button id="btnReset">Reset</button>
 </div>
 <div id="info"></div>
@@ -79,6 +80,7 @@ let ants = [];
 let body = {};
 let walls = [];
 let nest = {};
+let wallEnabled = true;
 let frameCount = 0;
 let fps = 0, lastFpsTime = 0, fpsFrames = 0;
 
@@ -148,6 +150,18 @@ function diffuseDecay() {
         pushGrid[gIdx(c-1,r)] + pushGrid[gIdx(c+1,r)] +
         pushGrid[gIdx(c,r-1)] + pushGrid[gIdx(c,r+1)])) * decay;
     }
+  }
+  for (let c = 0; c < cols; c++) {
+    trailBuf[gIdx(c, 0)] = trailGrid[gIdx(c, 0)] * decay;
+    pushBuf[gIdx(c, 0)]  = pushGrid[gIdx(c, 0)] * decay;
+    trailBuf[gIdx(c, rows-1)] = trailGrid[gIdx(c, rows-1)] * decay;
+    pushBuf[gIdx(c, rows-1)]  = pushGrid[gIdx(c, rows-1)] * decay;
+  }
+  for (let r = 1; r < rows - 1; r++) {
+    trailBuf[gIdx(0, r)] = trailGrid[gIdx(0, r)] * decay;
+    pushBuf[gIdx(0, r)]  = pushGrid[gIdx(0, r)] * decay;
+    trailBuf[gIdx(cols-1, r)] = trailGrid[gIdx(cols-1, r)] * decay;
+    pushBuf[gIdx(cols-1, r)]  = pushGrid[gIdx(cols-1, r)] * decay;
   }
   let tmp;
   tmp = trailGrid; trailGrid = trailBuf; trailBuf = tmp;
@@ -257,7 +271,7 @@ function resolveWallCollisions() {
   for (let iter = 0; iter < 3; iter++) {
     let moved = false;
     const pts = getBodySamplePoints();
-    for (const wall of walls) {
+    for (const wall of activeWalls()) {
       let bestDx = 0, bestDy = 0, bestPen = 0;
       for (const [px, py] of pts) {
         if (!pointInRect(px, py, wall)) continue;
@@ -325,7 +339,7 @@ function spawnSafe() {
     const ant = createAnt();
     if (distToBody(ant.x, ant.y) > 20) {
       let inWall = false;
-      for (const w of walls) if (pointInRect(ant.x, ant.y, w)) inWall = true;
+      for (const w of activeWalls()) if (pointInRect(ant.x, ant.y, w)) inWall = true;
       if (!inWall) return ant;
     }
   }
@@ -356,7 +370,7 @@ function updateAnt(ant) {
     ant.timer++;
     const detachChance = ant.timer > 250 ? 0.015 : 0.002;
     let forceDetach = false;
-    for (const wall of walls) if (pointInRect(ant.x, ant.y, wall)) forceDetach = true;
+    for (const wall of activeWalls()) if (pointInRect(ant.x, ant.y, wall)) forceDetach = true;
     if (ant.x < 2 || ant.x > W - 2 || ant.y < 2 || ant.y > H - 2) forceDetach = true;
 
     if (forceDetach || Math.random() < detachChance) {
@@ -449,7 +463,7 @@ function updateAnt(ant) {
 
 function antWallBounce(ant) {
   // Gentle wall avoidance
-  for (const wall of walls) {
+  for (const wall of activeWalls()) {
     const nearX = ant.x > wall.x - 25 && ant.x < wall.x + wall.w + 25;
     const nearY = ant.y > wall.y - 10 && ant.y < wall.y + wall.h + 10;
     if (nearX && nearY) {
@@ -459,7 +473,7 @@ function antWallBounce(ant) {
   }
 
   // Hard wall collision
-  for (const wall of walls) {
+  for (const wall of activeWalls()) {
     if (pointInRect(ant.x, ant.y, wall)) {
       if (ant.vx > 0) ant.x = wall.x - 1;
       else ant.x = wall.x + wall.w + 1;
@@ -496,24 +510,29 @@ function renderPhero() {
   ctx.restore();
 }
 
-function renderWalls() {
-  ctx.fillStyle = '#444';
-  for (const w of walls) ctx.fillRect(w.x, w.y, w.w, w.h);
+function activeWalls() {
+  return wallEnabled ? walls : [];
+}
 
-  // Draw gap indicators
-  const wallX = walls[0].x, wallW = walls[0].w;
-  const gapTop = walls[0].y + walls[0].h;
-  const gapBot = walls[1].y;
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(wallX, gapTop);
-  ctx.lineTo(wallX + wallW, gapTop);
-  ctx.moveTo(wallX, gapBot);
-  ctx.lineTo(wallX + wallW, gapBot);
-  ctx.stroke();
-  ctx.setLineDash([]);
+function renderWalls() {
+  if (wallEnabled) {
+    ctx.fillStyle = '#444';
+    for (const w of walls) ctx.fillRect(w.x, w.y, w.w, w.h);
+
+    const wallX = walls[0].x, wallW = walls[0].w;
+    const gapTop = walls[0].y + walls[0].h;
+    const gapBot = walls[1].y;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(wallX, gapTop);
+    ctx.lineTo(wallX + wallW, gapTop);
+    ctx.moveTo(wallX, gapBot);
+    ctx.lineTo(wallX + wallW, gapBot);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // Nest
   ctx.beginPath();
@@ -635,6 +654,10 @@ function bindControls() {
   s('sSpeed').oninput = function() {
     CFG.stepsPerFrame = +this.value;
     s('vSpeed').textContent = this.value + 'x';
+  };
+
+  s('cbWall').onchange = function() {
+    wallEnabled = this.checked;
   };
 
   s('btnReset').onclick = function() {

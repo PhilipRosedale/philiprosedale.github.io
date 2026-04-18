@@ -124,6 +124,7 @@
     <div id="resetControls">
         <span class="reset-button">Reset</span>
         <label><input type="checkbox" class="randomize-checkbox">Randomize</label>
+        <label style="margin-left: 10px;"><input type="checkbox" class="slower-higher-checkbox">Higher layers slower</label>
     </div>
     <div id="layerControls">
         <div class="layer-label">Layers:</div>
@@ -247,6 +248,16 @@
         resetButton.addEventListener('click', () => {
             resetAllLayers();
         });
+
+        // "Higher layers slower" — when ON, layer n (1-indexed) updates every
+        // 2^(n-1) simulation frames, mimicking slower higher-level perception.
+        let slowerHigherLayers = true;
+        const slowerHigherCheckbox = document.querySelector('.slower-higher-checkbox');
+        slowerHigherCheckbox.checked = slowerHigherLayers;
+        slowerHigherCheckbox.addEventListener('change', () => {
+            slowerHigherLayers = slowerHigherCheckbox.checked;
+        });
+        let simulationFrame = 0;
         
         // Raycaster for cell selection
         const raycaster = new THREE.Raycaster();
@@ -591,11 +602,27 @@
         }
         
         function updateSimulation() {
+            simulationFrame++;
+
             // Create new grids for each layer
             const newGrids = layers.map(layer => createEmptyGrid(layer.size));
-            
+
+            // Track which layers actually got recomputed this tick so we only
+            // copy/refresh those (others retain their existing grid).
+            const layerUpdated = new Array(layers.length).fill(false);
+
             // Update each layer starting from highest resolution (index 0)
             for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                // When "Higher layers slower" is on, layer n (= layerIndex + 1)
+                // only updates every 2^(n-1) simulation frames.
+                if (slowerHigherLayers) {
+                    const period = 1 << layerIndex; // 2^layerIndex
+                    if (simulationFrame % period !== 0) {
+                        continue;
+                    }
+                }
+                layerUpdated[layerIndex] = true;
+
                 const layer = layers[layerIndex];
                 const grid = layer.grid;
                 const newGrid = newGrids[layerIndex];
@@ -666,6 +693,8 @@
             
             // Copy new grids to the current grids and update visuals
             for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                if (!layerUpdated[layerIndex]) continue;
+
                 const layer = layers[layerIndex];
                 const newGrid = newGrids[layerIndex];
                 

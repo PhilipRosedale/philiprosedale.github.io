@@ -2,12 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>Run Tracker</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏃‍♂️</text></svg>" />
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
+    @media (orientation: landscape) {
+      html { transform: rotate(-90deg); transform-origin: left top;
+        width: 100vh; height: 100vw; overflow-x: hidden;
+        position: absolute; top: 100%; left: 0; }
+    }
     body { 
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
       padding: 1em; 
@@ -258,7 +263,7 @@
 
   <div class="debug-section">
     <span id="debugInfo">0 GPS reads, 0 feet</span>
-    <span style="margin-left: 1em;">v1.7.1</span>
+    <span style="margin-left: 1em;">v1.7.2</span>
     <br>
     <label style="margin-top: 0.5em; display: inline-block;">
       <input type="checkbox" id="kalmanDebugToggle" onchange="toggleKalmanFilter()" checked>
@@ -376,6 +381,8 @@
     let gpsReadCount = 0; // Track number of successful GPS reads
     let lastDistanceFeet = 0; // Track distance between last two GPS reads in feet
     let kalmanFilterEnabled = true; // Debug variable to enable/disable Kalman filter
+    let totalPausedTime = 0; // Accumulated milliseconds spent paused
+    let pauseStartTime = null; // Timestamp when current pause began
     
     // Kalman filter state
     let kalmanState = {
@@ -555,7 +562,7 @@
     function updateDisplay() {
       if (!isTracking) return;
       
-      const elapsed = (Date.now() - startTime) / 1000; // seconds
+      const elapsed = (Date.now() - startTime - totalPausedTime) / 1000; // seconds
       const avgSpeedKmPerHour = totalDistance / (elapsed / 3600); // km/h
       const avgSpeedInCurrentUnit = convertSpeed(avgSpeedKmPerHour);
       const currentSpeedInCurrentUnit = calculateCurrentPace();
@@ -701,6 +708,8 @@
       // Initialize tracking state
       startTime = Date.now();
       totalDistance = 0;
+      totalPausedTime = 0;
+      pauseStartTime = null;
       lastPos = null;
       positionHistory = [];
       velocityHistory = [];
@@ -722,6 +731,7 @@
     }
 
     function pauseTracking() {
+      pauseStartTime = Date.now();
       if (watchId) {
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
@@ -741,6 +751,17 @@
 
     function resumeTracking() {
       if (!validateTrackingEnvironment()) return;
+
+      // Accumulate the time spent in this pause
+      if (pauseStartTime) {
+        totalPausedTime += Date.now() - pauseStartTime;
+        pauseStartTime = null;
+      }
+
+      // Discard stale position data so current pace rebuilds cleanly
+      lastPos = null;
+      positionHistory = [];
+      velocityHistory = [];
 
       // Resume GPS watching (preserves existing tracking state)
       startGPSWatching();
@@ -770,6 +791,11 @@
       document.getElementById('resumeBtn').style.display = 'none';
       document.getElementById('stopBtn').style.display = 'none';
     }
+
+    // Lock orientation to portrait where supported
+    try {
+      screen.orientation.lock('portrait').catch(() => {});
+    } catch (e) {}
 
     // Register service worker
     if ('serviceWorker' in navigator) {

@@ -46,6 +46,38 @@
             color: #00ff00;
             font-weight: bold;
         }
+        #resetControls {
+            position: absolute;
+            top: 70px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+        }
+        #resetControls .reset-button {
+            cursor: pointer;
+            user-select: none;
+            padding: 2px 8px;
+            border: 1px solid #888;
+            border-radius: 3px;
+            margin-right: 10px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        #resetControls .reset-button:hover {
+            color: #00ff00;
+            border-color: #00ff00;
+        }
+        #resetControls label {
+            cursor: pointer;
+            user-select: none;
+        }
+        #resetControls input[type="checkbox"] {
+            cursor: pointer;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
         #layerControls {
             position: absolute;
             top: 10px;
@@ -76,11 +108,112 @@
             color: #888;
             margin-top: 4px;
         }
+        #resetControls .edit-rules-button {
+            cursor: pointer;
+            user-select: none;
+            padding: 2px 8px;
+            border: 1px solid #888;
+            border-radius: 3px;
+            margin-left: 10px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        #resetControls .edit-rules-button:hover {
+            color: #00ff00;
+            border-color: #00ff00;
+        }
+        #rulesPanel {
+            position: absolute;
+            top: 100px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            background: rgba(0, 0, 0, 0.75);
+            border: 1px solid #888;
+            border-radius: 4px;
+            padding: 10px 12px;
+            display: none;
+            min-width: 280px;
+        }
+        #rulesPanel.open {
+            display: block;
+        }
+        #rulesPanel .rules-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        #rulesPanel .rules-title {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        #rulesPanel .rules-close {
+            cursor: pointer;
+            user-select: none;
+            padding: 0 6px;
+            border: 1px solid #888;
+            border-radius: 3px;
+        }
+        #rulesPanel .rules-close:hover {
+            color: #00ff00;
+            border-color: #00ff00;
+        }
+        #rulesPanel .rules-help {
+            color: #aaa;
+            font-size: 11px;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+        #rulesPanel .rule-row {
+            margin: 6px 0;
+        }
+        #rulesPanel .rule-row .row-label {
+            display: inline-block;
+            width: 70px;
+            font-weight: bold;
+        }
+        #rulesPanel .rule-row .count-box {
+            display: inline-block;
+            width: 22px;
+            text-align: center;
+            margin-right: 2px;
+            cursor: pointer;
+            user-select: none;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 1px 0;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        #rulesPanel .rule-row .count-box.on {
+            background: #00ff00;
+            color: #000;
+            border-color: #00ff00;
+            font-weight: bold;
+        }
+        #rulesPanel .rules-footer {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+        }
+        #rulesPanel .rules-footer .preset-btn {
+            cursor: pointer;
+            user-select: none;
+            padding: 2px 8px;
+            border: 1px solid #888;
+            border-radius: 3px;
+            background: rgba(0, 0, 0, 0.3);
+            font-size: 12px;
+        }
+        #rulesPanel .rules-footer .preset-btn:hover {
+            color: #00ff00;
+            border-color: #00ff00;
+        }
     </style>
 </head>
 <body>
     <div id="statusOverlay">
-        <div class="status-item hierarchy-status">Hierarchy: <span class="status-value">OFF</span></div>
+        <div class="status-item hierarchy-status">Hierarchy: <span class="status-value">ON</span></div>
         <div class="status-item running-status">Running: <span class="status-value">ON</span></div>
     </div>
     <div id="speedControls">
@@ -88,6 +221,33 @@
         <span class="speed-prev">&lt;</span>
         <span class="speed-value selected">M</span>
         <span class="speed-next">&gt;</span>
+    </div>
+    <div id="resetControls">
+        <span class="reset-button">Reset</span>
+        <label><input type="checkbox" class="randomize-checkbox">Randomize</label>
+        <label style="margin-left: 10px;"><input type="checkbox" class="slower-higher-checkbox">Higher layers slower</label>
+        <span class="edit-rules-button">Edit Rules</span>
+    </div>
+    <div id="rulesPanel">
+        <div class="rules-header">
+            <span class="rules-title">Edit Rules</span>
+            <span class="rules-close">X</span>
+        </div>
+        <div class="rules-help">
+            Counts include 8 same-layer neighbors plus, when Hierarchy is on,
+            the parent cell (0&ndash;1) and child block cells (0&ndash;4).
+            Click a number to toggle.
+        </div>
+        <div class="rule-row" id="surviveRow">
+            <span class="row-label">Survive:</span>
+        </div>
+        <div class="rule-row" id="bornRow">
+            <span class="row-label">Born:</span>
+        </div>
+        <div class="rules-footer">
+            <span class="preset-btn" data-preset="conway">Conway B3/S23</span>
+            <span class="preset-btn" data-preset="clear">Clear All</span>
+        </div>
     </div>
     <div id="layerControls">
         <div class="layer-label">Layers:</div>
@@ -166,10 +326,17 @@
             speedValue.className = 'speed-value selected';
         }
         
-        // Hierarchy mode - initially OFF
-        let hierarchyEnabled = false;
+        // Hierarchy mode - initially ON
+        let hierarchyEnabled = true;
         // Simulation running state - initially ON
         let simulationRunning = true;
+
+        // Seeded pseudo-random generator (mulberry32) for deterministic resets.
+        // When the "Randomize" checkbox is OFF, randomizeGrid uses this so the
+        // initial pattern is identical across browsers.
+        const FIXED_SEED = 0xC0FFEE;
+        let seededState = FIXED_SEED;
+        let useTrueRandom = false;
         
         // Status control elements
         const hierarchyStatus = document.querySelector('.hierarchy-status');
@@ -193,6 +360,94 @@
             hierarchyValue.textContent = hierarchyEnabled ? 'ON' : 'OFF';
             runningValue.textContent = simulationRunning ? 'ON' : 'OFF';
         }
+
+        // Reset / Randomize controls
+        const resetButton = document.querySelector('.reset-button');
+        const randomizeCheckbox = document.querySelector('.randomize-checkbox');
+        randomizeCheckbox.checked = useTrueRandom;
+        randomizeCheckbox.addEventListener('change', () => {
+            useTrueRandom = randomizeCheckbox.checked;
+        });
+        resetButton.addEventListener('click', () => {
+            resetAllLayers();
+        });
+
+        // "Higher layers slower" — when ON, layer n (1-indexed) updates every
+        // 2^(n-1) simulation frames, mimicking slower higher-level perception.
+        let slowerHigherLayers = true;
+        const slowerHigherCheckbox = document.querySelector('.slower-higher-checkbox');
+        slowerHigherCheckbox.checked = slowerHigherLayers;
+        slowerHigherCheckbox.addEventListener('change', () => {
+            slowerHigherLayers = slowerHigherCheckbox.checked;
+        });
+        let simulationFrame = 0;
+
+        // Editable Game-of-Life rules. Standard Conway is B3/S23.
+        // Counts can run 0..MAX_RULE_COUNT because hierarchy mode adds parent
+        // (0-1) and child block (0-4) influences on top of the 8 same-layer
+        // neighbors, so up to 8 + 1 + 4 = 13.
+        const MAX_RULE_COUNT = 13;
+        const surviveCounts = new Set([2, 4]);
+        const bornCounts = new Set([3]);
+
+        function buildRuleRow(rowEl, ruleSet) {
+            for (let n = 0; n <= MAX_RULE_COUNT; n++) {
+                const box = document.createElement('span');
+                box.className = 'count-box';
+                box.textContent = n;
+                box.dataset.count = n;
+                if (ruleSet.has(n)) box.classList.add('on');
+                box.addEventListener('click', () => {
+                    if (ruleSet.has(n)) {
+                        ruleSet.delete(n);
+                        box.classList.remove('on');
+                    } else {
+                        ruleSet.add(n);
+                        box.classList.add('on');
+                    }
+                });
+                rowEl.appendChild(box);
+            }
+        }
+
+        const surviveRow = document.getElementById('surviveRow');
+        const bornRow = document.getElementById('bornRow');
+        buildRuleRow(surviveRow, surviveCounts);
+        buildRuleRow(bornRow, bornCounts);
+
+        function refreshRuleRow(rowEl, ruleSet) {
+            const boxes = rowEl.querySelectorAll('.count-box');
+            boxes.forEach(box => {
+                const n = parseInt(box.dataset.count);
+                if (ruleSet.has(n)) box.classList.add('on');
+                else box.classList.remove('on');
+            });
+        }
+
+        const rulesPanel = document.getElementById('rulesPanel');
+        const editRulesButton = document.querySelector('.edit-rules-button');
+        const rulesClose = document.querySelector('.rules-close');
+        editRulesButton.addEventListener('click', () => {
+            rulesPanel.classList.toggle('open');
+        });
+        rulesClose.addEventListener('click', () => {
+            rulesPanel.classList.remove('open');
+        });
+
+        document.querySelectorAll('#rulesPanel .preset-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const preset = btn.dataset.preset;
+                surviveCounts.clear();
+                bornCounts.clear();
+                if (preset === 'conway') {
+                    surviveCounts.add(2);
+                    surviveCounts.add(3);
+                    bornCounts.add(3);
+                }
+                refreshRuleRow(surviveRow, surviveCounts);
+                refreshRuleRow(bornRow, bornCounts);
+            });
+        });
         
         // Raycaster for cell selection
         const raycaster = new THREE.Raycaster();
@@ -449,12 +704,35 @@
             return grid;
         }
         
+        function seededRandom() {
+            seededState |= 0;
+            seededState = (seededState + 0x6D2B79F5) | 0;
+            let t = seededState;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        }
+        function resetSeed() {
+            seededState = FIXED_SEED;
+        }
+
         function randomizeGrid(grid) {
             const size = grid.length;
+            const rand = useTrueRandom ? Math.random : seededRandom;
             for (let x = 0; x < size; x++) {
                 for (let y = 0; y < size; y++) {
-                    grid[x][y] = Math.random() > 0.7 ? 1 : 0;
+                    grid[x][y] = rand() > 0.7 ? 1 : 0;
                 }
+            }
+        }
+
+        function resetAllLayers() {
+            if (!useTrueRandom) {
+                resetSeed();
+            }
+            for (let i = 0; i < layers.length; i++) {
+                randomizeGrid(layers[i].grid);
+                updateCellMeshes(i);
             }
         }
         
@@ -514,11 +792,27 @@
         }
         
         function updateSimulation() {
+            simulationFrame++;
+
             // Create new grids for each layer
             const newGrids = layers.map(layer => createEmptyGrid(layer.size));
-            
+
+            // Track which layers actually got recomputed this tick so we only
+            // copy/refresh those (others retain their existing grid).
+            const layerUpdated = new Array(layers.length).fill(false);
+
             // Update each layer starting from highest resolution (index 0)
             for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                // When "Higher layers slower" is on, layer n (= layerIndex + 1)
+                // only updates every 2^(n-1) simulation frames.
+                if (slowerHigherLayers) {
+                    const period = 1 << layerIndex; // 2^layerIndex
+                    if (simulationFrame % period !== 0) {
+                        continue;
+                    }
+                }
+                layerUpdated[layerIndex] = true;
+
                 const layer = layers[layerIndex];
                 const grid = layer.grid;
                 const newGrid = newGrids[layerIndex];
@@ -574,14 +868,14 @@
                             }
                         }
                         
-                        // Apply standard Game of Life rules
+                        // Apply user-editable Game of Life rules. The neighbor
+                        // count includes parent + same-layer + children when
+                        // hierarchy mode is on.
                         const currentState = grid[x][y];
                         if (currentState === 1) {
-                            // Survive with 2-3 neighbors
-                            newGrid[x][y] = (neighbors === 2 || neighbors === 3) ? 1 : 0;
+                            newGrid[x][y] = surviveCounts.has(neighbors) ? 1 : 0;
                         } else {
-                            // Born with exactly 3 neighbors
-                            newGrid[x][y] = (neighbors === 3) ? 1 : 0;
+                            newGrid[x][y] = bornCounts.has(neighbors) ? 1 : 0;
                         }
                     }
                 }
@@ -589,6 +883,8 @@
             
             // Copy new grids to the current grids and update visuals
             for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+                if (!layerUpdated[layerIndex]) continue;
+
                 const layer = layers[layerIndex];
                 const newGrid = newGrids[layerIndex];
                 

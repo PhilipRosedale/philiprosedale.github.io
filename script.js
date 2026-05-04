@@ -49,7 +49,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Writings: show only first 8, expand on "More..."
     const writingItems = document.querySelectorAll('.writing-item');
     const moreBtn = document.getElementById('writings-more-btn');
+    const searchInput = document.getElementById('writings-search');
     const VISIBLE_COUNT = 8;
+    let expanded = false;
 
     if (writingItems.length > VISIBLE_COUNT) {
         writingItems.forEach((item, i) => {
@@ -57,12 +59,67 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         if (moreBtn) {
             moreBtn.addEventListener('click', () => {
+                expanded = true;
                 writingItems.forEach(item => item.classList.remove('writing-hidden'));
                 moreBtn.classList.add('hidden');
             });
         }
     } else if (moreBtn) {
         moreBtn.classList.add('hidden');
+    }
+
+    // Writings search
+    if (searchInput) {
+        let noResults = document.querySelector('.writings-no-results');
+
+        searchInput.addEventListener('input', () => {
+            const query = searchInput.value.trim().toLowerCase();
+
+            if (!query) {
+                // Restore default state
+                writingItems.forEach((item, i) => {
+                    item.classList.remove('writing-search-hidden');
+                    if (!expanded && i >= VISIBLE_COUNT) {
+                        item.classList.add('writing-hidden');
+                    }
+                });
+                if (moreBtn && !expanded && writingItems.length > VISIBLE_COUNT) {
+                    moreBtn.classList.remove('hidden');
+                }
+                if (noResults) noResults.remove();
+                noResults = null;
+                return;
+            }
+
+            // While searching, disable the truncation
+            if (moreBtn) moreBtn.classList.add('hidden');
+            let matchCount = 0;
+
+            writingItems.forEach(item => {
+                item.classList.remove('writing-hidden');
+                const title = (item.querySelector('h3')?.textContent || '').toLowerCase();
+                const desc = (item.querySelector('p')?.textContent || '').toLowerCase();
+                if (title.includes(query) || desc.includes(query)) {
+                    item.classList.remove('writing-search-hidden');
+                    matchCount++;
+                } else {
+                    item.classList.add('writing-search-hidden');
+                }
+            });
+
+            if (matchCount === 0) {
+                if (!noResults) {
+                    noResults = document.createElement('p');
+                    noResults.className = 'writings-no-results';
+                    const list = document.querySelector('.writing-list');
+                    list.parentNode.insertBefore(noResults, list.nextSibling);
+                }
+                noResults.textContent = 'No articles found.';
+            } else if (noResults) {
+                noResults.remove();
+                noResults = null;
+            }
+        });
     }
 
     // Add hover effects to cards

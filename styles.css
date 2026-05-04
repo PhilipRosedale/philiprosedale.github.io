@@ -218,6 +218,45 @@ main {
     transform: translateY(-3px);
 }
 
+/* Writings search */
+.writings-search {
+    width: 100%;
+    padding: 0.6rem 1rem 0.6rem 2.2rem;
+    border: 1px solid var(--medium-gray);
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    color: var(--text-color);
+    background-color: var(--light-gray);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: 0.7rem center;
+    margin-bottom: 1rem;
+    transition: var(--transition);
+}
+
+.writings-search:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    background-color: var(--white);
+    box-shadow: 0 0 0 3px rgba(58, 124, 165, 0.1);
+}
+
+.writings-search::placeholder {
+    color: #999;
+}
+
+.writing-item.writing-search-hidden {
+    display: none;
+}
+
+.writings-no-results {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--dark-gray);
+    font-size: 0.95rem;
+}
+
 /* Writings list */
 .writing-list {
     display: flex;

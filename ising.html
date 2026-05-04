@@ -50,6 +50,9 @@
   <label for="contrarianSlider">Contrarian</label>
   <input id="contrarianSlider" type="range" min="0" max="100" value="2">
   <span id="contrarianValue">2%</span>
+  <label for="noiseSlider">Noise</label>
+  <input id="noiseSlider" type="range" min="0" max="100" value="0">
+  <span id="noiseValue">0%</span>
   <button id="resetBtn">Reset</button>
 </div>
 <script>
@@ -64,6 +67,7 @@ const UPDATES_PER_FRAME_SCALE = 1; // updates per frame = scale * (cols * rows)
 let cols, rows;
 let cells = [];
 let contrarianFraction = 0.02;
+let noiseAmount = 0;
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
@@ -77,6 +81,13 @@ function setup() {
     contrarianFraction = parseInt(slider.value) / 100;
     label.textContent = slider.value + '%';
     initGrid();
+  });
+
+  const noiseSlider = document.getElementById('noiseSlider');
+  const noiseLabel  = document.getElementById('noiseValue');
+  noiseSlider.addEventListener('input', () => {
+    noiseAmount = parseInt(noiseSlider.value) / 100;
+    noiseLabel.textContent = noiseSlider.value + '%';
   });
 
   document.getElementById('resetBtn').addEventListener('click', () => initGrid());
@@ -129,8 +140,17 @@ function updateOneCell() {
   const sign = c.contrarian ? -1 : 1;
   const targetVx = avg.vx * sign;
   const targetVy = avg.vy * sign;
-  const vxNew = c.vx + BLEND_ALPHA * (targetVx - c.vx);
-  const vyNew = c.vy + BLEND_ALPHA * (targetVy - c.vy);
+  let vxNew = c.vx + BLEND_ALPHA * (targetVx - c.vx);
+  let vyNew = c.vy + BLEND_ALPHA * (targetVy - c.vy);
+  if (noiseAmount > 0) {
+    const jitter = random(-PI, PI) * noiseAmount;
+    const cs = cos(jitter);
+    const sn = sin(jitter);
+    const rx = vxNew * cs - vyNew * sn;
+    const ry = vxNew * sn + vyNew * cs;
+    vxNew = rx;
+    vyNew = ry;
+  }
   const n = normalize(vxNew, vyNew);
   if (n !== null) {
     c.vx = n.vx;

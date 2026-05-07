@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Standard Model — 1000 Particles, 10 Types</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #000;
+    color: #ddd;
+    font-family: Inter, Arial, Helvetica, sans-serif;
+  }
+  canvas { display: block; }
+
+  .panel {
+    position: absolute;
+    background: rgba(20, 20, 24, 0.78);
+    border: 1px solid #2a2a30;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: #e8e8ec;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    user-select: none;
+  }
+
+  #info { top: 12px; left: 12px; max-width: 300px; line-height: 1.45; }
+  #info h2 { margin: 0 0 6px 0; font-size: 14px; font-weight: 600; }
+  #info .hint { color: #9aa; }
+  #info .stat { font-family: ui-monospace, Menlo, monospace; color: #cfd8ff; }
+
+  #legend { top: 12px; right: 12px; }
+  #legend h3 { margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #cfd; }
+  .legend-row {
+    display: flex; align-items: center; gap: 8px;
+    margin: 2px 0; font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  }
+  .swatch {
+    width: 14px; height: 14px; border-radius: 3px;
+    box-shadow: 0 0 4px rgba(255,255,255,0.18);
+  }
+
+  #controls {
+    bottom: 12px; left: 12px; display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  #controls button {
+    background: #1c1c22; color: #e8e8ec; border: 1px solid #3a3a44;
+    padding: 6px 10px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; font-family: inherit;
+  }
+  #controls button:hover { background: #2a2a32; border-color: #5a5a66; }
+
+  #sliders { bottom: 12px; right: 12px; min-width: 230px; }
+  #sliders h3 { margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: #cfd; }
+  .slider-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 11px; }
+  .slider-row label { flex: 0 0 90px; color: #aab; }
+  .slider-row input[type=range] { flex: 1; }
+  .slider-row .v {
+    flex: 0 0 38px; text-align: right;
+    font-family: ui-monospace, Menlo, monospace; color: #cfd8ff;
+  }
+</style>
+</head>
+<body>
+
+<div id="info" class="panel">
+  <h2>Standard Model</h2>
+  <div>1000 particles · 10 types in a 3D box.</div>
+  <div>Pairwise rules: scattering, short&#8209;range (1/r) force, long&#8209;range (linear&nbsp;r) force, perpendicular handedness force.</div>
+  <div class="hint" style="margin-top:6px;">Left&#8209;drag a particle to move it · drag empty space to rotate · scroll to zoom · right&#8209;drag to pan</div>
+  <div style="margin-top:8px;">
+    <span class="stat" id="fps">fps —</span> ·
+    <span class="stat" id="ke">KE —</span> ·
+    <span class="stat" id="t">step 0</span>
+  </div>
+</div>
+
+<div id="legend" class="panel">
+  <h3>Particle Types</h3>
+  <div id="legend-rows"></div>
+</div>
+
+<div id="controls" class="panel">
+  <button id="btn-pause">Pause</button>
+  <button id="btn-reset-pos">Reset positions</button>
+  <button id="btn-reset-rules">Randomize rules</button>
+  <button id="btn-recenter">Recenter view</button>
+</div>
+
+<div id="sliders" class="panel">
+  <h3>Global controls</h3>
+  <div class="slider-row">
+    <label>Short&#8209;range</label>
+    <input type="range" id="s-short" min="0" max="3" step="0.01" value="1.0">
+    <span class="v" id="v-short">1.00</span>
+  </div>
+  <div class="slider-row">
+    <label>Long&#8209;range</label>
+    <input type="range" id="s-long" min="0" max="3" step="0.01" value="1.0">
+    <span class="v" id="v-long">1.00</span>
+  </div>
+  <div class="slider-row">
+    <label>Handedness</label>
+    <input type="range" id="s-perp" min="0" max="5" step="0.01" value="0.05">
+    <span class="v" id="v-perp">0.05</span>
+  </div>
+  <div class="slider-row">
+    <label>Damping</label>
+    <input type="range" id="s-damp" min="0.90" max="1.00" step="0.001" value="0.985">
+    <span class="v" id="v-damp">0.985</span>
+  </div>
+  <div class="slider-row">
+    <label>Time step</label>
+    <input type="range" id="s-dt" min="0.02" max="0.30" step="0.005" value="0.10">
+    <span class="v" id="v-dt">0.10</span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+/*
+ * Standard Model
+ * ----------------------------------------------------------------------------
+ * 1000 particles distributed across 10 types, each with a unique color.
+ * Every (typeA, typeB) pair has its own interaction rule:
+ *
+ *   - scattering[A][B] : 0 = pass through, 1 = elastic, 2 = inelastic
+ *   - shortK[A][B]     : close-range force, magnitude = k / distance
+ *                        (positive = repulsive, negative = attractive)
+ *   - longK[A][B]      : longer-range force, magnitude = k * distance
+ *                        (positive = repulsive,  negative = attractive)
+ *   - perpK[A][B]      : "handedness" force perpendicular to the line between
+ *                        the particles. Lorentz-like form
+ *                        F_on_i = k * ((v_i - v_j) x r_hat_ij)
+ *                        (sign of k selects left- vs right-handed coupling;
+ *                         magnitude is roughly distance-independent within
+ *                         LONG_CUTOFF)
+ *
+ * All interaction matrices are symmetric, so Newton's third law holds.
+ * Particles bounce off the walls of a cubical box.
+ */
+
+// ---------- Constants ---------------------------------------------------------
+const NUM_TYPES         = 10;
+const NUM_PARTICLES     = 1000;
+const BOX_SIZE          = 200;
+const HALF              = BOX_SIZE / 2;
+const PARTICLE_RADIUS   = 2.0;
+const COLLISION_DIST    = 2.0 * PARTICLE_RADIUS;
+const SHORT_CUTOFF      = 9.0;     // short-range force cutoff
+const LONG_CUTOFF       = 70.0;    // long-range force cutoff
+const MIN_DIST          = 1.5;     // floor on r to avoid 1/r singularity
+const MAX_VEL           = 25.0;    // velocity clamp to keep things stable
+const SHORT_BASE        = 60.0;    // base scale for 1/r force
+const LONG_BASE         = 0.004;   // base scale for linear-r force
+const PERP_BASE         = 0.30;    // base scale for handedness (perpendicular) force
+
+// ---------- State -------------------------------------------------------------
+let paused = false;
+let stepCount = 0;
+let shortScale = 1.0;
+let longScale  = 1.0;
+let perpScale  = 1.0;
+let damping    = 0.985;
+let dt         = 0.10;
+
+// Particle data (typed arrays for speed)
+const pos   = new Float32Array(NUM_PARTICLES * 3);
+const vel   = new Float32Array(NUM_PARTICLES * 3);
+const force = new Float32Array(NUM_PARTICLES * 3);
+const ptype = new Int32Array(NUM_PARTICLES);
+
+// Drag state. dragIndex is -1 when no particle is being dragged. While
+// dragging, dragTargetPos holds the desired world-space position (the
+// projection of the cursor onto a screen-parallel plane through the picked
+// particle).
+let dragIndex = -1;
+const dragTargetPos = new THREE.Vector3();
+
+// Pairwise rule matrices (NUM_TYPES x NUM_TYPES, flattened)
+const scattering = new Int8Array (NUM_TYPES * NUM_TYPES);
+const shortK     = new Float32Array(NUM_TYPES * NUM_TYPES);
+const longK      = new Float32Array(NUM_TYPES * NUM_TYPES);
+const perpK      = new Float32Array(NUM_TYPES * NUM_TYPES);
+
+// Per-type colors (THREE.Color)
+const typeColors = [];
+for (let i = 0; i < NUM_TYPES; i++) {
+  const c = new THREE.Color();
+  c.setHSL(i / NUM_TYPES, 0.85, 0.58);
+  typeColors.push(c);
+}
+
+// ---------- Three.js scene ----------------------------------------------------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05050a);
+
+const camera = new THREE.PerspectiveCamera(
+  55, window.innerWidth / window.innerHeight, 0.1, 4000
+);
+const initialCamPos = new THREE.Vector3(BOX_SIZE * 1.4, BOX_SIZE * 1.05, BOX_SIZE * 1.4);
+camera.position.copy(initialCamPos);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor  = 0.08;
+
+// Bounding box (wireframe)
+const boxEdges = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(BOX_SIZE, BOX_SIZE, BOX_SIZE)),
+  new THREE.LineBasicMaterial({ color: 0x4455aa, transparent: true, opacity: 0.45 })
+);
+scene.add(boxEdges);
+
+// Faint axes for orientation
+const axisLen = HALF * 1.05;
+const axes = new THREE.LineSegments(
+  (() => {
+    const g = new THREE.BufferGeometry();
+    const v = new Float32Array([
+      -axisLen, 0, 0,  axisLen, 0, 0,
+       0,-axisLen, 0,  0, axisLen, 0,
+       0, 0,-axisLen,  0, 0, axisLen,
+    ]);
+    g.setAttribute('position', new THREE.BufferAttribute(v, 3));
+    const c = new Float32Array([
+      0.6,0.2,0.2, 0.6,0.2,0.2,
+      0.2,0.6,0.2, 0.2,0.6,0.2,
+      0.2,0.3,0.7, 0.2,0.3,0.7,
+    ]);
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+    return g;
+  })(),
+  new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.25 })
+);
+scene.add(axes);
+
+// Particles rendered as a single InstancedMesh for speed
+const sphereGeo = new THREE.SphereGeometry(PARTICLE_RADIUS, 10, 8);
+const sphereMat = new THREE.MeshBasicMaterial({ vertexColors: false });
+const mesh = new THREE.InstancedMesh(sphereGeo, sphereMat, NUM_PARTICLES);
+mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+// Per-instance color attribute
+const instColors = new Float32Array(NUM_PARTICLES * 3);
+mesh.instanceColor = new THREE.InstancedBufferAttribute(instColors, 3);
+mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+
+scene.add(mesh);
+
+// Re-usable matrix to write instance positions into
+const tmpMat = new THREE.Matrix4();
+const tmpPos = new THREE.Vector3();
+
+// ---------- Initialization ----------------------------------------------------
+function randomizeRules() {
+  // Symmetric pairwise rules. Random per (i,j) with i <= j.
+  for (let i = 0; i < NUM_TYPES; i++) {
+    for (let j = i; j < NUM_TYPES; j++) {
+      // scattering: weighted distribution — biased toward elastic
+      const r = Math.random();
+      let s;
+      if (r < 0.25)      s = 0;          // pass-through
+      else if (r < 0.75) s = 1;          // elastic
+      else               s = 2;          // inelastic
+
+      // short-range: roughly U(-1,1) but make same-type a bit more cohesive
+      let ks = (Math.random() * 2 - 1);
+      if (i === j) ks = -Math.abs(ks) * 0.6 - 0.05; // mild self-attraction
+      // long-range: smaller magnitudes, also U(-1,1)
+      let kl = (Math.random() * 2 - 1) * 0.7;
+      // perpendicular handedness coupling: U(-1,1), sign sets chirality
+      let kp = (Math.random() * 2 - 1);
+
+      scattering[i * NUM_TYPES + j] = s;
+      scattering[j * NUM_TYPES + i] = s;
+      shortK[i * NUM_TYPES + j] = ks;
+      shortK[j * NUM_TYPES + i] = ks;
+      longK [i * NUM_TYPES + j] = kl;
+      longK [j * NUM_TYPES + i] = kl;
+      perpK [i * NUM_TYPES + j] = kp;
+      perpK [j * NUM_TYPES + i] = kp;
+    }
+  }
+}
+
+function resetPositions() {
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    pos[i*3+0] = (Math.random() - 0.5) * BOX_SIZE * 0.9;
+    pos[i*3+1] = (Math.random() - 0.5) * BOX_SIZE * 0.9;
+    pos[i*3+2] = (Math.random() - 0.5) * BOX_SIZE * 0.9;
+    vel[i*3+0] = (Math.random() - 0.5) * 4;
+    vel[i*3+1] = (Math.random() - 0.5) * 4;
+    vel[i*3+2] = (Math.random() - 0.5) * 4;
+    // 100 of each type, evenly distributed
+    ptype[i] = i % NUM_TYPES;
+    const c = typeColors[ptype[i]];
+    instColors[i*3+0] = c.r;
+    instColors[i*3+1] = c.g;
+    instColors[i*3+2] = c.b;
+  }
+  mesh.instanceColor.needsUpdate = true;
+  stepCount = 0;
+}
+
+function buildLegend() {
+  const host = document.getElementById('legend-rows');
+  host.innerHTML = '';
+  for (let i = 0; i < NUM_TYPES; i++) {
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    sw.style.background = '#' + typeColors[i].getHexString();
+    const lab = document.createElement('div');
+    lab.textContent = `Type ${i}`;
+    row.appendChild(sw);
+    row.appendChild(lab);
+    host.appendChild(row);
+  }
+}
+
+// ---------- Physics step ------------------------------------------------------
+function step() {
+  // Reset accumulated forces
+  force.fill(0);
+
+  const longCutoff2  = LONG_CUTOFF  * LONG_CUTOFF;
+  const shortCutoff2 = SHORT_CUTOFF * SHORT_CUTOFF;
+  const sShort = SHORT_BASE * shortScale;
+  const sLong  = LONG_BASE  * longScale;
+  const sPerp  = PERP_BASE  * perpScale;
+
+  // Pairwise force accumulation: O(n^2) with cutoff early-exit
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    const ix = pos[i*3], iy = pos[i*3+1], iz = pos[i*3+2];
+    const ti = ptype[i] * NUM_TYPES;
+
+    for (let j = i + 1; j < NUM_PARTICLES; j++) {
+      const dx = ix - pos[j*3];
+      const dy = iy - pos[j*3+1];
+      const dz = iz - pos[j*3+2];
+      const r2 = dx*dx + dy*dy + dz*dz;
+      if (r2 > longCutoff2) continue;
+
+      const tij = ti + ptype[j];
+
+      let fx = 0, fy = 0, fz = 0;
+
+      // Long-range:  F_on_i = kL * (r_i - r_j)  (Hooke-style; sign sets attract/repel)
+      const kL = longK[tij] * sLong;
+      fx += kL * dx;
+      fy += kL * dy;
+      fz += kL * dz;
+
+      // Compute distance once and share it between the short-range and
+      // perpendicular force blocks (the linear long-range force does not
+      // need it).
+      const r    = Math.sqrt(r2);
+      const rEff = r < MIN_DIST ? MIN_DIST : r;
+      const invR = 1.0 / rEff;
+
+      // Short-range:  F_on_i = kS * (r_i - r_j) / r^2   (magnitude = kS / r)
+      if (r2 < shortCutoff2) {
+        const kS  = shortK[tij] * sShort;
+        const inv2 = invR * invR;
+        fx += kS * dx * inv2;
+        fy += kS * dy * inv2;
+        fz += kS * dz * inv2;
+      }
+
+      // Perpendicular handedness:  F_on_i = (kP / r) * ((v_i - v_j) x r_ij)
+      //                          = kP * ((v_i - v_j) x r_hat_ij)
+      // Magnitude of this term is independent of distance within LONG_CUTOFF,
+      // so handedness contributes uniformly across the box. Sign of kP picks
+      // left- vs right-handed coupling for this type pair.
+      const kP = perpK[tij] * sPerp;
+      if (kP !== 0) {
+        const dvx = vel[i*3]   - vel[j*3];
+        const dvy = vel[i*3+1] - vel[j*3+1];
+        const dvz = vel[i*3+2] - vel[j*3+2];
+        fx += kP * (dvy * dz - dvz * dy) * invR;
+        fy += kP * (dvz * dx - dvx * dz) * invR;
+        fz += kP * (dvx * dy - dvy * dx) * invR;
+      }
+
+      force[i*3]   += fx; force[i*3+1] += fy; force[i*3+2] += fz;
+      force[j*3]   -= fx; force[j*3+1] -= fy; force[j*3+2] -= fz;
+    }
+  }
+
+  // Integrate velocity & position; reflect at box walls
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    let vx = (vel[i*3]   + force[i*3]   * dt) * damping;
+    let vy = (vel[i*3+1] + force[i*3+1] * dt) * damping;
+    let vz = (vel[i*3+2] + force[i*3+2] * dt) * damping;
+
+    // Velocity clamp
+    const v2 = vx*vx + vy*vy + vz*vz;
+    if (v2 > MAX_VEL * MAX_VEL) {
+      const s = MAX_VEL / Math.sqrt(v2);
+      vx *= s; vy *= s; vz *= s;
+    }
+
+    let x = pos[i*3]   + vx * dt;
+    let y = pos[i*3+1] + vy * dt;
+    let z = pos[i*3+2] + vz * dt;
+
+    if (x >  HALF) { x =  HALF; vx = -Math.abs(vx); }
+    if (x < -HALF) { x = -HALF; vx =  Math.abs(vx); }
+    if (y >  HALF) { y =  HALF; vy = -Math.abs(vy); }
+    if (y < -HALF) { y = -HALF; vy =  Math.abs(vy); }
+    if (z >  HALF) { z =  HALF; vz = -Math.abs(vz); }
+    if (z < -HALF) { z = -HALF; vz =  Math.abs(vz); }
+
+    vel[i*3] = vx; vel[i*3+1] = vy; vel[i*3+2] = vz;
+    pos[i*3] = x;  pos[i*3+1] = y;  pos[i*3+2] = z;
+  }
+
+  // While the user is dragging a particle, override the integrator: the
+  // particle is pinned to the cursor target with zero velocity so it follows
+  // the mouse cleanly. Other particles can still scatter off it normally.
+  if (dragIndex >= 0) {
+    pos[dragIndex*3]   = dragTargetPos.x;
+    pos[dragIndex*3+1] = dragTargetPos.y;
+    pos[dragIndex*3+2] = dragTargetPos.z;
+    vel[dragIndex*3]   = 0;
+    vel[dragIndex*3+1] = 0;
+    vel[dragIndex*3+2] = 0;
+  }
+
+  // Collision / scattering pass — handles overlap response per pairwise rule
+  resolveScattering();
+
+  // Re-pin after scattering, in case another particle pushed it away.
+  if (dragIndex >= 0) {
+    pos[dragIndex*3]   = dragTargetPos.x;
+    pos[dragIndex*3+1] = dragTargetPos.y;
+    pos[dragIndex*3+2] = dragTargetPos.z;
+  }
+
+  stepCount++;
+}
+
+function resolveScattering() {
+  const minD2 = COLLISION_DIST * COLLISION_DIST;
+
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    const ti = ptype[i] * NUM_TYPES;
+    for (let j = i + 1; j < NUM_PARTICLES; j++) {
+      const stype = scattering[ti + ptype[j]];
+      if (stype === 0) continue; // pass-through
+
+      const dx = pos[i*3]   - pos[j*3];
+      const dy = pos[i*3+1] - pos[j*3+1];
+      const dz = pos[i*3+2] - pos[j*3+2];
+      const r2 = dx*dx + dy*dy + dz*dz;
+      if (r2 >= minD2 || r2 === 0) continue;
+
+      const r  = Math.sqrt(r2);
+      const nx = dx / r, ny = dy / r, nz = dz / r;
+
+      // Separate the pair so they no longer overlap
+      const overlap = (COLLISION_DIST - r) * 0.5;
+      pos[i*3]   += nx * overlap;
+      pos[i*3+1] += ny * overlap;
+      pos[i*3+2] += nz * overlap;
+      pos[j*3]   -= nx * overlap;
+      pos[j*3+1] -= ny * overlap;
+      pos[j*3+2] -= nz * overlap;
+
+      // Velocity components along the collision normal
+      const v1n = vel[i*3]*nx + vel[i*3+1]*ny + vel[i*3+2]*nz;
+      const v2n = vel[j*3]*nx + vel[j*3+1]*ny + vel[j*3+2]*nz;
+      // Only apply if particles are approaching one another
+      if (v1n - v2n >= 0) continue;
+
+      let new1n, new2n;
+      if (stype === 1) {
+        // Elastic, equal mass → swap normal components
+        new1n = v2n;
+        new2n = v1n;
+      } else {
+        // Inelastic → average normal components (they stick along normal)
+        const avg = (v1n + v2n) * 0.5;
+        new1n = avg;
+        new2n = avg;
+      }
+
+      const d1 = new1n - v1n, d2 = new2n - v2n;
+      vel[i*3]   += d1 * nx;
+      vel[i*3+1] += d1 * ny;
+      vel[i*3+2] += d1 * nz;
+      vel[j*3]   += d2 * nx;
+      vel[j*3+1] += d2 * ny;
+      vel[j*3+2] += d2 * nz;
+    }
+  }
+}
+
+// ---------- Render loop ------------------------------------------------------
+function syncInstances() {
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    tmpPos.set(pos[i*3], pos[i*3+1], pos[i*3+2]);
+    tmpMat.makeTranslation(tmpPos.x, tmpPos.y, tmpPos.z);
+    mesh.setMatrixAt(i, tmpMat);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
+let lastFrame = performance.now();
+let fpsAvg = 60;
+let keAvg  = 0;
+const fpsEl = document.getElementById('fps');
+const keEl  = document.getElementById('ke');
+const tEl   = document.getElementById('t');
+let uiCounter = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const now = performance.now();
+  const dtFrame = (now - lastFrame) / 1000;
+  lastFrame = now;
+  if (dtFrame > 0) fpsAvg = fpsAvg * 0.92 + (1 / dtFrame) * 0.08;
+
+  if (!paused) step();
+  syncInstances();
+
+  if ((uiCounter++ & 7) === 0) {
+    let ke = 0;
+    for (let i = 0; i < NUM_PARTICLES; i++) {
+      const vx = vel[i*3], vy = vel[i*3+1], vz = vel[i*3+2];
+      ke += vx*vx + vy*vy + vz*vz;
+    }
+    keAvg = keAvg * 0.7 + ke * 0.5 * 0.3;
+    fpsEl.textContent = `fps ${fpsAvg.toFixed(0)}`;
+    keEl.textContent  = `KE ${keAvg.toFixed(0)}`;
+    tEl.textContent   = `step ${stepCount}`;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// ---------- UI wiring ---------------------------------------------------------
+document.getElementById('btn-pause').addEventListener('click', e => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Play' : 'Pause';
+});
+document.getElementById('btn-reset-pos').addEventListener('click', () => {
+  resetPositions();
+});
+document.getElementById('btn-reset-rules').addEventListener('click', () => {
+  randomizeRules();
+});
+document.getElementById('btn-recenter').addEventListener('click', () => {
+  camera.position.copy(initialCamPos);
+  controls.target.set(0, 0, 0);
+  controls.update();
+});
+
+function bindSlider(id, vId, set, format = v => v.toFixed(2)) {
+  const slider = document.getElementById(id);
+  const out    = document.getElementById(vId);
+  const apply = () => {
+    const v = parseFloat(slider.value);
+    set(v);
+    out.textContent = format(v);
+  };
+  slider.addEventListener('input', apply);
+  apply();
+}
+bindSlider('s-short', 'v-short', v => shortScale = v);
+bindSlider('s-long',  'v-long',  v => longScale  = v);
+bindSlider('s-perp',  'v-perp',  v => perpScale  = v);
+bindSlider('s-damp',  'v-damp',  v => damping    = v, v => v.toFixed(3));
+bindSlider('s-dt',    'v-dt',    v => dt         = v);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- Particle drag-and-drop -------------------------------------------
+// Left-click on a particle picks it; while held, the particle follows the
+// cursor in the screen-parallel plane through its initial pick depth. Empty
+// space falls through to OrbitControls so camera rotation still works.
+const dragRaycaster = new THREE.Raycaster();
+const dragPointer   = new THREE.Vector2();
+const dragPlane     = new THREE.Plane();
+const dragOffset    = new THREE.Vector3();
+const dragHitPoint  = new THREE.Vector3();
+const dragLastPos   = new THREE.Vector3();
+const dragVelocity  = new THREE.Vector3();
+const camForward    = new THREE.Vector3();
+let dragLastTime    = 0;
+
+function setDragPointer(ev) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  dragPointer.x =  ((ev.clientX - rect.left) / rect.width)  * 2 - 1;
+  dragPointer.y = -((ev.clientY - rect.top)  / rect.height) * 2 + 1;
+}
+
+// Capture-phase listener on window so we run BEFORE OrbitControls' canvas
+// handler. If we pick a particle we stop the event there; otherwise the
+// event bubbles down to OrbitControls and rotation works normally.
+window.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0) return; // left-click only
+  if (ev.target !== renderer.domElement) return;
+  setDragPointer(ev);
+  dragRaycaster.setFromCamera(dragPointer, camera);
+
+  const hits = dragRaycaster.intersectObject(mesh);
+  if (hits.length === 0 || hits[0].instanceId === undefined) return;
+
+  dragIndex = hits[0].instanceId;
+  ev.stopImmediatePropagation();
+
+  // Build a plane through the particle, perpendicular to the camera's
+  // viewing direction. This is "the plane of the screen" at that depth.
+  const px = pos[dragIndex*3], py = pos[dragIndex*3+1], pz = pos[dragIndex*3+2];
+  camera.getWorldDirection(camForward);
+  dragPlane.setFromNormalAndCoplanarPoint(camForward, dragHitPoint.set(px, py, pz));
+
+  // Where the click ray hits that plane — keep the offset so the particle
+  // doesn't snap to the cursor centre on grab.
+  dragRaycaster.ray.intersectPlane(dragPlane, dragHitPoint);
+  dragOffset.set(dragHitPoint.x - px, dragHitPoint.y - py, dragHitPoint.z - pz);
+
+  dragTargetPos.set(px, py, pz);
+  dragLastPos.copy(dragTargetPos);
+  dragVelocity.set(0, 0, 0);
+  dragLastTime = performance.now();
+
+  // Disable orbit controls so dragging the particle doesn't also rotate the
+  // camera. We re-enable on pointerup. OrbitControls bails out of in-flight
+  // pointermove/up handlers when scope.enabled is false.
+  controls.enabled = false;
+
+  try { renderer.domElement.setPointerCapture(ev.pointerId); } catch (_) {}
+  document.body.style.cursor = 'grabbing';
+}, true);
+
+renderer.domElement.addEventListener('pointermove', (ev) => {
+  if (dragIndex < 0) return;
+  setDragPointer(ev);
+  dragRaycaster.setFromCamera(dragPointer, camera);
+  if (!dragRaycaster.ray.intersectPlane(dragPlane, dragHitPoint)) return;
+
+  let nx = dragHitPoint.x - dragOffset.x;
+  let ny = dragHitPoint.y - dragOffset.y;
+  let nz = dragHitPoint.z - dragOffset.z;
+
+  // Keep the dragged particle inside the simulation box.
+  if (nx >  HALF) nx =  HALF; else if (nx < -HALF) nx = -HALF;
+  if (ny >  HALF) ny =  HALF; else if (ny < -HALF) ny = -HALF;
+  if (nz >  HALF) nz =  HALF; else if (nz < -HALF) nz = -HALF;
+
+  // Estimate drag velocity for a "throw" on release.
+  const now = performance.now();
+  const ddt = (now - dragLastTime) / 1000;
+  if (ddt > 0) {
+    dragVelocity.set(
+      (nx - dragLastPos.x) / ddt,
+      (ny - dragLastPos.y) / ddt,
+      (nz - dragLastPos.z) / ddt
+    );
+  }
+  dragLastPos.set(nx, ny, nz);
+  dragLastTime = now;
+
+  dragTargetPos.set(nx, ny, nz);
+  // Apply immediately so dragging works even when paused.
+  pos[dragIndex*3]   = nx;
+  pos[dragIndex*3+1] = ny;
+  pos[dragIndex*3+2] = nz;
+  vel[dragIndex*3]   = 0;
+  vel[dragIndex*3+1] = 0;
+  vel[dragIndex*3+2] = 0;
+});
+
+function endDrag(ev) {
+  if (dragIndex < 0) return;
+
+  // Hand off the most recent drag motion as the particle's release velocity,
+  // clamped to MAX_VEL so a fast flick doesn't blow it through the wall.
+  const sp = dragVelocity.length();
+  if (sp > MAX_VEL) dragVelocity.multiplyScalar(MAX_VEL / sp);
+  vel[dragIndex*3]   = dragVelocity.x;
+  vel[dragIndex*3+1] = dragVelocity.y;
+  vel[dragIndex*3+2] = dragVelocity.z;
+
+  dragIndex = -1;
+  controls.enabled = true;
+  document.body.style.cursor = '';
+  if (ev && ev.pointerId !== undefined) {
+    try { renderer.domElement.releasePointerCapture(ev.pointerId); } catch (_) {}
+  }
+}
+renderer.domElement.addEventListener('pointerup',     endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+// ---------- Boot --------------------------------------------------------------
+buildLegend();
+randomizeRules();
+resetPositions();
+animate();
+</script>
+</body>
+</html>

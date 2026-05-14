@@ -34,14 +34,38 @@
 //  correct dt to be accurate rather than a constant
 
 
-let startingNeurons = 8;
-let numNeighbors = 3; 
+let startingNeurons = 100;
+let numNeighbors = 8; 
 let neuronRadius = 9;
 let firingThreshold = 0.9;  // Neuron fires at this charge
 let axonVelocity = 200.0;     // Axon conduction rate in pixels/sec
 const REFRACTORY_PERIOD_CONSTANT = 0.75 * 200.0;  // Constant for inverse proportionality (refractoryPeriod * axonVelocity)
 let refractoryPeriod = REFRACTORY_PERIOD_CONSTANT / axonVelocity;   // Refractory period in seconds (inversely proportional to axon velocity)
 let bluesScale = [440, 6/5*440, 4/3*440, 45/32*440, 3/2*440, 9/5*440, 2*440];
+const NOTE_FREQUENCIES = {
+  A: 440.00,
+  B: 493.88,
+  C: 523.25,
+  D: 587.33,
+  E: 659.25,
+  F: 698.46,
+  G: 783.99
+};
+const NOTE_NAMES = Object.keys(NOTE_FREQUENCIES);
+const NOTE_SAMPLES = {
+  A: "A4.mp3",
+  B: "B4.mp3",
+  C: "C5.mp3",
+  D: "D5.mp3",
+  E: "E5.mp3",
+  F: "F5.mp3",
+  G: "G5.mp3"
+};
+const PIANO_SAMPLE_BASE_URL = "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/acoustic_grand_piano-mp3/";
+const HARPSICHORD_SAMPLE_BASE_URL = "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/harpsichord-mp3/";
+const TRAINING_TUNE = "EEFGGFEDCCDEEDD EEFGGFEDCCDEDCC";
+const BASE_TRAINING_NOTE_INTERVAL_MS = 420;
+const DEFAULT_PLAYOUT_RATE = 0.5;
 let justUpdatedNeurons = false;
 let learning = true;
 let averageFPS = 0;
@@ -65,9 +89,21 @@ let outputString = []; // Array of {char, source} objects where source is 'key' 
 let neighborSlider;
 let neuronSlider;
 let conductionSpeedSlider;
+let playoutRateSlider;
+let playTuneButton;
+let soundButton;
 
 let audioCtx;
 let soundEnabled = false;
+let keyboardSamples = {
+  piano: {},
+  harpsichord: {}
+};
+let keyboardSamplesLoading = false;
+let keyboardSamplesReady = false;
+let tunePlaying = false;
+let tuneIndex = 0;
+let lastTuneNoteTime = 0;
 
 class Neuron {
   constructor(x, y, radius, charge) {
@@ -83,6 +119,7 @@ class Neuron {
     this.key = ""; 
     this.lastFired = null;
     this.outputAddedForKeyPress = false; // Flag to track if output was already added for a key press
+    this.pendingInstrument = null;
   }
     
   connect(neuron, weight) {
@@ -114,8 +151,9 @@ class Neuron {
   }
   
   // Fire this neuron on next update
-  fire() {
+  fire(instrument = 'piano') {
     this.charge += firingThreshold;
+    this.pendingInstrument = instrument;
   }
   
   maybeFire() {
@@ -131,7 +169,11 @@ class Neuron {
         this.addToOutput(this.key, 'spontaneous');
       }
       this.outputAddedForKeyPress = false; // Reset flag after firing
-      playTone(this.frequency, 0.02);
+      if (this.key) {
+        let instrument = this.pendingInstrument || 'piano';
+        playTone(this.frequency, 0.7, instrument);
+      }
+      this.pendingInstrument = null;
       
       // STDP: Check all incoming connections for recent pre-synaptic spikes (pre-before-post = LTP)
       if (learning) {
@@ -497,6 +539,7 @@ function setup() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
+  loadKeyboardSamples();
   
   let startStopButton = createButton('Stop');
   startStopButton.position(10, 10);
@@ -519,11 +562,14 @@ function setup() {
   exciteButton.position(120, 10);
   exciteButton.mousePressed(() => incrementWeightsBy(0.1));
   
-  let soundButton = createButton('Sound: Off');
+  soundButton = createButton('Sound: Off');
   soundButton.position(180, 10);
   soundButton.mousePressed(() => {
     soundEnabled = !soundEnabled;
     soundButton.html(soundEnabled ? 'Sound: On' : 'Sound: Off');
+    if (soundEnabled && audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
   });
   
   let sleepButton = createButton('Sleep');
@@ -538,13 +584,17 @@ function setup() {
     learning = !learning;
     learningToggleButton.html(learning ? 'Learning: On' : 'Learning: Off');
   });
+
+  playTuneButton = createButton('Play');
+  playTuneButton.position(430, 10);
+  playTuneButton.mousePressed(toggleTunePlayback);
   
   neuronSlider = createSlider(2, 200, startingNeurons, 1);
   neuronSlider.position(10, 80);
   neuronSlider.style('width', '150px');
   
   neighborSlider = createSlider(1, 20, numNeighbors, 1);
-  neighborSlider.position(10, 110);
+  neighborSlider.position(10, 125);
   neighborSlider.style('width', '150px');
   neighborSlider.changed(() => {
     // Preserve existing connection weights when changing neighbor count
@@ -555,8 +605,12 @@ function setup() {
     });
   
   conductionSpeedSlider = createSlider(50, 500, axonVelocity, 10);
-  conductionSpeedSlider.position(10, 140);
+  conductionSpeedSlider.position(10, 170);
   conductionSpeedSlider.style('width', '150px');
+
+  playoutRateSlider = createSlider(0.25, 2, DEFAULT_PLAYOUT_RATE, 0.05);
+  playoutRateSlider.position(10, 215);
+  playoutRateSlider.style('width', '150px');
 
   // Initial creation of neurons
   initializeNeurons(neuronSlider.value());
@@ -570,6 +624,7 @@ function SimulationLoop() {
   axonVelocity = conductionSpeedSlider.value();
   // Update refractoryPeriod inversely proportionally to axonVelocity (faster velocity = shorter refractory period)
   refractoryPeriod = REFRACTORY_PERIOD_CONSTANT / axonVelocity;
+  updateTunePlayback();
 
   // For each neuron in the network, check if the neuron needs to fire
   for (let neuron of neurons) {
@@ -650,9 +705,21 @@ function initializeNeurons(numNeurons) {
   for (let neuron of neurons) {
       updateNeuronConnections(neuron);
   }
+
+  assignNoteNeurons();
   
   // Finally, correct offsets for all 
   fixOffsets();
+}
+
+function assignNoteNeurons() {
+  let shuffledNeurons = shuffle(neurons.slice());
+  let noteCount = min(NOTE_NAMES.length, shuffledNeurons.length);
+  for (let i = 0; i < noteCount; i++) {
+    let note = NOTE_NAMES[i];
+    shuffledNeurons[i].key = note;
+    shuffledNeurons[i].frequency = NOTE_FREQUENCIES[note];
+  }
 }
 
 function fixOffsets() {
@@ -681,6 +748,59 @@ function sleepNetwork() {
   }
   // Clear the output string
   outputString = [];
+}
+
+function toggleTunePlayback() {
+  tunePlaying = !tunePlaying;
+  playTuneButton.html(tunePlaying ? 'Stop Tune' : 'Play');
+
+  if (tunePlaying) {
+    enableSound();
+    tuneIndex = 0;
+    lastTuneNoteTime = 0;
+    advanceTune();
+  }
+}
+
+function enableSound() {
+  soundEnabled = true;
+  if (soundButton) {
+    soundButton.html('Sound: On');
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+}
+
+function advanceTune() {
+  if (!tunePlaying) {
+    return;
+  }
+
+  let note = TRAINING_TUNE[tuneIndex];
+  tuneIndex = (tuneIndex + 1) % TRAINING_TUNE.length;
+  lastTuneNoteTime = millis();
+
+  if (note && note !== " ") {
+    triggerNote(note, 'key', 'harpsichord');
+  }
+}
+
+function updateTunePlayback() {
+  let noteInterval = BASE_TRAINING_NOTE_INTERVAL_MS / playoutRateSlider.value();
+  if (tunePlaying && millis() - lastTuneNoteTime >= noteInterval) {
+    advanceTune();
+  }
+}
+
+function triggerNote(note, source = 'key', instrument = 'harpsichord') {
+  for (let n of neurons) {
+    if (n.key == note) {
+      n.addToOutput(note, source);
+      n.outputAddedForKeyPress = true;
+      n.fire(instrument);
+    }
+  }
 }
 
 function draw() {
@@ -721,12 +841,14 @@ function draw() {
     
 
     textSize(12);
+    textAlign(LEFT, TOP);
     fill(0, 0, 0);
     noStroke();
     numNeighbors = neighborSlider.value();
-    text(`Neurons: ${neurons.length}`, 20, 85);
-    text(`Neighbors: ${numNeighbors}`, 20, 115);
-    text(`Speed: ${axonVelocity}`, 20, 145);
+    text(`Neurons: ${neurons.length}`, 20, 102);
+    text(`Neighbors: ${numNeighbors}`, 20, 147);
+    text(`Speed: ${axonVelocity}`, 20, 192);
+    text(`Playout: ${playoutRateSlider.value().toFixed(2)}x`, 20, 237);
     if (simulationRunning) {
       // Update and display neurons
       for (let neuron of neurons) {
@@ -734,9 +856,33 @@ function draw() {
         neuron.display();
       }
     }
+    // Display the training song, highlighting the note currently being played.
+    textAlign(LEFT, TOP);
+    textSize(18);
+    let tuneX = 10;
+    let activeTuneIndex = (tuneIndex - 1 + TRAINING_TUNE.length) % TRAINING_TUNE.length;
+    for (let i = 0; i < TRAINING_TUNE.length; i++) {
+      let note = TRAINING_TUNE[i];
+      fill(tunePlaying && i === activeTuneIndex ? 255 : 0);
+      text(note === " " ? " " : note, tuneX, 35);
+      tuneX += textWidth(note);
+    }
+
+    // Measure learning rate and firing rate once per second
+    let currentTime = millis();
+    if (currentTime - lastLearningRateMeasureTime >= 1000) {
+      measuredStrengthenRate = weightStrengthenCount;
+      measuredWeakenRate = weightWeakenCount;
+      measuredFiringRate = firingCount;
+      weightStrengthenCount = 0; // Reset counters
+      weightWeakenCount = 0;
+      firingCount = 0;
+      lastLearningRateMeasureTime = currentTime;
+    }
+
     // Display output string with color coding: red for key-pressed, white for spontaneous
     // Display the last 50 characters (or all if less than 50)
-    textAlign(LEFT, TOP);
+    textAlign(LEFT, BOTTOM);
     textSize(20);
     noStroke();
     
@@ -751,21 +897,8 @@ function draw() {
       } else {
         fill(255, 255, 255); // White for spontaneous firing
       }
-      text(item.char, xPos, 50);
+      text(item.char, xPos, windowHeight - 24);
       xPos += textWidth(item.char);
-    }
-  
-    
-    // Measure learning rate and firing rate once per second
-    let currentTime = millis();
-    if (currentTime - lastLearningRateMeasureTime >= 1000) {
-      measuredStrengthenRate = weightStrengthenCount;
-      measuredWeakenRate = weightWeakenCount;
-      measuredFiringRate = firingCount;
-      weightStrengthenCount = 0; // Reset counters
-      weightWeakenCount = 0;
-      firingCount = 0;
-      lastLearningRateMeasureTime = currentTime;
     }
     
     // Display frame rate, learning rate, and firing rate near bottom of canvas
@@ -774,10 +907,8 @@ function draw() {
     textAlign(LEFT, BOTTOM);
     textSize(12);
     averageFPS = 0.9 * averageFPS + 0.1 * frameRate();
-    text(`Fps: ${averageFPS.toFixed(0)}`, 10, windowHeight - 20);
-    text(`Learning Rate: ${measuredStrengthenRate}/${measuredWeakenRate}`, 10, windowHeight - 5);
     let normalizedFiringRate = neurons.length > 0 ? (measuredFiringRate / neurons.length).toFixed(2) : '0.00';
-    text(`Firing Rate: ${normalizedFiringRate}`, 200, windowHeight - 5);
+    text(`Fps: ${averageFPS.toFixed(0)}   Learning Rate: ${measuredStrengthenRate}/${measuredWeakenRate}   Firing Rate: ${normalizedFiringRate}`, 10, windowHeight - 5);
     
 }
   
@@ -820,7 +951,7 @@ function keyTyped() {
       // Add output immediately with 'key' source when key is pressed
       n.addToOutput(key, 'key');
       n.outputAddedForKeyPress = true; // Set flag to prevent duplicate output in maybeFire()
-      n.fire()
+      n.fire('harpsichord')
     }
     if (n.clicked) {
       n.key = key;
@@ -829,24 +960,79 @@ function keyTyped() {
   }
 }
 
-// Function to play tone
-function playTone(frequency, duration) {
-    if (!soundEnabled) return; // Don't play sound if disabled
-    
-    // Create an oscillator node
-    let oscillator = audioCtx.createOscillator();
+async function loadKeyboardSamples() {
+  if (keyboardSamplesLoading || keyboardSamplesReady || !audioCtx) {
+    return;
+  }
 
-    oscillator.type = 'sine'; // This is the default - also square, sawtooth, triangle
-    oscillator.frequency.value = frequency; // frequency in Hz
-    oscillator.connect(audioCtx.destination);
+  keyboardSamplesLoading = true;
+  try {
+    let loadedSamples = {
+      piano: {},
+      harpsichord: {}
+    };
+    let instruments = [
+      {name: 'piano', baseUrl: PIANO_SAMPLE_BASE_URL},
+      {name: 'harpsichord', baseUrl: HARPSICHORD_SAMPLE_BASE_URL}
+    ];
 
-    // Start the oscillator
-    oscillator.start();
+    await Promise.all(instruments.flatMap((instrument) => {
+      return NOTE_NAMES.map(async (note) => {
+        let response = await fetch(instrument.baseUrl + NOTE_SAMPLES[note]);
+        let arrayBuffer = await response.arrayBuffer();
+        loadedSamples[instrument.name][note] = await audioCtx.decodeAudioData(arrayBuffer);
+      });
+    }));
+    keyboardSamples = loadedSamples;
+    keyboardSamplesReady = true;
+  } catch (error) {
+    console.warn("Could not load keyboard samples", error);
+  } finally {
+    keyboardSamplesLoading = false;
+  }
+}
 
-    // Stop the oscillator after specified duration
-    setTimeout(function() {
-        oscillator.stop();
-    }, duration * 1000); // duration in seconds
+function noteForFrequency(frequency) {
+  let bestNote = null;
+  let bestDifference = Infinity;
+
+  for (let note of NOTE_NAMES) {
+    let difference = abs(NOTE_FREQUENCIES[note] - frequency);
+    if (difference < bestDifference) {
+      bestDifference = difference;
+      bestNote = note;
+    }
+  }
+
+  return bestNote;
+}
+
+// Function to play a sampled keyboard note
+function playTone(frequency, duration, instrument = 'piano') {
+  if (!soundEnabled || !audioCtx) return;
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  let note = noteForFrequency(frequency);
+  let samples = keyboardSamples[instrument] || keyboardSamples.piano;
+  let sample = samples[note];
+  if (!sample) {
+    loadKeyboardSamples();
+    return;
+  }
+
+  let source = audioCtx.createBufferSource();
+  let gain = audioCtx.createGain();
+
+  source.buffer = sample;
+  gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+  source.connect(gain);
+  gain.connect(audioCtx.destination);
+  source.start();
+  source.stop(audioCtx.currentTime + duration);
 }
 
 function incrementWeightsBy(incrementAmount){

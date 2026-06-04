@@ -276,7 +276,8 @@ function render(now) {
       glsl({
         frame: frame.edge.linear,
         fix: [fix.x, 1.0 - fix.y],
-        aspectX, CORTEX_K, CORTEX_MAX_ECC, HEX_SCALE,
+        aspectX, CORTEX_K, CORTEX_MAX_ECC, HEX_SCALE, R0,
+        marker: showMarker ? 1.0 : 0.0,
         View: [w - ov - margin, margin, ov, ov],
         Blend: 'd*(1-sa)+s*sa',
         Inc: `
@@ -304,6 +305,13 @@ function render(now) {
         float border = hexDist(hexLocal(c*HEX_SCALE));
         float line = smoothstep(0.5 - 0.05, 0.5, border);
         col = mix(col, vec3(0.1, 1.0, 0.7), line*0.30);
+        // foveal marker ring, mapped to its correct cortical radius
+        if (marker > 0.5) {
+          float rhoM = log(R0/eccScale + 1.0)/CORTEX_K;
+          float rw = 0.018;
+          float ringM = smoothstep(rw, rw*0.5, abs(rho - rhoM));
+          col = mix(col, vec3(1.0, 0.25, 0.25), ringM);
+        }
         // rim outline + soft circular mask
         float aa = 2.0/float(ViewSize.x);
         float mask = smoothstep(1.0, 1.0 - aa, rho);

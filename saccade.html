@@ -60,8 +60,15 @@
   jumps are microsaccades (small offsets from the current point) and half are
   large moves to a random location.
 
-  Keys:
+  A lower-right overlay shows a "cortical" view: a log-polar (hyperbolic) remap
+  of the image centered on the fixation point, with the fovea magnified and the
+  periphery compressed so that equal areas represent equal cortical columns. A
+  hexagonal grid illustrates the retina -> cortex mapping.
+
+  Controls:
+    left-click + drag - force the fovea to the mouse location
     m - toggle the fixation marker (crosshair)
+    o - toggle the cortical-magnification overlay
     Space - pause / resume the saccades
 -->
 <canvas id="c"></canvas>
@@ -83,6 +90,14 @@ const MICRO_PROB = 0.5;       // probability a saccade is a microsaccade
 const MICRO_MIN = 0.02;       // microsaccade min magnitude (fraction of screen)
 const MICRO_MAX = 0.05;       // microsaccade max magnitude
 const SACCADE_SPEED = 45.0;   // eye easing rate toward target (1/sec); higher = snappier
+
+// Cortical-magnification overlay (lower-right): a log-polar "what the cortex
+// sees" view, where the fovea is magnified and the periphery is compressed so
+// that equal areas on the overlay represent equal numbers of cortical columns.
+const OVERLAY_FRAC = 0.34;    // overlay size as a fraction of the shorter screen edge
+const CORTEX_K = 3.2;         // hyperbolic compression strength (higher = stronger fovea magnification)
+const CORTEX_MAX_ECC = 0.8;   // retinal eccentricity (in width units) mapped to the overlay rim
+const HEX_SCALE = 7.0;        // hexagonal "cortical column" density across the overlay
 // -------------------------------------------------------------------------
 
 const canvas = document.getElementById('c');
@@ -124,7 +139,9 @@ let fix = { x: 0.5, y: 0.5 };      // current (eased) fixation point, [0,1]
 let target = { x: 0.5, y: 0.5 };   // saccade target the eye moves toward
 let lastType = 'macro';
 let paused = false;
-let showMarker = false;
+let showMarker = true;
+let showOverlay = true;
+let dragging = false;
 let saccadeTimer = null;
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -136,7 +153,7 @@ function scheduleSaccade() {
 }
 
 function doSaccade() {
-  if (!paused) {
+  if (!paused && !dragging) {
     if (Math.random() < MICRO_PROB) {
       const mag = MICRO_MIN + Math.random() * (MICRO_MAX - MICRO_MIN);
       const ang = Math.random() * Math.PI * 2;
@@ -155,7 +172,26 @@ scheduleSaccade();
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'm' || e.key === 'M') showMarker = !showMarker;
+  if (e.key === 'o' || e.key === 'O') showOverlay = !showOverlay;
   if (e.key === ' ') { paused = !paused; e.preventDefault(); }
+});
+
+// Left-click and drag to force the fovea to the mouse location.
+function setFixFromMouse(e) {
+  target.x = clamp01(e.clientX / window.innerWidth);
+  target.y = clamp01(e.clientY / window.innerHeight);
+}
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true;
+  setFixFromMouse(e);
+  e.preventDefault();
+});
+window.addEventListener('mousemove', (e) => {
+  if (dragging) setFixFromMouse(e);
+});
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) dragging = false;
 });
 
 // ---- Render loop --------------------------------------------------------
@@ -181,8 +217,9 @@ function render(now) {
   const w = canvas.width, h = canvas.height;
   const aspectX = w / h;
 
-  // Ease the eye toward its current saccade target (fast, like a real saccade).
-  const k = 1 - Math.exp(-SACCADE_SPEED * dt);
+  // Ease the eye toward its current target (fast, like a real saccade). While
+  // dragging, snap directly to the mouse so the fovea tracks it precisely.
+  const k = dragging ? 1.0 : (1 - Math.exp(-SACCADE_SPEED * dt));
   fix.x += (target.x - fix.x) * k;
   fix.y += (target.y - fix.y) * k;
 
@@ -226,13 +263,62 @@ function render(now) {
       }
       FOut = vec4(col, 1.0);`
     });
+
+    // Cortical-magnification overlay in the lower-right corner. We remap the
+    // disk via an inverse-log (hyperbolic) function: overlay radius rho maps to
+    // retinal eccentricity ecc = a*(exp(K*rho)-1), so the fovea (center) is
+    // greatly magnified and the periphery is squeezed toward the rim. A uniform
+    // hexagonal grid drawn in overlay space marks equal-area "cortical columns",
+    // illustrating the retina (main screen) -> cortex (overlay) mapping.
+    if (showOverlay) {
+      const ov = Math.round(Math.min(w, h) * OVERLAY_FRAC);
+      const margin = Math.round(Math.min(w, h) * 0.025);
+      glsl({
+        frame: frame.edge.linear,
+        fix: [fix.x, 1.0 - fix.y],
+        aspectX, CORTEX_K, CORTEX_MAX_ECC, HEX_SCALE,
+        View: [w - ov - margin, margin, ov, ov],
+        Blend: 'd*(1-sa)+s*sa',
+        Inc: `
+        const vec2 HS = vec2(1.0, 1.7320508);
+        float hexDist(vec2 p){ p = abs(p); return max(dot(p, HS*0.5), p.x); }
+        vec2 hexLocal(vec2 p){
+          vec4 hC = floor(vec4(p, p - vec2(0.5, 1.0)) / vec4(HS, HS)) + 0.5;
+          vec4 h = vec4(p - hC.xy*HS, p - (hC.zw + 0.5)*HS);
+          return dot(h.xy, h.xy) < dot(h.zw, h.zw) ? h.xy : h.zw;
+        }`,
+        FP: `
+        vec2 c = UV*2.0 - 1.0;
+        float rho = length(c);
+        if (rho > 1.0) { FOut = vec4(0.0); return; }
+        vec2 dir = rho > 1e-4 ? c/rho : vec2(0.0);
+        // hyperbolic (inverse-log) eccentricity mapping
+        float eccScale = CORTEX_MAX_ECC/(exp(CORTEX_K) - 1.0);
+        float ecc = eccScale*(exp(CORTEX_K*rho) - 1.0);
+        vec2 suv = vec2(fix.x + ecc*dir.x, fix.y + ecc*dir.y*aspectX);
+        vec3 col = frame(suv).rgb;
+        // darken parts that fall outside the actual camera frame
+        float inb = step(0.0, suv.x)*step(suv.x, 1.0)*step(0.0, suv.y)*step(suv.y, 1.0);
+        col *= mix(0.18, 1.0, inb);
+        // uniform hexagonal "cortical column" grid in overlay space
+        float border = hexDist(hexLocal(c*HEX_SCALE));
+        float line = smoothstep(0.5 - 0.05, 0.5, border);
+        col = mix(col, vec3(0.1, 1.0, 0.7), line*0.30);
+        // rim outline + soft circular mask
+        float aa = 2.0/float(ViewSize.x);
+        float mask = smoothstep(1.0, 1.0 - aa, rho);
+        float ring = smoothstep(1.0 - 0.04, 1.0 - 0.02, rho) * smoothstep(1.0, 1.0 - 0.02, rho);
+        col = mix(col, vec3(0.9), ring);
+        FOut = vec4(col, mask);`
+      });
+    }
   }
 
   info.textContent =
     'fps: ' + fps.toFixed(0) +
     '\nlast saccade: ' + lastType +
     (paused ? '  (paused)' : '') +
-    '\nm: marker   space: pause';
+    '\nm: marker   o: cortex overlay   space: pause';
 
   requestAnimationFrame(render);
 }

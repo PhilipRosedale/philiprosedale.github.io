@@ -147,6 +147,7 @@ const MICRO_MIN = 0.02;       // microsaccade min magnitude (fraction of screen)
 const MICRO_MAX = 0.05;       // microsaccade max magnitude
 const SACCADE_SPEED = 45.0;   // eye easing rate toward target (1/sec); higher = snappier
 const GAZE_FOLLOW_SPEED = 6.0; // gaze-mode easing rate toward the gaze point (1/sec); lower = smoother glide
+const GAZE_JUMP_FOVEA_MULT = 2.0; // if gaze moves more than this many foveal radii, snap instantly (saccade) instead of gliding
 
 // Cortical-magnification overlay (lower-right): a log-polar "what the cortex
 // sees" view, where the fovea is magnified and the periphery is compressed so
@@ -421,18 +422,29 @@ function render(now) {
   const aspectX = w / h;
 
   // Choose the fixation target. While gaze tracking is live, follow the
-  // (Kalman-smoothed) gaze point directly with a gentle exponential glide so the
-  // fovea slides to where the viewer looks instead of hopping with saccades.
-  // Otherwise ease quickly toward the saccade target (fast, like a real eye).
-  // While dragging, snap directly to the mouse so the fovea tracks it precisely.
+  // (Kalman-smoothed) gaze point. Big gaze shifts snap instantly like a real
+  // saccade; small shifts (within ~GAZE_JUMP_FOVEA_MULT foveal radii) glide
+  // smoothly like fixational drift / smooth pursuit. Otherwise ease quickly
+  // toward the saccade target. While dragging, snap directly to the mouse.
   let rate = SACCADE_SPEED;
+  let snap = dragging;
   if (gazeMode && gazeValid && !dragging) {
     target.x = gazeTarget.x;
     target.y = gazeTarget.y;
-    rate = GAZE_FOLLOW_SPEED;
+    // Distance from current fixation to the gaze point, in screen-WIDTH units
+    // (the y term is divided by the aspect ratio to undo the wider-than-tall
+    // pixel mapping, matching R0 which is a fraction of width).
+    const ddx = target.x - fix.x;
+    const ddy = (target.y - fix.y) / aspectX;
+    const gazeDist = Math.hypot(ddx, ddy);
+    if (gazeDist > GAZE_JUMP_FOVEA_MULT * R0) {
+      snap = true;            // large change -> instant saccade
+    } else {
+      rate = GAZE_FOLLOW_SPEED; // small change -> smooth glide
+    }
     lastType = 'gaze';
   }
-  const k = dragging ? 1.0 : (1 - Math.exp(-rate * dt));
+  const k = snap ? 1.0 : (1 - Math.exp(-rate * dt));
   fix.x += (target.x - fix.x) * k;
   fix.y += (target.y - fix.y) * k;
 

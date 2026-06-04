@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Saccade - Foveated Webcam Vision</title>
+<script src="https://cdn.jsdelivr.net/gh/google/swissgl/swissgl.js"></script>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #000;
+    height: 100%;
+  }
+  #c {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+  #info {
+    position: fixed;
+    top: 8px;
+    left: 10px;
+    color: rgba(255, 255, 255, 0.65);
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    pointer-events: none;
+    text-shadow: 0 0 3px #000;
+    white-space: pre;
+  }
+  #prompt {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    color: #fff;
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    text-align: center;
+    background: #000;
+    cursor: pointer;
+  }
+  #prompt h1 { font-weight: 400; font-size: 22px; margin: 0 0 12px; }
+  #prompt p { opacity: 0.6; font-size: 14px; max-width: 420px; margin: 4px 20px; }
+</style>
+</head>
+<body>
+<!--
+  Saccade - Foveated Webcam Vision
+
+  Processes live webcam video on the GPU (SwissGL / WebGL2) into an image that
+  approximates what the brain might "see" given a single fixation point:
+   - A small radius around the fixation point is shown at full 1:1 resolution.
+   - Pixels farther from the fixation are blurred, with the blur neighborhood
+     growing larger the farther they are (foveation via mipmap LOD selection).
+  The fixation point ("eye") jumps at random 100-500ms intervals. Half of the
+  jumps are microsaccades (small offsets from the current point) and half are
+  large moves to a random location.
+
+  Keys:
+    m - toggle the fixation marker (crosshair)
+    Space - pause / resume the saccades
+-->
+<canvas id="c"></canvas>
+<div id="info"></div>
+<div id="prompt">
+  <h1>Saccade - Foveated Webcam Vision</h1>
+  <p>Click to start your camera. The image will be sharp where the simulated eye is looking and blurred elsewhere.</p>
+  <p id="promptStatus">Waiting for camera permission...</p>
+</div>
+<script>
+// ---- Tunable parameters -------------------------------------------------
+const R0 = 0.05;         // foveal radius (fraction of screen WIDTH) shown at 1:1; 0.05 => 10% of width across
+const FALLOFF = 13.0;    // how quickly blur (mip LOD) grows with distance past R0
+const MAX_LOD = 7.0;     // clamp on blur level
+
+const SACCADE_MIN_MS = 100;   // shortest interval between saccades
+const SACCADE_MAX_MS = 500;   // longest interval between saccades
+const MICRO_PROB = 0.5;       // probability a saccade is a microsaccade
+const MICRO_MIN = 0.02;       // microsaccade min magnitude (fraction of screen)
+const MICRO_MAX = 0.05;       // microsaccade max magnitude
+const SACCADE_SPEED = 45.0;   // eye easing rate toward target (1/sec); higher = snappier
+// -------------------------------------------------------------------------
+
+const canvas = document.getElementById('c');
+const info = document.getElementById('info');
+const prompt = document.getElementById('prompt');
+const promptStatus = document.getElementById('promptStatus');
+const glsl = SwissGL(canvas);
+
+const video = document.createElement('video');
+video.muted = true;
+video.playsInline = true;
+video.setAttribute('playsinline', '');
+
+let cameraStarted = false;
+let cameraError = null;
+
+function startCamera() {
+  if (cameraStarted) return;
+  cameraStarted = true;
+  navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false })
+    .then((stream) => {
+      video.srcObject = stream;
+      return video.play();
+    })
+    .catch((error) => {
+      cameraStarted = false;
+      cameraError = error;
+      promptStatus.textContent = 'Could not access camera: ' + error.message + ' (click to retry)';
+      console.log('Error accessing camera:', error);
+    });
+}
+
+prompt.addEventListener('click', startCamera);
+// Try immediately too, in case permission is already granted.
+startCamera();
+
+// ---- Saccade state ------------------------------------------------------
+let fix = { x: 0.5, y: 0.5 };      // current (eased) fixation point, [0,1]
+let target = { x: 0.5, y: 0.5 };   // saccade target the eye moves toward
+let lastType = 'macro';
+let paused = false;
+let showMarker = false;
+let saccadeTimer = null;
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+function scheduleSaccade() {
+  clearTimeout(saccadeTimer);
+  const interval = SACCADE_MIN_MS + Math.random() * (SACCADE_MAX_MS - SACCADE_MIN_MS);
+  saccadeTimer = setTimeout(doSaccade, interval);
+}
+
+function doSaccade() {
+  if (!paused) {
+    if (Math.random() < MICRO_PROB) {
+      const mag = MICRO_MIN + Math.random() * (MICRO_MAX - MICRO_MIN);
+      const ang = Math.random() * Math.PI * 2;
+      target.x = clamp01(fix.x + Math.cos(ang) * mag);
+      target.y = clamp01(fix.y + Math.sin(ang) * mag);
+      lastType = 'micro';
+    } else {
+      target.x = Math.random();
+      target.y = Math.random();
+      lastType = 'macro';
+    }
+  }
+  scheduleSaccade();
+}
+scheduleSaccade();
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'm' || e.key === 'M') showMarker = !showMarker;
+  if (e.key === ' ') { paused = !paused; e.preventDefault(); }
+});
+
+// ---- Render loop --------------------------------------------------------
+let prevT = performance.now();
+let fps = 0;
+
+function resizeCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(window.innerWidth * dpr);
+  const h = Math.round(window.innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+function render(now) {
+  const dt = Math.min(0.05, (now - prevT) / 1000);
+  prevT = now;
+  fps += ((1 / Math.max(dt, 1e-4)) - fps) * 0.1;
+
+  resizeCanvas();
+  const w = canvas.width, h = canvas.height;
+  const aspectX = w / h;
+
+  // Ease the eye toward its current saccade target (fast, like a real saccade).
+  const k = 1 - Math.exp(-SACCADE_SPEED * dt);
+  fix.x += (target.x - fix.x) * k;
+  fix.y += (target.y - fix.y) * k;
+
+  if (video.videoWidth && video.videoHeight) {
+    if (prompt.style.display !== 'none') prompt.style.display = 'none';
+
+    const videoAspect = video.videoWidth / video.videoHeight;
+
+    // Upload the current camera frame to a GPU texture.
+    const vtex = glsl({}, { data: video, tag: 'video' });
+
+    // Cover-fit the camera frame into a canvas-sized buffer (mirrored
+    // horizontally so it reads like a mirror). This managed render target
+    // is what we generate mipmaps from in the foveation pass.
+    const frame = glsl({
+      vtex: vtex.edge.linear, videoAspect, canvasAspect: aspectX, FP: `
+      vec2 scale = canvasAspect > videoAspect
+        ? vec2(1.0, videoAspect/canvasAspect)
+        : vec2(canvasAspect/videoAspect, 1.0);
+      vec2 uv = (UV - 0.5) * scale + 0.5;
+      uv.x = 1.0 - uv.x;           // mirror horizontally
+      uv.y = 1.0 - uv.y;           // flip vertically (texture origin)
+      FOut = vtex(uv);`
+    }, { size: [w, h], format: 'rgba8', tag: 'frame' });
+
+    // Foveated draw to the canvas. Distance from the fixation point selects a
+    // mipmap LOD: 0 (sharp) inside the fovea, growing with distance so the
+    // effective blur neighborhood expands outward.
+    glsl({
+      frame: frame.edge.miplinear,
+      fix: [fix.x, 1.0 - fix.y],   // flip y: shader UV origin is bottom-left
+      aspectX, R0, FALLOFF, MAX_LOD,
+      marker: showMarker ? 1.0 : 0.0,
+      FP: `
+      float d = length(vec2(UV.x - fix.x, (UV.y - fix.y) / aspectX));
+      float lod = clamp((d - R0) * FALLOFF, 0.0, MAX_LOD);
+      vec3 col = textureLod(frame, UV, lod).rgb;
+      if (marker > 0.5) {
+        float ring = abs(d - R0);
+        col = mix(vec3(1.0, 0.25, 0.25), col, smoothstep(0.0, 0.004, ring));
+      }
+      FOut = vec4(col, 1.0);`
+    });
+  }
+
+  info.textContent =
+    'fps: ' + fps.toFixed(0) +
+    '\nlast saccade: ' + lastType +
+    (paused ? '  (paused)' : '') +
+    '\nm: marker   space: pause';
+
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

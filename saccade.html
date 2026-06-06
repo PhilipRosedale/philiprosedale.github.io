@@ -262,14 +262,51 @@ function setGazeMode(on) {
   gazeMode = on;
   if (!on) {
     if (webgazerStarted && typeof webgazer !== 'undefined') webgazer.pause();
+    clearTimeout(faceWaitTimer);
+    gazeNotice = '';
     gazeValid = false;
     return;
   }
   if (!webgazerStarted) {
-    startWebgazer();
+    startWebgazer().then(() => maybeForceCalibration());
   } else if (typeof webgazer !== 'undefined') {
     webgazer.resume();
+    maybeForceCalibration();
   }
+}
+
+// Returns true once WebGazer's face tracker has locked onto a face this frame.
+function faceAcquired() {
+  if (typeof webgazer === 'undefined' || !webgazer.getTracker) return false;
+  const tracker = webgazer.getTracker();
+  return !!(tracker && tracker.predictionReady);
+}
+
+// If gaze mode is on but the user hasn't calibrated this session, wait for a
+// face to be acquired and then automatically launch calibration. Gaze
+// predictions stay null until trained, so we gate on face acquisition (not on
+// the gaze callback) to know when calibration can begin.
+function maybeForceCalibration() {
+  if (!gazeMode || calibrated || calibrating) return;
+  clearTimeout(faceWaitTimer);
+  gazeNotice = 'gaze: acquiring face - hold still and face the camera...';
+  const t0 = performance.now();
+  const poll = () => {
+    if (!gazeMode || calibrated || calibrating) { gazeNotice = ''; return; }
+    if (faceAcquired()) {
+      gazeNotice = '';
+      startCalibration();
+      return;
+    }
+    if (performance.now() - t0 > 30000) {
+      // Give up waiting after 30s and calibrate anyway so the user isn't stuck.
+      gazeNotice = '';
+      startCalibration();
+      return;
+    }
+    faceWaitTimer = setTimeout(poll, 200);
+  };
+  poll();
 }
 
 // ---- Quick click-to-calibrate -------------------------------------------
@@ -306,7 +343,7 @@ function buildCalibration() {
       if (clicks <= 0) {
         dot.classList.add('done');
         remaining--;
-        if (remaining <= 0) endCalibration();
+        if (remaining <= 0) { calibrated = true; endCalibration(); }
       }
       e.stopPropagation();
     });
@@ -339,7 +376,10 @@ let webgazerVideo = null;        // webgazer's own hidden video feed element
 let gazeTarget = { x: 0.5, y: 0.5 }; // latest gaze point in [0,1] (top-down)
 let gazeValid = false;           // is a recent face/gaze prediction available?
 let calibrating = false;         // is the calibration overlay active?
+let calibrated = false;          // has a full calibration been completed this session?
 let gazeDebug = true;            // show WebGazer's video, face overlay & gaze dot
+let gazeNotice = '';             // transient status line shown in the info overlay
+let faceWaitTimer = null;        // polling timer while waiting for face acquisition
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
@@ -557,6 +597,7 @@ function render(now) {
     '\nlast saccade: ' + lastType +
     (paused ? '  (paused)' : '') +
     '\ngaze mode: ' + gazeStatus +
+    (gazeNotice ? '\n' + gazeNotice : '') +
     '\ng: gaze   c: calibrate   v: gaze debug   m: marker' +
     '\no: cortex overlay   space: pause';
 

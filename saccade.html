@@ -108,7 +108,10 @@
   A lower-right overlay shows a "cortical" view: a log-polar (hyperbolic) remap
   of the image centered on the fixation point, with the fovea magnified and the
   periphery compressed so that equal areas represent equal cortical columns. A
-  hexagonal grid illustrates the retina -> cortex mapping.
+  hexagonal grid illustrates the retina -> cortex mapping. This overlay is a
+  differential (transient) channel: the eye is a change detector, so it shows
+  only what has changed recently. Holding the fixation point steady makes the
+  cortical image fade to neutral gray; each saccade or microsaccade refreshes it.
 
   Gaze mode (g): uses WebGazer.js to estimate where on the screen the viewer is
   actually looking (from the webcam) and anchors the fixation point there, so the
@@ -156,6 +159,14 @@ const OVERLAY_FRAC = 0.34;    // overlay size as a fraction of the shorter scree
 const CORTEX_K = 3.2;         // hyperbolic compression strength (higher = stronger fovea magnification)
 const CORTEX_MAX_ECC = 0.8;   // retinal eccentricity (in width units) mapped to the overlay rim
 const HEX_SCALE = 7.0;        // hexagonal "cortical column" density across the overlay
+// The overlay is a *differential* (transient) channel, mimicking the fact that
+// the eye is fundamentally a change detector: photoreceptors / ganglion cells
+// adapt, so a perfectly stationary retinal image fades from perception. We keep
+// a slowly-adapting running average of the cortical image and display only the
+// difference (current - average) around mid-gray. A steady fixation therefore
+// fades to gray; saccades, microsaccades, and real motion produce signal.
+const CORTEX_ADAPT_MS = 480;  // adaptation time constant (ms): how fast a held image fades to gray
+const CORTEX_DIFF_GAIN = 7.0; // amplification of the current-vs-average difference
 // -------------------------------------------------------------------------
 
 const canvas = document.getElementById('c');
@@ -537,43 +548,83 @@ function render(now) {
     // greatly magnified and the periphery is squeezed toward the rim. A uniform
     // hexagonal grid drawn in overlay space marks equal-area "cortical columns",
     // illustrating the retina (main screen) -> cortex (overlay) mapping.
+    //
+    // The displayed image is a temporal *difference* (transient channel): we
+    // keep a slowly-adapting running average of the cortical image and show only
+    // (current - average) around mid-gray, so a held fixation fades to gray and
+    // every saccade/microsaccade refreshes it.
     if (showOverlay) {
       const ov = Math.round(Math.min(w, h) * OVERLAY_FRAC);
       const margin = Math.round(Math.min(w, h) * 0.025);
-      glsl({
+
+      // Shared GLSL: cortexCol(uv) samples the camera frame through the
+      // log-polar cortical remap (with out-of-frame darkening). Reused by both
+      // the adaptation pass and the differential display pass so they stay in
+      // perfect register.
+      const cortexInc = `
+        vec3 cortexCol(vec2 uv){
+          vec2 c = uv*2.0 - 1.0;
+          float rho = length(c);
+          if (rho > 1.0) return vec3(0.0);
+          vec2 dir = rho > 1e-4 ? c/rho : vec2(0.0);
+          float eccScale = CORTEX_MAX_ECC/(exp(CORTEX_K) - 1.0);
+          float ecc = eccScale*(exp(CORTEX_K*rho) - 1.0);
+          vec2 suv = vec2(fix.x + ecc*dir.x, fix.y + ecc*dir.y*aspectX);
+          vec3 col = frame(suv).rgb;
+          float inb = step(0.0, suv.x)*step(suv.x, 1.0)*step(0.0, suv.y)*step(suv.y, 1.0);
+          return col * mix(0.18, 1.0, inb);
+        }`;
+
+      // Adaptation pass: a persistent buffer that exponentially relaxes toward
+      // the current cortical image (Src = previous frame's average). The leak
+      // rate adaptK is derived from CORTEX_ADAPT_MS so the fade is frame-rate
+      // independent. Float format avoids the rounding stall an 8-bit buffer
+      // would hit for the tiny per-frame increments.
+      const adaptK = 1 - Math.exp(-dt / (CORTEX_ADAPT_MS / 1000));
+      const adapt = glsl({
         frame: frame.edge.linear,
         fix: [fix.x, 1.0 - fix.y],
-        aspectX, CORTEX_K, CORTEX_MAX_ECC, HEX_SCALE, R0,
+        aspectX, CORTEX_K, CORTEX_MAX_ECC, adaptK,
+        Inc: cortexInc,
+        FP: `
+        vec3 now = cortexCol(UV);
+        vec3 prev = Src(UV).rgb;
+        FOut = vec4(mix(prev, now, adaptK), 1.0);`
+      }, { size: [ov, ov], format: 'rgba16f', story: 2, tag: 'cortexAdapt' });
+
+      glsl({
+        frame: frame.edge.linear,
+        adapt: adapt[0].edge.linear,
+        fix: [fix.x, 1.0 - fix.y],
+        aspectX, CORTEX_K, CORTEX_MAX_ECC, HEX_SCALE, R0, DIFF_GAIN: CORTEX_DIFF_GAIN,
         marker: showMarker ? 1.0 : 0.0,
         View: [w - ov - margin, margin, ov, ov],
         Blend: 'd*(1-sa)+s*sa',
-        Inc: `
+        Inc: [cortexInc, `
         const vec2 HS = vec2(1.0, 1.7320508);
         float hexDist(vec2 p){ p = abs(p); return max(dot(p, HS*0.5), p.x); }
         vec2 hexLocal(vec2 p){
           vec4 hC = floor(vec4(p, p - vec2(0.5, 1.0)) / vec4(HS, HS)) + 0.5;
           vec4 h = vec4(p - hC.xy*HS, p - (hC.zw + 0.5)*HS);
           return dot(h.xy, h.xy) < dot(h.zw, h.zw) ? h.xy : h.zw;
-        }`,
+        }`],
         FP: `
         vec2 c = UV*2.0 - 1.0;
         float rho = length(c);
         if (rho > 1.0) { FOut = vec4(0.0); return; }
-        vec2 dir = rho > 1e-4 ? c/rho : vec2(0.0);
-        // hyperbolic (inverse-log) eccentricity mapping
-        float eccScale = CORTEX_MAX_ECC/(exp(CORTEX_K) - 1.0);
-        float ecc = eccScale*(exp(CORTEX_K*rho) - 1.0);
-        vec2 suv = vec2(fix.x + ecc*dir.x, fix.y + ecc*dir.y*aspectX);
-        vec3 col = frame(suv).rgb;
-        // darken parts that fall outside the actual camera frame
-        float inb = step(0.0, suv.x)*step(suv.x, 1.0)*step(0.0, suv.y)*step(suv.y, 1.0);
-        col *= mix(0.18, 1.0, inb);
+        // Differential (transient) signal: current cortical image minus its
+        // slowly-adapting running average, centered on mid-gray. Steady image
+        // -> average catches up -> difference -> 0 -> gray.
+        vec3 now = cortexCol(UV);
+        vec3 base = adapt(UV).rgb;
+        vec3 col = vec3(0.5) + (now - base) * DIFF_GAIN;
         // uniform hexagonal "cortical column" grid in overlay space
         float border = hexDist(hexLocal(c*HEX_SCALE));
         float line = smoothstep(0.5 - 0.05, 0.5, border);
         col = mix(col, vec3(0.1, 1.0, 0.7), line*0.30);
         // foveal marker ring, mapped to its correct cortical radius
         if (marker > 0.5) {
+          float eccScale = CORTEX_MAX_ECC/(exp(CORTEX_K) - 1.0);
           float rhoM = log(R0/eccScale + 1.0)/CORTEX_K;
           float rw = 0.018;
           float ringM = smoothstep(rw, rw*0.5, abs(rho - rhoM));

@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebGPU Bouncing Particles</title>
+<style>
+html, body { height:100%; margin:0; background:#111; color:#ddd; font-family:sans-serif; text-align:center; }
+canvas { display:block; margin:1em auto; width:90vw; height:80vh; border:1px solid rgba(255,255,255,0.1); border-radius:6px; }
+#controls { margin:1em auto; display:flex; justify-content:center; align-items:center; gap:1em; }
+#controls input { background:#222; color:#ddd; border:1px solid rgba(255,255,255,0.2); padding:0.5em; border-radius:4px; font-size:1em; }
+#controls label { font-size:1em; }
+.switch-container { display:flex; align-items:center; gap:0.5em; }
+.switch { position:relative; width:50px; height:24px; }
+.switch input { opacity:0; width:0; height:0; }
+.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background-color:#333; transition:0.3s; border-radius:24px; }
+.slider:before { position:absolute; content:""; height:18px; width:18px; left:3px; bottom:3px; background-color:#fff; transition:0.3s; border-radius:50%; }
+input:checked + .slider { background-color:#4CAF50; }
+input:checked + .slider:before { transform:translateX(26px); }
+#fps-counter { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); font-size:0.9em; color:#aaa; font-family:monospace; }
+</style>
+</head>
+<body>
+<h2>WebGPU Bouncing Particles (Compute + Vertex Copy)</h2>
+<div class="switch-container" style="margin:0.5em auto; justify-content:center;">
+  <label for="brownian-motion">Brownian Motion:</label>
+  <label class="switch">
+    <input type="checkbox" id="brownian-motion">
+    <span class="slider"></span>
+  </label>
+</div>
+<div id="controls">
+  <label for="particle-count">Particles:</label>
+  <input type="number" id="particle-count" value="100000" min="1" step="1000">
+</div>
+<canvas id="gpu-canvas"></canvas>
+<p id="status"></p>
+<div id="fps-counter">FPS: --</div>
+
+<script type="module">
+const canvas = document.getElementById('gpu-canvas');
+const statusEl = document.getElementById('status');
+const particleCountInput = document.getElementById('particle-count');
+const fpsCounter = document.getElementById('fps-counter');
+const brownianMotionSwitch = document.getElementById('brownian-motion');
+
+let device, context, format;
+let computePipeline, renderPipeline, bindGroup, uniformBuffer;
+let storageBuffer, vertexBuffer;
+let bindGroupLayout;
+let particleCount = 100000;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let currentFps = 0;
+let mouseX = -1, mouseY = -1; // -1 means mouse not over canvas
+let brownianMotionEnabled = false;
+
+async function initWebGPU() {
+  const adapter = await navigator.gpu.requestAdapter();
+  if(!adapter) throw new Error("No GPU adapter found");
+  device = await adapter.requestDevice();
+  context = canvas.getContext('webgpu');
+  format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode:"opaque" });
+}
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(innerWidth * 0.9 * dpr);
+  canvas.height = Math.floor(innerHeight * 0.8 * dpr);
+}
+
+function createParticles(n, w, h) {
+  // Each particle: pos (vec2=8) + vel (vec2=8) + color (vec3=12) + padding (4) = 32 bytes = 8 floats
+  const data = new Float32Array(n * 8);
+  for(let i=0;i<n;i++){
+    // Position
+    data[i*8+0] = Math.random()*w;
+    data[i*8+1] = Math.random()*h;
+    // Velocity
+    data[i*8+2] = (Math.random()-0.5)*150;
+    data[i*8+3] = (Math.random()-0.5)*150;
+    // Color (random red, green, or blue)
+    const colorChoice = Math.floor(Math.random() * 3);
+    if (colorChoice === 0) {
+      // Red
+      data[i*8+4] = 1.0;
+      data[i*8+5] = 0.0;
+      data[i*8+6] = 0.0;
+    } else if (colorChoice === 1) {
+      // Green
+      data[i*8+4] = 0.0;
+      data[i*8+5] = 1.0;
+      data[i*8+6] = 0.0;
+    } else {
+      // Blue
+      data[i*8+4] = 0.0;
+      data[i*8+5] = 0.0;
+      data[i*8+6] = 1.0;
+    }
+    // Padding (4 bytes)
+    data[i*8+7] = 0.0;
+  }
+  return data;
+}
+
+function createBuffers() {
+  const particles = createParticles(particleCount, canvas.width, canvas.height);
+
+  // Destroy existing buffers if they exist
+  if (storageBuffer) storageBuffer.destroy();
+  if (vertexBuffer) vertexBuffer.destroy();
+
+  storageBuffer = device.createBuffer({
+    size: particles.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    mappedAtCreation:true
+  });
+  new Float32Array(storageBuffer.getMappedRange()).set(particles);
+  storageBuffer.unmap();
+
+  vertexBuffer = device.createBuffer({
+    size: particles.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+
+  if (!uniformBuffer) {
+    uniformBuffer = device.createBuffer({
+      size:32, // res (vec2=8) + dt (f32=4) + count (f32=4) + mouse (vec2=8) + brownian (f32=4) + time (f32=4) = 32 bytes
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+  }
+
+  // Recreate bind group with new buffers
+  if (bindGroup && bindGroupLayout) {
+    bindGroup = device.createBindGroup({
+      layout:bindGroupLayout,
+      entries:[
+        {binding:0, resource:{buffer:uniformBuffer}},
+        {binding:1, resource:{buffer:storageBuffer}}
+      ]
+    });
+  }
+}
+
+async function createPipelines() {
+  const computeCode = `
+  struct Params { res: vec2<f32>, dt: f32, count: f32, mouse: vec2<f32>, brownian: f32, time: f32 };
+  struct Particle { pos: vec2<f32>, vel: vec2<f32>, color: vec3<f32> };
+  @group(0) @binding(0) var<uniform> params: Params;
+  @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
+
+  fn hash(seed: u32) -> f32 {
+    var n = seed;
+    n = (n << 13) ^ n;
+    n = ((n * (n * n * 15731u + 789221u) + 1376312589u) & 0x7fffffffu);
+    return f32(n) / 2147483648.0;
+  }
+
+  @compute @workgroup_size(64)
+  fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if(i >= u32(params.count)) { return; }
+    var p = particles[i];
+    
+    // Apply mouse repulsion force
+    if(params.mouse.x >= 0.0 && params.mouse.y >= 0.0) {
+      let mousePos = params.mouse;
+      let diff = p.pos - mousePos;
+      let distSq = dot(diff, diff);
+      let minDist = 250.0;
+      if(distSq < minDist * minDist && distSq > 0.0) {
+        let dist = sqrt(distSq);
+        let dir = diff / dist;
+        let force = (minDist - dist) / minDist;
+        p.vel += dir * force * 200.0 * params.dt;
+      }
+    }
+    
+    // Apply Brownian motion (random velocity addition)
+    if(params.brownian > 0.5) {
+      let seed = u32(i) + u32(params.time * 1000.0);
+      let randX = hash(seed) * 2.0 - 1.0;
+      let randY = hash(seed + 1u) * 2.0 - 1.0;
+      p.vel += vec2<f32>(randX, randY) * 50.0 * params.dt;
+    }
+    
+    p.pos += p.vel * params.dt;
+
+    if(p.pos.x<0.0){ p.pos.x=0.0; p.vel.x=-p.vel.x; }
+    if(p.pos.x>params.res.x){ p.pos.x=params.res.x; p.vel.x=-p.vel.x; }
+    if(p.pos.y<0.0){ p.pos.y=0.0; p.vel.y=-p.vel.y; }
+    if(p.pos.y>params.res.y){ p.pos.y=params.res.y; p.vel.y=-p.vel.y; }
+
+    particles[i]=p;
+  }`;
+
+  const renderCode = `
+  struct Params { res: vec2<f32>, dt: f32, count: f32, mouse: vec2<f32>, brownian: f32, time: f32 };
+  @group(0) @binding(0) var<uniform> params: Params;
+  struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) color: vec3<f32> };
+
+  @vertex
+  fn vs(@location(0) inPos: vec2<f32>, @location(1) inVel: vec2<f32>, @location(2) inColor: vec3<f32>) -> VSOut {
+    var out: VSOut;
+    let x = (inPos.x / params.res.x)*2.0-1.0;
+    let y = 1.0-(inPos.y / params.res.y)*2.0;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.color = inColor;
+    return out;
+  }
+
+  @fragment
+  fn fs(in: VSOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.color, 1.0);
+  }`;
+
+  const computeModule = device.createShaderModule({ code: computeCode });
+  const renderModule = device.createShaderModule({ code: renderCode });
+
+  bindGroupLayout = device.createBindGroupLayout({
+    entries:[
+      {binding:0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX, buffer:{type:'uniform'}},
+      {binding:1, visibility: GPUShaderStage.COMPUTE, buffer:{type:'storage'}}
+    ]
+  });
+
+  const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts:[bindGroupLayout] });
+
+  computePipeline = device.createComputePipeline({ layout:pipelineLayout, compute:{ module:computeModule, entryPoint:'main' } });
+
+  renderPipeline = device.createRenderPipeline({
+    layout: pipelineLayout,
+    vertex:{
+      module: renderModule,
+      entryPoint: 'vs',
+      buffers:[{ arrayStride:32, attributes:[
+        {shaderLocation:0, offset:0, format:'float32x2'},   // pos
+        {shaderLocation:1, offset:8, format:'float32x2'},   // vel
+        {shaderLocation:2, offset:16, format:'float32x3'}   // color
+      ]}]
+    },
+    fragment:{ module: renderModule, entryPoint:'fs', targets:[{format}] },
+    primitive:{ topology:'point-list' }
+  });
+
+  bindGroup = device.createBindGroup({
+    layout:bindGroupLayout,
+    entries:[
+      {binding:0, resource:{buffer:uniformBuffer}},
+      {binding:1, resource:{buffer:storageBuffer}}
+    ]
+  });
+}
+
+let lastTime = performance.now();
+let startTime = performance.now();
+
+function frame() {
+  const now = performance.now();
+  const dt = Math.min((now-lastTime)/1000, 0.03);
+  lastTime = now;
+  const elapsedTime = (now - startTime) / 1000.0;
+
+  // Calculate FPS
+  frameCount++;
+  const fpsElapsed = now - lastFpsTime;
+  if (fpsElapsed >= 1000) {
+    currentFps = Math.round((frameCount * 1000) / fpsElapsed);
+    fpsCounter.textContent = `FPS: ${currentFps}`;
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+
+  device.queue.writeBuffer(uniformBuffer,0,new Float32Array([
+    canvas.width, canvas.height,  // res (vec2)
+    dt,                           // dt (f32)
+    particleCount,                // count (f32)
+    mouseX, mouseY,               // mouse (vec2)
+    brownianMotionEnabled ? 1.0 : 0.0,  // brownian (f32)
+    elapsedTime                   // time (f32)
+  ]));
+
+  const encoder = device.createCommandEncoder();
+
+  // --- compute pass ---
+  const computePass = encoder.beginComputePass();
+  computePass.setPipeline(computePipeline);
+  computePass.setBindGroup(0, bindGroup);
+  computePass.dispatchWorkgroups(Math.ceil(particleCount/64));
+  computePass.end();
+
+  // --- copy compute results into vertex buffer ---
+  encoder.copyBufferToBuffer(storageBuffer,0,vertexBuffer,0,particleCount*32);
+
+  // --- render pass ---
+  const view = context.getCurrentTexture().createView();
+  const pass = encoder.beginRenderPass({
+    colorAttachments:[{ view, clearValue:{r:0.05,g:0.06,b:0.08,a:1}, loadOp:'clear', storeOp:'store' }]
+  });
+  pass.setPipeline(renderPipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.setVertexBuffer(0, vertexBuffer);
+  pass.draw(particleCount);
+  pass.end();
+
+  device.queue.submit([encoder.finish()]);
+  requestAnimationFrame(frame);
+}
+
+async function start() {
+  try {
+    statusEl.textContent="Initializing WebGPU…";
+    await initWebGPU();
+    resizeCanvas();
+    createBuffers();
+    await createPipelines();
+    statusEl.textContent="Running ✓";
+    requestAnimationFrame(frame);
+  } catch(e) {
+    statusEl.textContent="Error: "+e.message;
+    console.error(e);
+  }
+}
+
+window.addEventListener('resize', resizeCanvas);
+
+// Track mouse position
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  mouseX = (e.clientX - rect.left) * dpr;
+  mouseY = (e.clientY - rect.top) * dpr;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  mouseX = -1;
+  mouseY = -1;
+});
+
+// Handle Brownian Motion toggle
+brownianMotionSwitch.addEventListener('change', (e) => {
+  brownianMotionEnabled = e.target.checked;
+});
+
+// Handle particle count changes - only update when Enter is pressed
+particleCountInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const newCount = parseInt(particleCountInput.value) || 100000;
+    if (newCount > 0 && newCount !== particleCount && device) {
+      particleCount = Math.max(1, newCount);
+      particleCountInput.value = particleCount;
+      try {
+        createBuffers();
+        statusEl.textContent = `Running ✓ (${particleCount.toLocaleString()} particles)`;
+      } catch(err) {
+        statusEl.textContent = "Error updating particle count: "+err.message;
+        console.error(err);
+      }
+    }
+  }
+});
+
+start();
+</script>
+</body>
+</html>

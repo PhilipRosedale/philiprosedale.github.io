@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hypergraph</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+<style>
+  body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #f5f0e8;
+  }
+  #controls {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font: 13px/1.4 system-ui, sans-serif;
+    color: #333;
+    background: rgba(255,255,255,0.88);
+    padding: 8px 12px;
+    border-radius: 8px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+    user-select: none;
+    max-width: min(680px, calc(100vw - 24px));
+  }
+  #controls button {
+    background: #fff;
+    border: 1px solid #bbb;
+    color: #333;
+    font: 13px/1 system-ui, sans-serif;
+    padding: 5px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  #controls button:hover { background: #f0f0f0; }
+  #legend {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    z-index: 10;
+    font: 12px/1.5 system-ui, sans-serif;
+    color: #333;
+    background: rgba(255,255,255,0.88);
+    padding: 8px 12px;
+    border-radius: 8px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+    user-select: none;
+    max-height: 40vh;
+    overflow-y: auto;
+    max-width: min(420px, calc(100vw - 24px));
+  }
+  #legend .edge-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 2px 0;
+  }
+  #legend .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 2px solid rgba(0,0,0,0.35);
+    flex-shrink: 0;
+  }
+  #hint {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 10;
+    font: 12px/1.4 system-ui, sans-serif;
+    color: #666;
+    background: rgba(255,255,255,0.75);
+    padding: 6px 10px;
+    border-radius: 6px;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div id="controls">
+  <button id="exampleBtn">Example graph</button>
+  <button id="randomBtn">Random graph</button>
+  <label>Nodes <input id="nodeCount" type="number" min="3" max="100" value="5" style="width:48px"></label>
+  <label>Edges <input id="edgeCount" type="number" min="2" max="100" value="4" style="width:48px"></label>
+  <label>Edge min <input id="edgeSizeMin" type="number" min="2" value="2" style="width:48px"></label>
+  <label>Edge max <input id="edgeSizeMax" type="number" min="2" value="4" style="width:48px"></label>
+</div>
+<div id="legend"></div>
+<div id="hint">Drag nodes to rearrange</div>
+<script>
+// Hypergraph visualization: each hyperedge is drawn as a minimal enclosing
+// blob (capsule for 2 nodes, smooth inflated hull for 3+).
+
+const MAX_NODES = 100;
+const MAX_EDGES = 100;
+const LEGEND_CAP = 25;
+
+const EDGE_COLORS = [
+  '#43a047', '#e53935', '#00acc1', '#fb8c00',
+  '#8e24aa', '#3949ab', '#c0ca33', '#6d4c41',
+  '#00897b', '#d81b60'
+];
+
+let nodes = [];
+let edges = [];
+let dragging = null;
+let hoverNode = null;
+let hoverEdge = null;
+let regenTimer = null;
+
+function layoutScale() {
+  const n = max(1, nodes.length);
+  if (n <= 12) return { nodeR: 16, blobPad: 22, textSize: 14, stroke: 3, samples: 12, fillAlpha: 0.18 };
+  if (n <= 30) return { nodeR: 12, blobPad: 16, textSize: 11, stroke: 2, samples: 10, fillAlpha: 0.12 };
+  if (n <= 60) return { nodeR: 8, blobPad: 10, textSize: 8, stroke: 1.5, samples: 8, fillAlpha: 0.08 };
+  return { nodeR: 5, blobPad: 6, textSize: 6, stroke: 1, samples: 6, fillAlpha: 0.05 };
+}
+
+function assignEdgeShape(edge, overrides) {
+  if (overrides) {
+    edge.padScale = overrides.padScale;
+    return edge;
+  }
+  edge.padScale = 0.82 + random() * 0.36;
+  return edge;
+}
+
+function edgeColor(index) {
+  if (index < EDGE_COLORS.length) return EDGE_COLORS[index];
+  const hue = (index * 137.508) % 360;
+  return `hsl(${hue}, 65%, 50%)`;
+}
+
+function parseColor(color) {
+  const hex = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (hex) return [parseInt(hex[1], 16), parseInt(hex[2], 16), parseInt(hex[3], 16)];
+  const hsl = color.match(/^hsl\(([\d.]+),\s*([\d.]+)%,\s*([\d.]+)%\)$/i);
+  if (hsl) {
+    const h = parseFloat(hsl[1]) / 360;
+    const s = parseFloat(hsl[2]) / 100;
+    const l = parseFloat(hsl[3]) / 100;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hue2rgb = (t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    return [
+      round(hue2rgb(h + 1 / 3) * 255),
+      round(hue2rgb(h) * 255),
+      round(hue2rgb(h - 1 / 3) * 255),
+    ];
+  }
+  return [100, 100, 100];
+}
+
+function exampleGraph() {
+  document.getElementById('nodeCount').value = 5;
+  document.getElementById('edgeCount').value = 4;
+  readEdgeSizeBounds(5);
+  nodes = [
+    { id: 1, x: 0.42, y: 0.22 },
+    { id: 2, x: 0.58, y: 0.42 },
+    { id: 3, x: 0.40, y: 0.48 },
+    { id: 4, x: 0.62, y: 0.68 },
+    { id: 5, x: 0.72, y: 0.28 },
+  ];
+  edges = [
+    assignEdgeShape({ id: 'e₁', vertices: [1, 3], color: EDGE_COLORS[0] }, { padScale: 0.92 }),
+    assignEdgeShape({ id: 'e₂', vertices: [1, 2], color: EDGE_COLORS[1] }, { padScale: 1.08 }),
+    assignEdgeShape({ id: 'e₃', vertices: [2, 3, 4], color: EDGE_COLORS[2] }, { padScale: 1.02 }),
+    assignEdgeShape({ id: 'e₄', vertices: [1, 2, 3, 5], color: EDGE_COLORS[3] }, { padScale: 0.88 }),
+  ];
+  layoutNodesToCanvas();
+  updateLegend();
+}
+
+function randomGraph() {
+  const { n, e } = readCounts();
+  const { minSize, maxSize } = readEdgeSizeBounds(n);
+
+  nodes = [];
+  if (n <= 20) {
+    for (let i = 1; i <= n; i++) {
+      nodes.push({ id: i, x: 0.12 + random(0.76), y: 0.12 + random(0.76) });
+    }
+  } else {
+    for (let i = 1; i <= n; i++) {
+      const a = (i / n) * TWO_PI - HALF_PI;
+      const r = 0.36 + random(-0.03, 0.03);
+      nodes.push({ id: i, x: 0.5 + Math.cos(a) * r, y: 0.5 + Math.sin(a) * r * 0.88 });
+    }
+  }
+
+  edges = [];
+  const used = new Set();
+
+  if (n <= 12) {
+    const allSubsets = [];
+    for (let size = minSize; size <= maxSize; size++) {
+      chooseSubsets(n, size, [], 1, allSubsets);
+    }
+    shuffle(allSubsets, true);
+    for (const verts of allSubsets) {
+      if (edges.length >= e) break;
+      addRandomEdge(verts, used);
+    }
+  }
+
+  let attempts = 0;
+  const maxAttempts = max(e * 100, 1000);
+  while (edges.length < e && attempts < maxAttempts) {
+    attempts++;
+    const size = floor(random(minSize, maxSize + 1));
+    const verts = [];
+    const pool = [...Array(n)].map((_, i) => i + 1);
+    shuffle(pool, true);
+    for (let i = 0; i < size; i++) verts.push(pool[i]);
+    verts.sort((a, b) => a - b);
+    addRandomEdge(verts, used);
+  }
+
+  document.getElementById('edgeCount').value = edges.length;
+  layoutNodesToCanvas();
+  updateLegend();
+}
+
+function addRandomEdge(verts, used) {
+  const key = verts.join(',');
+  if (used.has(key)) return false;
+  used.add(key);
+  edges.push(assignEdgeShape({
+    id: edgeLabel(edges.length),
+    vertices: verts,
+    color: edgeColor(edges.length),
+  }));
+  return true;
+}
+
+function layoutNodesToCanvas() {
+  const margin = nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
+  for (const node of nodes) {
+    node.px = margin + node.x * (width - 2 * margin);
+    node.py = margin + node.y * (height - 2 * margin);
+  }
+}
+
+function nodeById(id) {
+  return nodes.find(n => n.id === id);
+}
+
+function chooseSubsets(n, size, current, start, out) {
+  if (current.length === size) {
+    out.push([...current]);
+    return;
+  }
+  for (let i = start; i <= n - (size - current.length) + 1; i++) {
+    current.push(i);
+    chooseSubsets(n, size, current, i + 1, out);
+    current.pop();
+  }
+}
+
+function convexHullXY(points) {
+  if (points.length <= 2) return [...points];
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  return lower.concat(upper);
+}
+
+function sampleCirclePoints(node, radius, segments) {
+  const pts = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * TWO_PI;
+    pts.push({ x: node.px + Math.cos(a) * radius, y: node.py + Math.sin(a) * radius });
+  }
+  return pts;
+}
+
+function blobOutlineForEdge(edge) {
+  const members = edge.vertices.map(id => nodeById(id)).filter(Boolean);
+  if (members.length === 0) return null;
+  if (edge.padScale === undefined) assignEdgeShape(edge);
+
+  const { nodeR, blobPad, samples } = layoutScale();
+  const pad = (nodeR + blobPad * 0.65) * edge.padScale;
+
+  if (members.length === 1) {
+    return { type: 'circle', x: members[0].px, y: members[0].py, r: pad };
+  }
+  if (members.length === 2) {
+    return { type: 'capsule', a: members[0], b: members[1], r: pad };
+  }
+
+  let hullSamples = [];
+  for (const node of members) {
+    hullSamples = hullSamples.concat(sampleCirclePoints(node, pad, samples));
+  }
+  return { type: 'polygon', points: convexHullXY(hullSamples) };
+}
+
+function drawCapsule(a, b, r) {
+  const dx = b.px - a.px;
+  const dy = b.py - a.py;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) {
+    ellipse(a.px, a.py, r * 2, r * 2);
+    return;
+  }
+  const ang = Math.atan2(dy, dx);
+  push();
+  translate((a.px + b.px) / 2, (a.py + b.py) / 2);
+  rotate(ang);
+  rectMode(CENTER);
+  rect(0, 0, len + r * 2, r * 2, r);
+  pop();
+}
+
+function edgeLabel(index) {
+  const n = index + 1;
+  if (n <= 9) return 'e' + String.fromCharCode(0x2080 + n);
+  return 'e' + n;
+}
+
+function drawPolygon(points) {
+  if (points.length < 3) return;
+  beginShape();
+  for (const p of points) vertex(p.x, p.y);
+  endShape(CLOSE);
+}
+
+function drawOutlineShape(outline) {
+  if (outline.type === 'circle') {
+    ellipse(outline.x, outline.y, outline.r * 2, outline.r * 2);
+  } else if (outline.type === 'capsule') {
+    drawCapsule(outline.a, outline.b, outline.r);
+  } else if (outline.type === 'polygon') {
+    drawPolygon(outline.points);
+  }
+}
+
+function drawHyperedgeBlob(outline, color, alpha, strokeAlpha, highlighted) {
+  const { stroke: baseStroke } = layoutScale();
+  const fillA = highlighted ? alpha + 0.12 : alpha;
+  const strokeA = highlighted ? 1 : strokeAlpha;
+  const sw = highlighted ? baseStroke + 1 : baseStroke;
+  const rgb = parseColor(color);
+
+  noStroke();
+  fill(rgb[0], rgb[1], rgb[2], fillA * 255);
+  drawOutlineShape(outline);
+
+  noFill();
+  stroke(rgb[0], rgb[1], rgb[2], strokeA * 255);
+  strokeWeight(sw);
+  strokeJoin(ROUND);
+  drawOutlineShape(outline);
+}
+
+function formatVertexList(verts) {
+  if (verts.length <= 12) return verts.join(', ');
+  return verts.slice(0, 10).join(', ') + ', … +' + (verts.length - 10);
+}
+
+function updateLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = `<strong>Hyperedges</strong> (${edges.length})`;
+  const shown = edges.slice(0, LEGEND_CAP);
+  for (const edge of shown) {
+    const row = document.createElement('div');
+    row.className = 'edge-row';
+    row.innerHTML =
+      `<span class="swatch" style="background:${edge.color}"></span>` +
+      `<span>${edge.id}: { ${formatVertexList(edge.vertices)} }</span>`;
+    el.appendChild(row);
+  }
+  if (edges.length > LEGEND_CAP) {
+    const more = document.createElement('div');
+    more.style.marginTop = '4px';
+    more.style.color = '#666';
+    more.textContent = `… and ${edges.length - LEGEND_CAP} more (hover nodes for membership)`;
+    el.appendChild(more);
+  }
+}
+
+function pickNode(mx, my) {
+  const { nodeR } = layoutScale();
+  const hit = nodeR + 4;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    if (Math.hypot(mx - n.px, my - n.py) <= hit) return n;
+  }
+  return null;
+}
+
+function readCounts() {
+  const n = constrain(parseInt(document.getElementById('nodeCount').value) || 5, 3, MAX_NODES);
+  const e = constrain(parseInt(document.getElementById('edgeCount').value) || 4, 2, MAX_EDGES);
+  document.getElementById('nodeCount').value = n;
+  document.getElementById('edgeCount').value = e;
+  readEdgeSizeBounds(n);
+  return { n, e };
+}
+
+function readEdgeSizeBounds(n) {
+  const minAllowed = 2;
+  const maxAllowed = n - 1;
+
+  let minSize = parseInt(document.getElementById('edgeSizeMin').value) || minAllowed;
+  let maxSize = parseInt(document.getElementById('edgeSizeMax').value) || maxAllowed;
+
+  minSize = constrain(minSize, minAllowed, maxAllowed);
+  maxSize = constrain(maxSize, minAllowed, maxAllowed);
+  if (minSize > maxSize) minSize = maxSize;
+
+  document.getElementById('edgeSizeMin').value = minSize;
+  document.getElementById('edgeSizeMax').value = maxSize;
+  document.getElementById('edgeSizeMin').min = minAllowed;
+  document.getElementById('edgeSizeMin').max = maxAllowed;
+  document.getElementById('edgeSizeMax').min = minAllowed;
+  document.getElementById('edgeSizeMax').max = maxAllowed;
+
+  return { minSize, maxSize };
+}
+
+function scheduleRandomGraph() {
+  clearTimeout(regenTimer);
+  regenTimer = setTimeout(randomGraph, 350);
+}
+
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  document.getElementById('exampleBtn').addEventListener('click', exampleGraph);
+  document.getElementById('randomBtn').addEventListener('click', randomGraph);
+  for (const id of ['nodeCount', 'edgeCount', 'edgeSizeMin', 'edgeSizeMax']) {
+    document.getElementById(id).addEventListener('change', randomGraph);
+    document.getElementById(id).addEventListener('input', scheduleRandomGraph);
+  }
+  exampleGraph();
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  layoutNodesToCanvas();
+}
+
+function draw() {
+  background(245, 240, 232);
+  const { nodeR, textSize: labelSize, fillAlpha } = layoutScale();
+
+  hoverNode = pickNode(mouseX, mouseY);
+  hoverEdge = null;
+
+  const sortedEdges = [...edges].sort((a, b) => b.vertices.length - a.vertices.length);
+
+  for (const edge of sortedEdges) {
+    const outline = blobOutlineForEdge(edge);
+    if (!outline) continue;
+
+    const highlighted = hoverNode && edge.vertices.includes(hoverNode.id);
+    if (highlighted) hoverEdge = edge;
+
+    const isHoverOnly = !highlighted && hoverNode === null && distToBlob(mouseX, mouseY, outline) < 8;
+    drawHyperedgeBlob(outline, edge.color, fillAlpha, 0.85, highlighted || isHoverOnly);
+  }
+
+  for (const node of nodes) {
+    const highlighted = hoverNode === node || (hoverEdge && hoverEdge.vertices.includes(node.id));
+
+    stroke(highlighted ? 40 : 80);
+    strokeWeight(highlighted ? 2 : 1);
+    fill(255);
+    ellipse(node.px, node.py, nodeR * 2, nodeR * 2);
+
+    if (labelSize >= 7) {
+      noStroke();
+      fill(30);
+      textAlign(CENTER, CENTER);
+      textSize(labelSize);
+      textStyle(BOLD);
+      text(node.id, node.px, node.py + 0.5);
+    }
+  }
+
+  if (hoverNode) {
+    const memberEdges = edges.filter(e => e.vertices.includes(hoverNode.id));
+    let labels = memberEdges.map(e => e.id).join(', ');
+    if (memberEdges.length > 8) {
+      labels = memberEdges.slice(0, 7).map(e => e.id).join(', ') + `, +${memberEdges.length - 7} more`;
+    }
+    fill(50, 180);
+    noStroke();
+    rectMode(CORNER);
+    const tw = textWidth('in ' + labels) + 16;
+    rect(mouseX + 12, mouseY - 8, tw, 22, 4);
+    fill(255);
+    textAlign(LEFT, CENTER);
+    textSize(12);
+    textStyle(NORMAL);
+    text('in ' + labels, mouseX + 20, mouseY + 3);
+  }
+}
+
+function distToBlob(mx, my, outline) {
+  if (outline.type === 'circle') {
+    return Math.abs(Math.hypot(mx - outline.x, my - outline.y) - outline.r);
+  }
+  if (outline.type === 'capsule') {
+    return distToSegment(mx, my, outline.a.px, outline.a.py, outline.b.px, outline.b.py) - outline.r;
+  }
+  let minD = Infinity;
+  const pts = outline.points;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    minD = Math.min(minD, distToSegment(mx, my, pts[i].x, pts[i].y, pts[j].x, pts[j].y));
+  }
+  return minD;
+}
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = constrain(t, 0, 1);
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function mousePressed() {
+  dragging = pickNode(mouseX, mouseY);
+}
+
+function mouseDragged() {
+  if (dragging) {
+    dragging.px = mouseX;
+    dragging.py = mouseY;
+    const margin = nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
+    dragging.x = (dragging.px - margin) / (width - 2 * margin);
+    dragging.y = (dragging.py - margin) / (height - 2 * margin);
+  }
+}
+
+function mouseReleased() {
+  dragging = null;
+}
+</script>
+</body>
+</html>

@@ -91,9 +91,10 @@
   <label>Edges <input id="edgeCount" type="number" min="2" max="100" value="4" style="width:48px"></label>
   <label>Edge min <input id="edgeSizeMin" type="number" min="2" value="2" style="width:48px"></label>
   <label>Edge max <input id="edgeSizeMax" type="number" min="2" value="4" style="width:48px"></label>
+  <button id="simToggleBtn">Pause</button>
 </div>
 <div id="legend"></div>
-<div id="hint">Drag nodes to rearrange</div>
+<div id="hint">Drag nodes to rearrange · simulation pulls co-edge nodes together</div>
 <script>
 // Hypergraph visualization: each hyperedge is drawn as a minimal enclosing
 // blob (capsule for 2 nodes, smooth inflated hull for 3+).
@@ -110,10 +111,124 @@ const EDGE_COLORS = [
 
 let nodes = [];
 let edges = [];
+let coedgeNeighbors = new Map();
 let dragging = null;
 let hoverNode = null;
 let hoverEdge = null;
 let regenTimer = null;
+let simRunning = true;
+const SIM_DAMPING = 0.88;
+const SIM_VEL_SNAP = 0.02;
+const SIM_ATTRACT = 0.10;
+const SIM_REPEL = 0.14;
+const SIM_MAX_VEL = 0.45;
+
+function initNodeVelocities() {
+  for (const node of nodes) {
+    node.vx = 0;
+    node.vy = 0;
+  }
+}
+
+function canvasMargin() {
+  return nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
+}
+
+function syncNodeNorm(node) {
+  const margin = canvasMargin();
+  const span = max(width - 2 * margin, 1);
+  node.x = constrain((node.px - margin) / span, 0, 1);
+  node.y = constrain((node.py - margin) / span, 0, 1);
+}
+
+function rebuildNeighborMap() {
+  coedgeNeighbors = new Map();
+  for (const node of nodes) coedgeNeighbors.set(node.id, new Set());
+  for (const edge of edges) {
+    for (let i = 0; i < edge.vertices.length; i++) {
+      for (let j = i + 1; j < edge.vertices.length; j++) {
+        const a = edge.vertices[i];
+        const b = edge.vertices[j];
+        coedgeNeighbors.get(a).add(b);
+        coedgeNeighbors.get(b).add(a);
+      }
+    }
+  }
+}
+
+function simulationStep() {
+  if (!simRunning || nodes.length === 0) return;
+
+  const { nodeR } = layoutScale();
+  const minDist = (nodeR * 2 + 4) * 2;
+  const margin = canvasMargin();
+  const maxVel = max(SIM_MAX_VEL, nodeR * 0.05);
+  const updates = [];
+
+  for (const node of nodes) {
+    if (node === dragging) {
+      node.vx = 0;
+      node.vy = 0;
+      continue;
+    }
+
+    if (node.vx === undefined) node.vx = 0;
+    if (node.vy === undefined) node.vy = 0;
+
+    let fx = 0;
+    let fy = 0;
+
+    const neighbors = coedgeNeighbors.get(node.id);
+    if (neighbors) {
+      for (const nid of neighbors) {
+        const other = nodeById(nid);
+        const dx = other.px - node.px;
+        const dy = other.py - node.py;
+        const d = max(Math.hypot(dx, dy), 0.001);
+        if (d > minDist) {
+          const pull = ((d - minDist) / d) * SIM_ATTRACT;
+          fx += (dx / d) * pull;
+          fy += (dy / d) * pull;
+        }
+      }
+    }
+
+    for (const other of nodes) {
+      if (other.id === node.id) continue;
+      const dx = node.px - other.px;
+      const dy = node.py - other.py;
+      const d = Math.hypot(dx, dy);
+      if (d < minDist && d > 0.001) {
+        const push = ((minDist - d) / minDist) * SIM_REPEL;
+        fx += (dx / d) * push;
+        fy += (dy / d) * push;
+      }
+    }
+
+    updates.push({ node, fx, fy });
+  }
+
+  for (const { node, fx, fy } of updates) {
+    node.vx += fx;
+    node.vy += fy;
+    node.vx *= SIM_DAMPING;
+    node.vy *= SIM_DAMPING;
+
+    const speed = Math.hypot(node.vx, node.vy);
+    if (speed > maxVel) {
+      node.vx = (node.vx / speed) * maxVel;
+      node.vy = (node.vy / speed) * maxVel;
+    }
+    if (speed < SIM_VEL_SNAP) {
+      node.vx = 0;
+      node.vy = 0;
+    }
+
+    node.px = constrain(node.px + node.vx, margin, width - margin);
+    node.py = constrain(node.py + node.vy, margin, height - margin);
+    syncNodeNorm(node);
+  }
+}
 
 function layoutScale() {
   const n = max(1, nodes.length);
@@ -183,6 +298,8 @@ function exampleGraph() {
     assignEdgeShape({ id: 'e₄', vertices: [1, 2, 3, 5], color: EDGE_COLORS[3] }, { padScale: 0.88 }),
   ];
   layoutNodesToCanvas();
+  initNodeVelocities();
+  rebuildNeighborMap();
   updateLegend();
 }
 
@@ -233,6 +350,8 @@ function randomGraph() {
 
   document.getElementById('edgeCount').value = edges.length;
   layoutNodesToCanvas();
+  initNodeVelocities();
+  rebuildNeighborMap();
   updateLegend();
 }
 
@@ -249,7 +368,7 @@ function addRandomEdge(verts, used) {
 }
 
 function layoutNodesToCanvas() {
-  const margin = nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
+  const margin = canvasMargin();
   for (const node of nodes) {
     node.px = margin + node.x * (width - 2 * margin);
     node.py = margin + node.y * (height - 2 * margin);
@@ -457,6 +576,10 @@ function setup() {
   createCanvas(windowWidth, windowHeight);
   document.getElementById('exampleBtn').addEventListener('click', exampleGraph);
   document.getElementById('randomBtn').addEventListener('click', randomGraph);
+  document.getElementById('simToggleBtn').addEventListener('click', () => {
+    simRunning = !simRunning;
+    document.getElementById('simToggleBtn').textContent = simRunning ? 'Pause' : 'Run';
+  });
   for (const id of ['nodeCount', 'edgeCount', 'edgeSizeMin', 'edgeSizeMax']) {
     document.getElementById(id).addEventListener('change', randomGraph);
     document.getElementById(id).addEventListener('input', scheduleRandomGraph);
@@ -470,6 +593,7 @@ function windowResized() {
 }
 
 function draw() {
+  simulationStep();
   background(245, 240, 232);
   const { nodeR, textSize: labelSize, fillAlpha } = layoutScale();
 
@@ -560,13 +684,15 @@ function mouseDragged() {
   if (dragging) {
     dragging.px = mouseX;
     dragging.py = mouseY;
-    const margin = nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
-    dragging.x = (dragging.px - margin) / (width - 2 * margin);
-    dragging.y = (dragging.py - margin) / (height - 2 * margin);
+    syncNodeNorm(dragging);
   }
 }
 
 function mouseReleased() {
+  if (dragging) {
+    dragging.vx = 0;
+    dragging.vy = 0;
+  }
   dragging = null;
 }
 </script>

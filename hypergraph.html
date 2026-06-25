@@ -94,7 +94,7 @@
   <button id="simToggleBtn">Pause</button>
 </div>
 <div id="legend"></div>
-<div id="hint">Drag nodes to rearrange · simulation pulls co-edge nodes together</div>
+<div id="hint">Drag nodes to rearrange · nodes slowly drift between edges</div>
 <script>
 // Hypergraph visualization: each hyperedge is drawn as a minimal enclosing
 // blob (capsule for 2 nodes, smooth inflated hull for 3+).
@@ -122,6 +122,8 @@ const SIM_VEL_SNAP = 0.02;
 const SIM_ATTRACT = 0.10;
 const SIM_REPEL = 0.14;
 const SIM_MAX_VEL = 0.45;
+const EDGE_MIGRATE_PROB = 0.004;
+const EDGE_JOIN_AFTER_LEAVE_PROB = 0.65;
 
 function initNodeVelocities() {
   for (const node of nodes) {
@@ -156,8 +158,76 @@ function rebuildNeighborMap() {
   }
 }
 
+function nudgeNode(node) {
+  if (node.vx !== undefined) {
+    node.vx += random(-0.08, 0.08);
+    node.vy += random(-0.08, 0.08);
+  }
+}
+
+function assignRandomVerticesToEdge(edge) {
+  const n = nodes.length;
+  if (n === 0) return;
+
+  const { minSize, maxSize } = readEdgeSizeBounds(n);
+  const size = floor(random(minSize, maxSize + 1));
+  const pool = nodes.map(node => node.id);
+  shuffle(pool, true);
+  edge.vertices = pool.slice(0, min(size, pool.length)).sort((a, b) => a - b);
+}
+
+function repopulateEmptyEdges() {
+  for (const edge of edges) {
+    if (edge.vertices.length === 0) assignRandomVerticesToEdge(edge);
+  }
+}
+
+function tryEdgeMigrations() {
+  if (!simRunning || edges.length === 0) return false;
+
+  let changed = false;
+
+  for (const node of nodes) {
+    if (node === dragging) continue;
+    if (random() >= EDGE_MIGRATE_PROB) continue;
+
+    const memberEdges = edges.filter(e => e.vertices.includes(node.id));
+
+    if (memberEdges.length === 0) {
+      const toEdge = edges[floor(random(edges.length))];
+      toEdge.vertices.push(node.id);
+      toEdge.vertices.sort((a, b) => a - b);
+      changed = true;
+      nudgeNode(node);
+      continue;
+    }
+
+    const fromEdge = memberEdges[floor(random(memberEdges.length))];
+    fromEdge.vertices.splice(fromEdge.vertices.indexOf(node.id), 1);
+    changed = true;
+
+    const joinCandidates = edges.filter(e => !e.vertices.includes(node.id));
+    if (joinCandidates.length > 0 && random() < EDGE_JOIN_AFTER_LEAVE_PROB) {
+      const toEdge = joinCandidates[floor(random(joinCandidates.length))];
+      toEdge.vertices.push(node.id);
+      toEdge.vertices.sort((a, b) => a - b);
+    }
+
+    nudgeNode(node);
+  }
+
+  if (changed) {
+    repopulateEmptyEdges();
+    rebuildNeighborMap();
+    updateLegend();
+  }
+  return changed;
+}
+
 function simulationStep() {
   if (!simRunning || nodes.length === 0) return;
+
+  tryEdgeMigrations();
 
   const { nodeR } = layoutScale();
   const minDist = (nodeR * 2 + 4) * 2;

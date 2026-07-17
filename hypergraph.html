@@ -3,14 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hypergraph</title>
+<title>Project Hypergraph</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
 <style>
+  :root {
+    --ink: #2a2620;
+    --muted: #6a6358;
+    --panel: rgba(255, 252, 246, 0.94);
+    --border: #d4cbb8;
+    --accent: #2f6f5e;
+  }
   body {
     margin: 0;
     padding: 0;
     overflow: hidden;
     background: #f5f0e8;
+    font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    color: var(--ink);
   }
   #controls {
     position: fixed;
@@ -21,46 +30,60 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    font: 13px/1.4 system-ui, sans-serif;
-    color: #333;
-    background: rgba(255,255,255,0.88);
+    font: 13px/1.4 inherit;
+    background: var(--panel);
     padding: 8px 12px;
     border-radius: 8px;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 6px rgba(0,0,0,0.1);
     user-select: none;
-    max-width: min(680px, calc(100vw - 24px));
+    max-width: min(720px, calc(100vw - 24px));
   }
-  #controls button {
+  #controls strong {
+    font-size: 14px;
+    margin-right: 4px;
+  }
+  #controls button,
+  #inspector button,
+  #legend button {
     background: #fff;
     border: 1px solid #bbb;
-    color: #333;
-    font: 13px/1 system-ui, sans-serif;
+    color: var(--ink);
+    font: 13px/1 inherit;
     padding: 5px 10px;
     border-radius: 5px;
     cursor: pointer;
   }
-  #controls button:hover { background: #f0f0f0; }
+  #controls button:hover,
+  #inspector button:hover,
+  #legend button:hover {
+    background: #f0ebe3;
+  }
   #legend {
     position: fixed;
     bottom: 12px;
     left: 12px;
     z-index: 10;
-    font: 12px/1.5 system-ui, sans-serif;
-    color: #333;
-    background: rgba(255,255,255,0.88);
-    padding: 8px 12px;
+    font: 12px/1.5 inherit;
+    background: var(--panel);
+    padding: 10px 12px;
     border-radius: 8px;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 6px rgba(0,0,0,0.1);
     user-select: none;
-    max-height: 40vh;
+    max-height: 42vh;
     overflow-y: auto;
-    max-width: min(420px, calc(100vw - 24px));
+    max-width: min(360px, calc(100vw - 24px));
+  }
+  #legend h2 {
+    margin: 0 0 6px;
+    font-size: 13px;
   }
   #legend .edge-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 2px 0;
+    margin: 4px 0;
   }
   #legend .swatch {
     width: 14px;
@@ -69,39 +92,138 @@
     border: 2px solid rgba(0,0,0,0.35);
     flex-shrink: 0;
   }
+  #legend .tag-name {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid transparent;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+  #legend .tag-name:hover,
+  #legend .tag-name:focus {
+    border-color: var(--border);
+    background: #fff;
+    outline: none;
+  }
+  #legend .tag-count {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
   #hint {
     position: fixed;
     top: 12px;
     right: 12px;
     z-index: 10;
-    font: 12px/1.4 system-ui, sans-serif;
-    color: #666;
-    background: rgba(255,255,255,0.75);
+    font: 12px/1.4 inherit;
+    color: var(--muted);
+    background: rgba(255,255,255,0.8);
     padding: 6px 10px;
     border-radius: 6px;
     user-select: none;
+    max-width: 220px;
+  }
+  #inspector {
+    position: fixed;
+    top: 64px;
+    right: 12px;
+    z-index: 20;
+    width: min(300px, calc(100vw - 24px));
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.14);
+    padding: 14px;
+    display: none;
+  }
+  #inspector.open { display: block; }
+  #inspector h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+  #inspector label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  #inspector .name-input {
+    width: 100%;
+    box-sizing: border-box;
+    font: 15px/1.3 inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    background: #fff;
+    color: var(--ink);
+  }
+  #inspector .name-input:focus {
+    outline: 2px solid rgba(47, 111, 94, 0.35);
+    border-color: var(--accent);
+  }
+  #inspector .tag-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  #inspector .tag-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+  }
+  #inspector .tag-option input {
+    accent-color: var(--accent);
+  }
+  #inspector .actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #inspector .actions .danger {
+    margin-left: auto;
+    color: #8b2e2e;
+    border-color: #d4a8a8;
+  }
+  #empty-tags {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 8px;
   }
 </style>
 </head>
 <body>
 <div id="controls">
-  <button id="exampleBtn">Example graph</button>
-  <button id="randomBtn">Random graph</button>
-  <label>Nodes <input id="nodeCount" type="number" min="3" max="100" value="5" style="width:48px"></label>
-  <label>Edges <input id="edgeCount" type="number" min="2" max="100" value="4" style="width:48px"></label>
-  <label>Edge min <input id="edgeSizeMin" type="number" min="2" value="2" style="width:48px"></label>
-  <label>Edge max <input id="edgeSizeMax" type="number" min="2" value="4" style="width:48px"></label>
-  <button id="simToggleBtn">Pause</button>
+  <strong>Projects</strong>
+  <button id="addProjectBtn" type="button">Add project</button>
+  <button id="addTagBtn" type="button">Add tag</button>
+  <button id="exampleBtn" type="button">Reset example</button>
+  <button id="simToggleBtn" type="button">Pause</button>
 </div>
+<div id="hint">Click a project to rename it and edit its tags · drag to rearrange · edits are saved in this browser</div>
 <div id="legend"></div>
-<div id="hint">Drag nodes to rearrange · nodes slowly drift between edges</div>
+<div id="inspector" aria-live="polite">
+  <h2>Edit project</h2>
+  <label for="projectName">Name</label>
+  <input id="projectName" class="name-input" type="text" autocomplete="off" spellcheck="true">
+  <label>Tags</label>
+  <div id="emptyTags" class="empty-tags" hidden>No tags yet — add one from the toolbar.</div>
+  <div id="tagList" class="tag-list"></div>
+  <div class="actions">
+    <button id="closeInspectorBtn" type="button">Done</button>
+    <button id="deleteProjectBtn" class="danger" type="button">Delete</button>
+  </div>
+</div>
 <script>
-// Hypergraph visualization: each hyperedge is drawn as a minimal enclosing
-// blob (capsule for 2 nodes, smooth inflated hull for 3+).
-
-const MAX_NODES = 100;
-const MAX_EDGES = 100;
-const LEGEND_CAP = 25;
+// Personal project organizer as a hypergraph: nodes are projects, hyperedges
+// are tags (each tag blob encloses every project that carries that tag).
 
 const EDGE_COLORS = [
   '#43a047', '#e53935', '#00acc1', '#fb8c00',
@@ -113,17 +235,98 @@ let nodes = [];
 let edges = [];
 let coedgeNeighbors = new Map();
 let dragging = null;
+let pressNode = null;
+let pressX = 0;
+let pressY = 0;
+let didDrag = false;
+let selectedNode = null;
 let hoverNode = null;
 let hoverEdge = null;
-let regenTimer = null;
 let simRunning = true;
+let nextNodeId = 1;
+let nextEdgeId = 1;
+
 const SIM_DAMPING = 0.88;
 const SIM_VEL_SNAP = 0.02;
 const SIM_ATTRACT = 0.10;
 const SIM_REPEL = 0.14;
 const SIM_MAX_VEL = 0.45;
-const EDGE_MIGRATE_PROB = 0.004;
-const EDGE_JOIN_AFTER_LEAVE_PROB = 0.65;
+const DRAG_THRESHOLD = 5;
+const STORAGE_KEY = 'project-hypergraph-v1';
+
+function saveGraph() {
+  try {
+    const payload = {
+      nodes: nodes.map(({ id, name, x, y }) => ({ id, name, x, y })),
+      edges: edges.map(({ id, name, vertices, color, padScale }) => ({
+        id,
+        name,
+        vertices: [...vertices],
+        color,
+        padScale,
+      })),
+      nextNodeId,
+      nextEdgeId,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn('Could not save graph', err);
+  }
+}
+
+function loadGraph() {
+  let raw;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (err) {
+    console.warn('Could not read saved graph', err);
+    return false;
+  }
+  if (!raw) return false;
+
+  try {
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.nodes) || !Array.isArray(data.edges) || data.nodes.length === 0) {
+      return false;
+    }
+
+    nodes = data.nodes.map((n, i) => ({
+      id: Number(n.id) || i + 1,
+      name: String(n.name || `Project ${i + 1}`),
+      x: constrain(Number(n.x) || 0.5, 0, 1),
+      y: constrain(Number(n.y) || 0.5, 0, 1),
+      vx: 0,
+      vy: 0,
+    }));
+
+    const nodeIds = new Set(nodes.map(n => n.id));
+    edges = data.edges.map((e, i) => assignEdgeShape({
+      id: Number(e.id) || i + 1,
+      name: String(e.name || `Tag ${i + 1}`),
+      vertices: (Array.isArray(e.vertices) ? e.vertices : [])
+        .map(Number)
+        .filter(id => nodeIds.has(id))
+        .sort((a, b) => a - b),
+      color: typeof e.color === 'string' ? e.color : edgeColor(i),
+      padScale: typeof e.padScale === 'number' ? e.padScale : undefined,
+    }, typeof e.padScale === 'number' ? { padScale: e.padScale } : undefined));
+
+    const maxNodeId = nodes.reduce((m, n) => Math.max(m, n.id), 0);
+    const maxEdgeId = edges.reduce((m, e) => Math.max(m, e.id), 0);
+    nextNodeId = Math.max(Number(data.nextNodeId) || 1, maxNodeId + 1);
+    nextEdgeId = Math.max(Number(data.nextEdgeId) || 1, maxEdgeId + 1);
+
+    layoutNodesToCanvas();
+    initNodeVelocities();
+    rebuildNeighborMap();
+    updateLegend();
+    closeInspector();
+    return true;
+  } catch (err) {
+    console.warn('Could not parse saved graph', err);
+    return false;
+  }
+}
 
 function initNodeVelocities() {
   for (const node of nodes) {
@@ -133,7 +336,7 @@ function initNodeVelocities() {
 }
 
 function canvasMargin() {
-  return nodes.length > 60 ? 40 : nodes.length > 30 ? 55 : 80;
+  return 90;
 }
 
 function syncNodeNorm(node) {
@@ -158,76 +361,8 @@ function rebuildNeighborMap() {
   }
 }
 
-function nudgeNode(node) {
-  if (node.vx !== undefined) {
-    node.vx += random(-0.08, 0.08);
-    node.vy += random(-0.08, 0.08);
-  }
-}
-
-function assignRandomVerticesToEdge(edge) {
-  const n = nodes.length;
-  if (n === 0) return;
-
-  const { minSize, maxSize } = readEdgeSizeBounds(n);
-  const size = floor(random(minSize, maxSize + 1));
-  const pool = nodes.map(node => node.id);
-  shuffle(pool, true);
-  edge.vertices = pool.slice(0, min(size, pool.length)).sort((a, b) => a - b);
-}
-
-function repopulateEmptyEdges() {
-  for (const edge of edges) {
-    if (edge.vertices.length === 0) assignRandomVerticesToEdge(edge);
-  }
-}
-
-function tryEdgeMigrations() {
-  if (!simRunning || edges.length === 0) return false;
-
-  let changed = false;
-
-  for (const node of nodes) {
-    if (node === dragging) continue;
-    if (random() >= EDGE_MIGRATE_PROB) continue;
-
-    const memberEdges = edges.filter(e => e.vertices.includes(node.id));
-
-    if (memberEdges.length === 0) {
-      const toEdge = edges[floor(random(edges.length))];
-      toEdge.vertices.push(node.id);
-      toEdge.vertices.sort((a, b) => a - b);
-      changed = true;
-      nudgeNode(node);
-      continue;
-    }
-
-    const fromEdge = memberEdges[floor(random(memberEdges.length))];
-    fromEdge.vertices.splice(fromEdge.vertices.indexOf(node.id), 1);
-    changed = true;
-
-    const joinCandidates = edges.filter(e => !e.vertices.includes(node.id));
-    if (joinCandidates.length > 0 && random() < EDGE_JOIN_AFTER_LEAVE_PROB) {
-      const toEdge = joinCandidates[floor(random(joinCandidates.length))];
-      toEdge.vertices.push(node.id);
-      toEdge.vertices.sort((a, b) => a - b);
-    }
-
-    nudgeNode(node);
-  }
-
-  if (changed) {
-    repopulateEmptyEdges();
-    rebuildNeighborMap();
-    updateLegend();
-  }
-  return changed;
-}
-
 function simulationStep() {
   if (!simRunning || nodes.length === 0) return;
-
-  tryEdgeMigrations();
 
   const { nodeR } = layoutScale();
   const minDist = (nodeR * 2 + 4) * 2;
@@ -252,6 +387,7 @@ function simulationStep() {
     if (neighbors) {
       for (const nid of neighbors) {
         const other = nodeById(nid);
+        if (!other) continue;
         const dx = other.px - node.px;
         const dy = other.py - node.py;
         const d = max(Math.hypot(dx, dy), 0.001);
@@ -302,10 +438,9 @@ function simulationStep() {
 
 function layoutScale() {
   const n = max(1, nodes.length);
-  if (n <= 12) return { nodeR: 16, blobPad: 22, textSize: 14, stroke: 3, samples: 12, fillAlpha: 0.18 };
-  if (n <= 30) return { nodeR: 12, blobPad: 16, textSize: 11, stroke: 2, samples: 10, fillAlpha: 0.12 };
-  if (n <= 60) return { nodeR: 8, blobPad: 10, textSize: 8, stroke: 1.5, samples: 8, fillAlpha: 0.08 };
-  return { nodeR: 5, blobPad: 6, textSize: 6, stroke: 1, samples: 6, fillAlpha: 0.05 };
+  if (n <= 8) return { nodeR: 56, blobPad: 32, textSize: 13, stroke: 3, samples: 14, fillAlpha: 0.16 };
+  if (n <= 16) return { nodeR: 44, blobPad: 26, textSize: 12, stroke: 2.5, samples: 12, fillAlpha: 0.14 };
+  return { nodeR: 32, blobPad: 20, textSize: 11, stroke: 2, samples: 10, fillAlpha: 0.12 };
 }
 
 function assignEdgeShape(edge, overrides) {
@@ -350,91 +485,79 @@ function parseColor(color) {
   return [100, 100, 100];
 }
 
+function wrapLabel(label, maxChars) {
+  const words = String(label).trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return ['?'];
+  const lines = [];
+  let line = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const next = line + ' ' + words[i];
+    if (next.length <= maxChars) {
+      line = next;
+    } else {
+      lines.push(line);
+      line = words[i];
+    }
+  }
+  lines.push(line);
+  return lines.slice(0, 3);
+}
+
 function exampleGraph() {
-  document.getElementById('nodeCount').value = 5;
-  document.getElementById('edgeCount').value = 4;
-  readEdgeSizeBounds(5);
+  nextNodeId = 6;
+  nextEdgeId = 5;
   nodes = [
-    { id: 1, x: 0.42, y: 0.22 },
-    { id: 2, x: 0.58, y: 0.42 },
-    { id: 3, x: 0.40, y: 0.48 },
-    { id: 4, x: 0.62, y: 0.68 },
-    { id: 5, x: 0.72, y: 0.28 },
+    { id: 1, name: 'Awakening AI project', x: 0.32, y: 0.28 },
+    { id: 2, name: 'Upgrade Burning Man art car', x: 0.68, y: 0.30 },
+    { id: 3, name: 'Rebuild personal website', x: 0.38, y: 0.58 },
+    { id: 4, name: 'Learn Japanese', x: 0.62, y: 0.62 },
+    { id: 5, name: 'Garden greenhouse', x: 0.78, y: 0.52 },
   ];
   edges = [
-    assignEdgeShape({ id: 'e₁', vertices: [1, 3], color: EDGE_COLORS[0] }, { padScale: 0.92 }),
-    assignEdgeShape({ id: 'e₂', vertices: [1, 2], color: EDGE_COLORS[1] }, { padScale: 1.08 }),
-    assignEdgeShape({ id: 'e₃', vertices: [2, 3, 4], color: EDGE_COLORS[2] }, { padScale: 1.02 }),
-    assignEdgeShape({ id: 'e₄', vertices: [1, 2, 3, 5], color: EDGE_COLORS[3] }, { padScale: 0.88 }),
+    assignEdgeShape({ id: 1, name: 'Tech', vertices: [1, 3], color: EDGE_COLORS[0] }, { padScale: 0.95 }),
+    assignEdgeShape({ id: 2, name: 'Creative', vertices: [2, 3], color: EDGE_COLORS[1] }, { padScale: 1.05 }),
+    assignEdgeShape({ id: 3, name: 'Outdoor', vertices: [2, 5], color: EDGE_COLORS[2] }, { padScale: 1.0 }),
+    assignEdgeShape({ id: 4, name: 'Long-term', vertices: [1, 4, 5], color: EDGE_COLORS[3] }, { padScale: 0.9 }),
   ];
   layoutNodesToCanvas();
   initNodeVelocities();
   rebuildNeighborMap();
   updateLegend();
+  closeInspector();
+  saveGraph();
 }
 
-function randomGraph() {
-  const { n, e } = readCounts();
-  const { minSize, maxSize } = readEdgeSizeBounds(n);
-
-  nodes = [];
-  if (n <= 20) {
-    for (let i = 1; i <= n; i++) {
-      nodes.push({ id: i, x: 0.12 + random(0.76), y: 0.12 + random(0.76) });
-    }
-  } else {
-    for (let i = 1; i <= n; i++) {
-      const a = (i / n) * TWO_PI - HALF_PI;
-      const r = 0.36 + random(-0.03, 0.03);
-      nodes.push({ id: i, x: 0.5 + Math.cos(a) * r, y: 0.5 + Math.sin(a) * r * 0.88 });
-    }
-  }
-
-  edges = [];
-  const used = new Set();
-
-  if (n <= 12) {
-    const allSubsets = [];
-    for (let size = minSize; size <= maxSize; size++) {
-      chooseSubsets(n, size, [], 1, allSubsets);
-    }
-    shuffle(allSubsets, true);
-    for (const verts of allSubsets) {
-      if (edges.length >= e) break;
-      addRandomEdge(verts, used);
-    }
-  }
-
-  let attempts = 0;
-  const maxAttempts = max(e * 100, 1000);
-  while (edges.length < e && attempts < maxAttempts) {
-    attempts++;
-    const size = floor(random(minSize, maxSize + 1));
-    const verts = [];
-    const pool = [...Array(n)].map((_, i) => i + 1);
-    shuffle(pool, true);
-    for (let i = 0; i < size; i++) verts.push(pool[i]);
-    verts.sort((a, b) => a - b);
-    addRandomEdge(verts, used);
-  }
-
-  document.getElementById('edgeCount').value = edges.length;
+function addProject() {
+  const id = nextNodeId++;
+  const name = `New project ${id}`;
+  nodes.push({
+    id,
+    name,
+    x: 0.35 + random(0.3),
+    y: 0.35 + random(0.3),
+    vx: 0,
+    vy: 0,
+  });
   layoutNodesToCanvas();
-  initNodeVelocities();
   rebuildNeighborMap();
   updateLegend();
+  saveGraph();
+  openInspector(nodeById(id));
 }
 
-function addRandomEdge(verts, used) {
-  const key = verts.join(',');
-  if (used.has(key)) return false;
-  used.add(key);
+function addTag() {
+  const id = nextEdgeId++;
+  const name = `Tag ${id}`;
   edges.push(assignEdgeShape({
-    id: edgeLabel(edges.length),
-    vertices: verts,
+    id,
+    name,
+    vertices: selectedNode ? [selectedNode.id] : [],
     color: edgeColor(edges.length),
   }));
-  return true;
+  rebuildNeighborMap();
+  updateLegend();
+  saveGraph();
+  if (selectedNode) refreshInspectorTags();
 }
 
 function layoutNodesToCanvas() {
@@ -449,16 +572,8 @@ function nodeById(id) {
   return nodes.find(n => n.id === id);
 }
 
-function chooseSubsets(n, size, current, start, out) {
-  if (current.length === size) {
-    out.push([...current]);
-    return;
-  }
-  for (let i = start; i <= n - (size - current.length) + 1; i++) {
-    current.push(i);
-    chooseSubsets(n, size, current, i + 1, out);
-    current.pop();
-  }
+function edgeById(id) {
+  return edges.find(e => e.id === id);
 }
 
 function convexHullXY(points) {
@@ -530,12 +645,6 @@ function drawCapsule(a, b, r) {
   pop();
 }
 
-function edgeLabel(index) {
-  const n = index + 1;
-  if (n <= 9) return 'e' + String.fromCharCode(0x2080 + n);
-  return 'e' + n;
-}
-
 function drawPolygon(points) {
   if (points.length < 3) return;
   beginShape();
@@ -571,35 +680,68 @@ function drawHyperedgeBlob(outline, color, alpha, strokeAlpha, highlighted) {
   drawOutlineShape(outline);
 }
 
-function formatVertexList(verts) {
-  if (verts.length <= 12) return verts.join(', ');
-  return verts.slice(0, 10).join(', ') + ', … +' + (verts.length - 10);
-}
-
 function updateLegend() {
   const el = document.getElementById('legend');
-  el.innerHTML = `<strong>Hyperedges</strong> (${edges.length})`;
-  const shown = edges.slice(0, LEGEND_CAP);
-  for (const edge of shown) {
+  el.innerHTML = `<h2>Tags (${edges.length})</h2>`;
+  if (edges.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.color = '#6a6358';
+    empty.textContent = 'No tags yet.';
+    el.appendChild(empty);
+    return;
+  }
+
+  for (const edge of edges) {
     const row = document.createElement('div');
     row.className = 'edge-row';
-    row.innerHTML =
-      `<span class="swatch" style="background:${edge.color}"></span>` +
-      `<span>${edge.id}: { ${formatVertexList(edge.vertices)} }</span>`;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = edge.color;
+
+    const nameInput = document.createElement('input');
+    nameInput.className = 'tag-name';
+    nameInput.type = 'text';
+    nameInput.value = edge.name;
+    nameInput.title = 'Rename tag';
+    nameInput.addEventListener('change', () => {
+      edge.name = nameInput.value.trim() || edge.name;
+      nameInput.value = edge.name;
+      saveGraph();
+      if (selectedNode) refreshInspectorTags();
+    });
+    nameInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') nameInput.blur();
+    });
+
+    const count = document.createElement('span');
+    count.className = 'tag-count';
+    count.textContent = `${edge.vertices.length}`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove tag';
+    removeBtn.style.padding = '2px 7px';
+    removeBtn.addEventListener('click', () => {
+      edges = edges.filter(e => e.id !== edge.id);
+      rebuildNeighborMap();
+      updateLegend();
+      saveGraph();
+      if (selectedNode) refreshInspectorTags();
+    });
+
+    row.appendChild(swatch);
+    row.appendChild(nameInput);
+    row.appendChild(count);
+    row.appendChild(removeBtn);
     el.appendChild(row);
-  }
-  if (edges.length > LEGEND_CAP) {
-    const more = document.createElement('div');
-    more.style.marginTop = '4px';
-    more.style.color = '#666';
-    more.textContent = `… and ${edges.length - LEGEND_CAP} more (hover nodes for membership)`;
-    el.appendChild(more);
   }
 }
 
 function pickNode(mx, my) {
   const { nodeR } = layoutScale();
-  const hit = nodeR + 4;
+  const hit = nodeR + 8;
   for (let i = nodes.length - 1; i >= 0; i--) {
     const n = nodes[i];
     if (Math.hypot(mx - n.px, my - n.py) <= hit) return n;
@@ -607,54 +749,132 @@ function pickNode(mx, my) {
   return null;
 }
 
-function readCounts() {
-  const n = constrain(parseInt(document.getElementById('nodeCount').value) || 5, 3, MAX_NODES);
-  const e = constrain(parseInt(document.getElementById('edgeCount').value) || 4, 2, MAX_EDGES);
-  document.getElementById('nodeCount').value = n;
-  document.getElementById('edgeCount').value = e;
-  readEdgeSizeBounds(n);
-  return { n, e };
+function openInspector(node) {
+  selectedNode = node;
+  const panel = document.getElementById('inspector');
+  const nameInput = document.getElementById('projectName');
+  panel.classList.add('open');
+  nameInput.value = node.name;
+  refreshInspectorTags();
+  setTimeout(() => {
+    nameInput.focus();
+    nameInput.select();
+  }, 0);
 }
 
-function readEdgeSizeBounds(n) {
-  const minAllowed = 2;
-  const maxAllowed = n - 1;
-
-  let minSize = parseInt(document.getElementById('edgeSizeMin').value) || minAllowed;
-  let maxSize = parseInt(document.getElementById('edgeSizeMax').value) || maxAllowed;
-
-  minSize = constrain(minSize, minAllowed, maxAllowed);
-  maxSize = constrain(maxSize, minAllowed, maxAllowed);
-  if (minSize > maxSize) minSize = maxSize;
-
-  document.getElementById('edgeSizeMin').value = minSize;
-  document.getElementById('edgeSizeMax').value = maxSize;
-  document.getElementById('edgeSizeMin').min = minAllowed;
-  document.getElementById('edgeSizeMin').max = maxAllowed;
-  document.getElementById('edgeSizeMax').min = minAllowed;
-  document.getElementById('edgeSizeMax').max = maxAllowed;
-
-  return { minSize, maxSize };
+function closeInspector() {
+  selectedNode = null;
+  document.getElementById('inspector').classList.remove('open');
 }
 
-function scheduleRandomGraph() {
-  clearTimeout(regenTimer);
-  regenTimer = setTimeout(randomGraph, 350);
+function refreshInspectorTags() {
+  const list = document.getElementById('tagList');
+  const empty = document.getElementById('emptyTags');
+  list.innerHTML = '';
+  if (!selectedNode) return;
+
+  if (edges.length === 0) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+
+  for (const edge of edges) {
+    const label = document.createElement('label');
+    label.className = 'tag-option';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = edge.vertices.includes(selectedNode.id);
+    checkbox.addEventListener('change', () => {
+      setNodeTag(selectedNode.id, edge.id, checkbox.checked);
+    });
+
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = edge.color;
+    swatch.style.width = '12px';
+    swatch.style.height = '12px';
+
+    const text = document.createElement('span');
+    text.textContent = edge.name;
+
+    label.appendChild(checkbox);
+    label.appendChild(swatch);
+    label.appendChild(text);
+    list.appendChild(label);
+  }
+}
+
+function setNodeTag(nodeId, edgeId, on) {
+  const edge = edgeById(edgeId);
+  if (!edge) return;
+  const idx = edge.vertices.indexOf(nodeId);
+  if (on && idx === -1) {
+    edge.vertices.push(nodeId);
+    edge.vertices.sort((a, b) => a - b);
+  } else if (!on && idx !== -1) {
+    edge.vertices.splice(idx, 1);
+  }
+  rebuildNeighborMap();
+  updateLegend();
+  saveGraph();
+}
+
+function applyProjectName() {
+  if (!selectedNode) return;
+  const nameInput = document.getElementById('projectName');
+  const next = nameInput.value.trim();
+  const prev = selectedNode.name;
+  selectedNode.name = next || selectedNode.name;
+  nameInput.value = selectedNode.name;
+  if (selectedNode.name !== prev) saveGraph();
+}
+
+function deleteSelectedProject() {
+  if (!selectedNode) return;
+  const id = selectedNode.id;
+  nodes = nodes.filter(n => n.id !== id);
+  for (const edge of edges) {
+    edge.vertices = edge.vertices.filter(vid => vid !== id);
+  }
+  rebuildNeighborMap();
+  updateLegend();
+  closeInspector();
+  saveGraph();
 }
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
+
   document.getElementById('exampleBtn').addEventListener('click', exampleGraph);
-  document.getElementById('randomBtn').addEventListener('click', randomGraph);
+  document.getElementById('addProjectBtn').addEventListener('click', addProject);
+  document.getElementById('addTagBtn').addEventListener('click', addTag);
   document.getElementById('simToggleBtn').addEventListener('click', () => {
     simRunning = !simRunning;
     document.getElementById('simToggleBtn').textContent = simRunning ? 'Pause' : 'Run';
   });
-  for (const id of ['nodeCount', 'edgeCount', 'edgeSizeMin', 'edgeSizeMax']) {
-    document.getElementById(id).addEventListener('change', randomGraph);
-    document.getElementById(id).addEventListener('input', scheduleRandomGraph);
-  }
-  exampleGraph();
+  document.getElementById('closeInspectorBtn').addEventListener('click', () => {
+    applyProjectName();
+    closeInspector();
+  });
+  document.getElementById('deleteProjectBtn').addEventListener('click', deleteSelectedProject);
+  document.getElementById('projectName').addEventListener('change', applyProjectName);
+  document.getElementById('projectName').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      applyProjectName();
+      closeInspector();
+    } else if (ev.key === 'Escape') {
+      closeInspector();
+    }
+  });
+
+  window.addEventListener('beforeunload', saveGraph);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveGraph();
+  });
+
+  if (!loadGraph()) exampleGraph();
 }
 
 function windowResized() {
@@ -676,48 +896,88 @@ function draw() {
     const outline = blobOutlineForEdge(edge);
     if (!outline) continue;
 
-    const highlighted = hoverNode && edge.vertices.includes(hoverNode.id);
-    if (highlighted) hoverEdge = edge;
+    const highlighted =
+      (hoverNode && edge.vertices.includes(hoverNode.id)) ||
+      (selectedNode && edge.vertices.includes(selectedNode.id));
+    if (highlighted && hoverNode) hoverEdge = edge;
 
     const isHoverOnly = !highlighted && hoverNode === null && distToBlob(mouseX, mouseY, outline) < 8;
     drawHyperedgeBlob(outline, edge.color, fillAlpha, 0.85, highlighted || isHoverOnly);
+
+    if (edge.vertices.length >= 2 && outline.type !== 'circle') {
+      drawTagLabel(edge, outline);
+    }
   }
 
   for (const node of nodes) {
-    const highlighted = hoverNode === node || (hoverEdge && hoverEdge.vertices.includes(node.id));
+    const highlighted =
+      hoverNode === node ||
+      selectedNode === node ||
+      (hoverEdge && hoverEdge.vertices.includes(node.id));
 
-    stroke(highlighted ? 40 : 80);
-    strokeWeight(highlighted ? 2 : 1);
-    fill(255);
+    stroke(highlighted ? 40 : 90);
+    strokeWeight(highlighted || selectedNode === node ? 2.5 : 1.25);
+    fill(selectedNode === node ? 255 : 252);
     ellipse(node.px, node.py, nodeR * 2, nodeR * 2);
 
-    if (labelSize >= 7) {
-      noStroke();
-      fill(30);
-      textAlign(CENTER, CENTER);
-      textSize(labelSize);
-      textStyle(BOLD);
-      text(node.id, node.px, node.py + 0.5);
+    noStroke();
+    fill(30);
+    textAlign(CENTER, CENTER);
+    textSize(labelSize);
+    textStyle(BOLD);
+    const lines = wrapLabel(node.name, nodeR > 40 ? 16 : 12);
+    const lineH = labelSize * 1.15;
+    const startY = node.py - ((lines.length - 1) * lineH) / 2;
+    for (let i = 0; i < lines.length; i++) {
+      text(lines[i], node.px, startY + i * lineH);
     }
   }
 
-  if (hoverNode) {
+  if (hoverNode && hoverNode !== selectedNode) {
     const memberEdges = edges.filter(e => e.vertices.includes(hoverNode.id));
-    let labels = memberEdges.map(e => e.id).join(', ');
-    if (memberEdges.length > 8) {
-      labels = memberEdges.slice(0, 7).map(e => e.id).join(', ') + `, +${memberEdges.length - 7} more`;
-    }
-    fill(50, 180);
+    const labels = memberEdges.length
+      ? memberEdges.map(e => e.name).join(', ')
+      : 'no tags';
+    const tip = hoverNode.name + ' · ' + labels;
+    fill(50, 190);
     noStroke();
     rectMode(CORNER);
-    const tw = textWidth('in ' + labels) + 16;
+    textSize(12);
+    textStyle(NORMAL);
+    const tw = textWidth(tip) + 16;
     rect(mouseX + 12, mouseY - 8, tw, 22, 4);
     fill(255);
     textAlign(LEFT, CENTER);
-    textSize(12);
-    textStyle(NORMAL);
-    text('in ' + labels, mouseX + 20, mouseY + 3);
+    text(tip, mouseX + 20, mouseY + 3);
   }
+}
+
+function drawTagLabel(edge, outline) {
+  let cx;
+  let cy;
+  if (outline.type === 'capsule') {
+    cx = (outline.a.px + outline.b.px) / 2;
+    cy = (outline.a.py + outline.b.py) / 2;
+  } else if (outline.type === 'polygon') {
+    cx = 0;
+    cy = 0;
+    for (const p of outline.points) {
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= outline.points.length;
+    cy /= outline.points.length;
+  } else {
+    return;
+  }
+
+  const rgb = parseColor(edge.color);
+  noStroke();
+  fill(rgb[0], rgb[1], rgb[2], 210);
+  textAlign(CENTER, CENTER);
+  textSize(11);
+  textStyle(BOLD);
+  text(edge.name, cx, cy);
 }
 
 function distToBlob(mx, my, outline) {
@@ -747,23 +1007,40 @@ function distToSegment(px, py, x1, y1, x2, y2) {
 }
 
 function mousePressed() {
-  dragging = pickNode(mouseX, mouseY);
+  if (mouseX < 0 || mouseY < 0 || mouseX > width || mouseY > height) return;
+  const target = document.elementFromPoint(mouseX, mouseY);
+  if (target && target.closest && (target.closest('#controls') || target.closest('#legend') || target.closest('#inspector') || target.closest('#hint'))) {
+    return;
+  }
+
+  pressNode = pickNode(mouseX, mouseY);
+  pressX = mouseX;
+  pressY = mouseY;
+  didDrag = false;
+  dragging = pressNode;
+  if (!pressNode) closeInspector();
 }
 
 function mouseDragged() {
-  if (dragging) {
-    dragging.px = mouseX;
-    dragging.py = mouseY;
-    syncNodeNorm(dragging);
-  }
+  if (!dragging) return;
+  if (Math.hypot(mouseX - pressX, mouseY - pressY) > DRAG_THRESHOLD) didDrag = true;
+  dragging.px = mouseX;
+  dragging.py = mouseY;
+  syncNodeNorm(dragging);
 }
 
 function mouseReleased() {
   if (dragging) {
     dragging.vx = 0;
     dragging.vy = 0;
+    if (!didDrag && pressNode === dragging) {
+      openInspector(dragging);
+    } else if (didDrag) {
+      saveGraph();
+    }
   }
   dragging = null;
+  pressNode = null;
 }
 </script>
 </body>

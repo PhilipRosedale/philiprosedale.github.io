@@ -131,7 +131,9 @@
     top: 64px;
     right: 12px;
     z-index: 20;
-    width: min(300px, calc(100vw - 24px));
+    width: min(420px, calc(100vw - 24px));
+    max-height: calc(100vh - 88px);
+    overflow-y: auto;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -150,7 +152,8 @@
     color: var(--muted);
     margin-bottom: 4px;
   }
-  #inspector .name-input {
+  #inspector .name-input,
+  #inspector .description-input {
     width: 100%;
     box-sizing: border-box;
     font: 15px/1.3 inherit;
@@ -161,7 +164,13 @@
     background: #fff;
     color: var(--ink);
   }
-  #inspector .name-input:focus {
+  #inspector .description-input {
+    min-height: 180px;
+    resize: vertical;
+    font-size: 14px;
+  }
+  #inspector .name-input:focus,
+  #inspector .description-input:focus {
     outline: 2px solid rgba(47, 111, 94, 0.35);
     border-color: var(--accent);
   }
@@ -213,6 +222,8 @@
   <h2>Edit project</h2>
   <label for="projectName">Name</label>
   <input id="projectName" class="name-input" type="text" autocomplete="off" spellcheck="true">
+  <label for="projectDescription">Description</label>
+  <textarea id="projectDescription" class="description-input" placeholder="Describe the project, its goals, next steps, or anything else…" spellcheck="true"></textarea>
   <label>Tags</label>
   <div id="emptyTags" class="empty-tags" hidden>No tags yet — add one from the toolbar.</div>
   <div id="tagList" class="tag-list"></div>
@@ -257,7 +268,7 @@ const STORAGE_KEY = 'project-hypergraph-v1';
 function saveGraph() {
   try {
     const payload = {
-      nodes: nodes.map(({ id, name, x, y }) => ({ id, name, x, y })),
+      nodes: nodes.map(({ id, name, description, x, y }) => ({ id, name, description, x, y })),
       edges: edges.map(({ id, name, vertices, color, padScale }) => ({
         id,
         name,
@@ -293,6 +304,7 @@ function loadGraph() {
     nodes = data.nodes.map((n, i) => ({
       id: Number(n.id) || i + 1,
       name: String(n.name || `Project ${i + 1}`),
+      description: typeof n.description === 'string' ? n.description : '',
       x: constrain(Number(n.x) || 0.5, 0, 1),
       y: constrain(Number(n.y) || 0.5, 0, 1),
       vx: 0,
@@ -507,11 +519,11 @@ function exampleGraph() {
   nextNodeId = 6;
   nextEdgeId = 5;
   nodes = [
-    { id: 1, name: 'Awakening AI project', x: 0.32, y: 0.28 },
-    { id: 2, name: 'Upgrade Burning Man art car', x: 0.68, y: 0.30 },
-    { id: 3, name: 'Rebuild personal website', x: 0.38, y: 0.58 },
-    { id: 4, name: 'Learn Japanese', x: 0.62, y: 0.62 },
-    { id: 5, name: 'Garden greenhouse', x: 0.78, y: 0.52 },
+    { id: 1, name: 'Awakening AI project', description: '', x: 0.32, y: 0.28 },
+    { id: 2, name: 'Upgrade Burning Man art car', description: '', x: 0.68, y: 0.30 },
+    { id: 3, name: 'Rebuild personal website', description: '', x: 0.38, y: 0.58 },
+    { id: 4, name: 'Learn Japanese', description: '', x: 0.62, y: 0.62 },
+    { id: 5, name: 'Garden greenhouse', description: '', x: 0.78, y: 0.52 },
   ];
   edges = [
     assignEdgeShape({ id: 1, name: 'Tech', vertices: [1, 3], color: EDGE_COLORS[0] }, { padScale: 0.95 }),
@@ -533,6 +545,7 @@ function addProject() {
   nodes.push({
     id,
     name,
+    description: '',
     x: 0.35 + random(0.3),
     y: 0.35 + random(0.3),
     vx: 0,
@@ -753,8 +766,10 @@ function openInspector(node) {
   selectedNode = node;
   const panel = document.getElementById('inspector');
   const nameInput = document.getElementById('projectName');
+  const descriptionInput = document.getElementById('projectDescription');
   panel.classList.add('open');
   nameInput.value = node.name;
+  descriptionInput.value = node.description || '';
   refreshInspectorTags();
   setTimeout(() => {
     nameInput.focus();
@@ -831,6 +846,14 @@ function applyProjectName() {
   if (selectedNode.name !== prev) saveGraph();
 }
 
+function applyProjectDescription() {
+  if (!selectedNode) return;
+  const description = document.getElementById('projectDescription').value;
+  if (selectedNode.description === description) return;
+  selectedNode.description = description;
+  saveGraph();
+}
+
 function deleteSelectedProject() {
   if (!selectedNode) return;
   const id = selectedNode.id;
@@ -856,6 +879,7 @@ function setup() {
   });
   document.getElementById('closeInspectorBtn').addEventListener('click', () => {
     applyProjectName();
+    applyProjectDescription();
     closeInspector();
   });
   document.getElementById('deleteProjectBtn').addEventListener('click', deleteSelectedProject);
@@ -865,6 +889,13 @@ function setup() {
       applyProjectName();
       closeInspector();
     } else if (ev.key === 'Escape') {
+      closeInspector();
+    }
+  });
+  document.getElementById('projectDescription').addEventListener('input', applyProjectDescription);
+  document.getElementById('projectDescription').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      applyProjectDescription();
       closeInspector();
     }
   });

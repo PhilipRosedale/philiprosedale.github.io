@@ -1,0 +1,6 @@
+{
+  "name": "sequence-neurons",
+  "private": true,
+  "type": "module",
+  "description": "Headless harness for the polychronous sequence-learning spiking network."
+}

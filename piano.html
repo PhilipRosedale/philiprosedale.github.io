@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piano — learning a sequence with STDP</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0d1015;
+    color: #c7d2e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+  }
+  body { display: flex; }
+  #stage { flex: 1; position: relative; min-width: 0; }
+  #panel {
+    width: 316px;
+    flex: 0 0 316px;
+    height: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 14px 16px 40px 16px;
+    background: #141922;
+    border-left: 1px solid #232c38;
+  }
+  #panel h1 { font-size: 14px; margin: 0 0 2px 0; letter-spacing: 0.2px; }
+  #panel .sub { color: #6d7c8f; font-size: 11px; line-height: 1.45; margin-bottom: 14px; }
+  .group {
+    margin: 18px 0 8px 0;
+    font-size: 10.5px;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    color: #5f94c9;
+    border-bottom: 1px solid #232c38;
+    padding-bottom: 4px;
+  }
+  .row { margin: 9px 0; }
+  .row .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .row label { color: #9fb0c4; }
+  .row .val { color: #e8eef6; font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row .note { color: #5f6d80; font-size: 10.5px; margin-top: 1px; }
+  .row.off label, .row.off .val { color: #4b5666; }
+  input[type=range] {
+    width: 100%;
+    margin: 4px 0 0 0;
+    accent-color: #4d9be6;
+    background: transparent;
+  }
+  input[type=text] {
+    width: 100%;
+    box-sizing: border-box;
+    background: #0d1218;
+    border: 1px solid #2b3644;
+    border-radius: 4px;
+    color: #e8eef6;
+    padding: 6px 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+  input[type=text]:focus { outline: none; border-color: #4d9be6; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    flex: 1 1 auto;
+    background: #212b38;
+    border: 1px solid #2f3c4d;
+    color: #d5e0ee;
+    border-radius: 5px;
+    padding: 7px 9px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover { background: #2a374a; }
+  button.on { background: #1f5c96; border-color: #2d76ba; color: #fff; }
+  .check { display: flex; align-items: center; gap: 7px; margin: 9px 0; color: #9fb0c4; cursor: pointer; }
+  .check input { accent-color: #4d9be6; }
+  #readout {
+    margin-top: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: #8fa2b8;
+  }
+  #readout b { color: #9fe0a8; font-weight: 500; }
+  #readout i { color: #e0a89f; font-style: normal; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="panel">
+  <h1>Piano sequence learning</h1>
+  <div class="sub">
+    One leaky integrate-and-fire neuron per key, all-to-all connected, all weights
+    starting at zero. STDP strengthens a synapse whose spike <em>arrives</em> just
+    before the target fires — so learning only happens when the conduction delay is
+    close to the note interval. Hover an arc to read its weight.
+  </div>
+  <div class="buttons">
+    <button id="btnPlay">Train</button>
+    <button id="btnCue">Cue</button>
+  </div>
+  <div class="buttons" style="margin-top:6px">
+    <button id="btnReset">Reset weights</button>
+    <button id="btnLearn" class="on">Learning</button>
+    <button id="btnSound">Sound</button>
+  </div>
+  <div id="readout"></div>
+  <div class="group">Sequence</div>
+  <input type="text" id="seqInput" value="C D E G F" spellcheck="false">
+  <div class="note" style="color:#5f6d80;font-size:10.5px;margin-top:4px">
+    Play by hand with A W S E D F T G Y H U J, or click keys and neurons.
+  </div>
+  <div id="controls"></div>
+</div>
+<script>
+// piano.html — learning a piano key sequence in a leaky integrate-and-fire network
+// with STDP on the connection weights.
+//
+// Twelve neurons, one per key of a single octave, all-to-all connected. Every weight
+// starts at exactly zero, so any structure that appears on screen was learned.
+//
+// The one thing that makes or breaks this: STDP potentiates a synapse when a
+// presynaptic spike ARRIVES shortly before the postsynaptic cell fires. Note B is
+// fired by the teacher one note interval T after note A, so the spike from A has to
+// spend nearly all of T in the axon to land inside the potentiation window. Delay is
+// therefore the parameter that encodes the tempo, and it has to be tuned to it.
+
+const NOTES = [
+  {name: 'C',  file: 'C4.mp3',  freq: 261.63, black: false, key: 'a', slot: 0.5},
+  {name: 'C#', file: 'Db4.mp3', freq: 277.18, black: true,  key: 'w', slot: 1.0},
+  {name: 'D',  file: 'D4.mp3',  freq: 293.66, black: false, key: 's', slot: 1.5},
+  {name: 'D#', file: 'Eb4.mp3', freq: 311.13, black: true,  key: 'e', slot: 2.0},
+  {name: 'E',  file: 'E4.mp3',  freq: 329.63, black: false, key: 'd', slot: 2.5},
+  {name: 'F',  file: 'F4.mp3',  freq: 349.23, black: false, key: 'f', slot: 3.5},
+  {name: 'F#', file: 'Gb4.mp3', freq: 369.99, black: true,  key: 't', slot: 4.0},
+  {name: 'G',  file: 'G4.mp3',  freq: 392.00, black: false, key: 'g', slot: 4.5},
+  {name: 'G#', file: 'Ab4.mp3', freq: 415.30, black: true,  key: 'y', slot: 5.0},
+  {name: 'A',  file: 'A4.mp3',  freq: 440.00, black: false, key: 'h', slot: 5.5},
+  {name: 'A#', file: 'Bb4.mp3', freq: 466.16, black: true,  key: 'u', slot: 6.0},
+  {name: 'B',  file: 'B4.mp3',  freq: 493.88, black: false, key: 'j', slot: 6.5},
+];
+const WHITE_COUNT = 7;
+const SAMPLE_BASE = "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/acoustic_grand_piano-mp3/";
+
+const W_MIN = -1.0;
+const W_MAX = 1.0;
+const SUBSTEP = 0.002;          // simulation step, seconds
+const NEAR_ZERO = 0.04;         // below this a weight draws as "unlearned"
+const LOG_MAX = 64;
+const BOW_NEAR = 0.78;          // control point radius for a one-semitone arc, and for one
+const BOW_FAR = 0.20;           // across the circle, as a fraction of the circle radius
+const PORT_MIN = 0.22;          // where an axon leaves and enters, as a fraction of the
+const PORT_MAX = 0.42;          // angle between adjacent cells
+
+const PARAM_DEFS = [
+  {group: 'Conduction'},
+  {key: 'delayMs', label: 'Conduction delay', min: 20, max: 900, step: 5, val: 330, unit: ' ms',
+   note: 'Time a spike spends in the axon. Learning needs this just under the note interval.'},
+  {key: 'axonSpeed', label: 'Conduction speed', min: 100, max: 5000, step: 50, val: 900, unit: ' px/s',
+   note: 'Used instead of a fixed delay when delay is proportional to distance.'},
+  {group: 'Learning (STDP)'},
+  {key: 'aPlus', label: 'Weight change A+', min: 0.005, max: 0.4, step: 0.005, val: 0.15, digits: 3,
+   note: 'Strengthening per pairing, at zero time difference.'},
+  {key: 'aRatio', label: 'Weakening A− / A+', min: 0, max: 3, step: 0.05, val: 1.0, digits: 2},
+  {key: 'tauStdp', label: 'STDP window \u03c4', min: 5, max: 400, step: 5, val: 60, unit: ' ms',
+   note: 'Tolerance on the delay match. Wide windows learn sloppily.'},
+  {group: 'Tempo'},
+  {key: 'noteMs', label: 'Note interval T', min: 120, max: 900, step: 10, val: 350, unit: ' ms'},
+  {key: 'gap', label: 'Gap between repeats', min: 0, max: 6, step: 0.5, val: 2, unit: '\u00d7T', digits: 1,
+   note: 'Zero lets the last note pair with the first, which learns a loop.'},
+  {key: 'timeScale', label: 'Simulation speed', min: 0.25, max: 20, step: 0.25, val: 1, unit: '\u00d7', digits: 2},
+  {group: 'Neuron'},
+  {key: 'threshold', label: 'Firing threshold', min: 0.2, max: 2, step: 0.05, val: 1.0, digits: 2},
+  {key: 'synGain', label: 'Synaptic gain', min: 0.2, max: 3, step: 0.1, val: 1.5, digits: 1,
+   note: 'Charge delivered by a spike of weight 1. Above threshold, one learned synapse can drive its target.'},
+  {key: 'tauMem', label: 'Membrane \u03c4', min: 10, max: 500, step: 5, val: 80, unit: ' ms'},
+  {key: 'refracMs', label: 'Refractory period', min: 10, max: 400, step: 5, val: 120, unit: ' ms'},
+];
+
+const P = {};
+let learning = true;
+let distanceDelay = false;
+let teacherOnly = false;
+let soundEnabled = false;
+
+let neurons = [];
+let synapses = [];
+let simTime = 0;
+let hovered = null;
+let spikeLog = [];
+let sequence = [];
+let player = {playing: false, idx: 0, nextTime: 0, presentations: 0, active: -1};
+
+const L = {};  // layout
+
+// ---------------------------------------------------------------- model
+
+class Neuron {
+  constructor(index) {
+    this.index = index;
+    this.note = NOTES[index];
+    this.v = 0;
+    this.yPost = 0;            // postsynaptic STDP trace
+    this.refractoryUntil = -1;
+    this.incoming = [];
+    this.outgoing = [];
+    this.flash = 0;
+    this.keyFlash = 0;
+    this.keyFlashSource = 'key';
+  }
+
+  spike(source) {
+    if (simTime < this.refractoryUntil) return false;
+
+    // Potentiate every synapse that delivered a spike recently enough.
+    if (learning) {
+      for (const s of this.incoming) {
+        if (s.xPre > 1e-4) s.bump(P.aPlus * s.xPre);
+      }
+    }
+    this.yPost = 1;
+    this.v = 0;
+    this.refractoryUntil = simTime + P.refracMs / 1000;
+    this.flash = 1;
+    // Light the key on every spike, so a replay is visibly the network playing the
+    // piano rather than the teacher. A press swallowed by the refractory period lights
+    // nothing, which is worth seeing.
+    this.keyFlash = 1;
+    this.keyFlashSource = source;
+    for (const s of this.outgoing) s.inflight.push(simTime + s.delay());
+
+    spikeLog.push({name: this.note.name, source: source, t: simTime});
+    if (spikeLog.length > LOG_MAX) spikeLog.shift();
+    playNote(this.index, source);
+    return true;
+  }
+}
+
+class Synapse {
+  constructor(from, to) {
+    this.from = from;
+    this.to = to;
+    this.w = 0;
+    this.xPre = 0;             // presynaptic STDP trace, at the synapse
+    this.inflight = [];        // arrival times of spikes still in the axon
+    this.glow = 0;
+    this.geom = null;
+  }
+
+  delay() {
+    if (!distanceDelay) return P.delayMs / 1000;
+    return Math.abs(this.to.x - this.from.x) / P.axonSpeed;
+  }
+
+  bump(dw) {
+    const before = this.w;
+    this.w = Math.max(W_MIN, Math.min(W_MAX, this.w + dw));
+    if (this.w !== before) this.glow = 1;
+  }
+
+  // A spike has reached the far end of the axon.
+  arrive() {
+    this.to.v += this.w * P.synGain;
+    this.xPre = 1;
+    // Weaken if the target fired just before this spike showed up.
+    if (learning && this.to.yPost > 1e-4) {
+      this.bump(-P.aPlus * P.aRatio * this.to.yPost);
+    }
+  }
+}
+
+function buildNetwork() {
+  neurons = NOTES.map((_, i) => new Neuron(i));
+  synapses = [];
+  for (const a of neurons) {
+    for (const b of neurons) {
+      if (a === b) continue;
+      const s = new Synapse(a, b);
+      a.outgoing.push(s);
+      b.incoming.push(s);
+      synapses.push(s);
+    }
+  }
+}
+
+function resetWeights() {
+  for (const s of synapses) {
+    s.w = 0;
+    s.xPre = 0;
+    s.inflight.length = 0;
+    s.glow = 0;
+  }
+  for (const n of neurons) {
+    n.v = 0;
+    n.yPost = 0;
+    n.refractoryUntil = -1;
+  }
+  spikeLog = [];
+  player.presentations = 0;
+}
+
+function step(dt) {
+  simTime += dt;
+  const memDecay = Math.exp(-dt / (P.tauMem / 1000));
+  const traceDecay = Math.exp(-dt / (P.tauStdp / 1000));
+
+  for (const n of neurons) {
+    n.v *= memDecay;
+    n.yPost *= traceDecay;
+  }
+  for (const s of synapses) {
+    s.xPre *= traceDecay;
+    if (s.inflight.length && s.inflight[0] <= simTime) {
+      while (s.inflight.length && s.inflight[0] <= simTime) {
+        s.inflight.shift();
+        s.arrive();
+      }
+    }
+  }
+
+  advancePlayer();
+
+  if (!teacherOnly) {
+    for (const n of neurons) {
+      if (n.v >= P.threshold) n.spike('net');
+    }
+  }
+}
+
+// ---------------------------------------------------------------- sequence playback
+
+function parseSequence(text) {
+  const out = [];
+  const tokens = text.toUpperCase().match(/[A-G][#B]?|[-_.]/g) || [];
+  for (const t of tokens) {
+    if (t.length === 1 && '-_.'.includes(t)) { out.push(-1); continue; }
+    let name = t;
+    if (name.length === 2 && name[1] === 'B') {
+      // flat: step down one semitone from the natural
+      const nat = NOTES.findIndex(n => n.name === name[0]);
+      out.push(nat >= 0 ? (nat + 11) % 12 : -1);
+      continue;
+    }
+    const i = NOTES.findIndex(n => n.name === name);
+    if (i >= 0) out.push(i);
+  }
+  return out;
+}
+
+function advancePlayer() {
+  if (!player.playing || sequence.length === 0) return;
+  const T = P.noteMs / 1000;
+  if (simTime < player.nextTime) return;
+
+  const note = sequence[player.idx];
+  player.active = player.idx;
+  if (note >= 0) neurons[note].spike('key');
+  player.nextTime += T;
+  player.idx++;
+  if (player.idx >= sequence.length) {
+    player.idx = 0;
+    player.presentations++;
+    player.nextTime += P.gap * T;
+  }
+}
+
+function startPlayer() {
+  sequence = parseSequence(document.getElementById('seqInput').value);
+  player.playing = true;
+  player.idx = 0;
+  player.nextTime = simTime;
+  document.getElementById('btnPlay').classList.add('on');
+  document.getElementById('btnPlay').textContent = 'Stop';
+}
+
+function stopPlayer() {
+  player.playing = false;
+  player.active = -1;
+  document.getElementById('btnPlay').classList.remove('on');
+  document.getElementById('btnPlay').textContent = 'Train';
+}
+
+// Fire only the first note of the sequence and watch what the network does on its own.
+function cue() {
+  stopPlayer();
+  sequence = parseSequence(document.getElementById('seqInput').value);
+  spikeLog = [];
+  for (const n of neurons) { n.v = 0; n.yPost = 0; n.refractoryUntil = -1; }
+  for (const s of synapses) { s.inflight.length = 0; s.xPre = 0; }
+  const first = sequence.find(i => i >= 0);
+  if (first !== undefined) neurons[first].spike('key');
+}
+
+// ---------------------------------------------------------------- layout and geometry
+
+function computeLayout() {
+  L.keyH = Math.min(160, height * 0.2);
+  L.keysTop = height - L.keyH;
+
+  // The twelve cells sit on a chromatic circle, C at the top and pitch rising
+  // clockwise, so the arcs can cross the interior.
+  const top = 76;
+  L.cx = width / 2;
+  L.cy = top + (L.keysTop - top) / 2;
+  L.R = Math.max(70, Math.min((L.keysTop - top) / 2 - 36, width / 2 - 70));
+  L.radius = Math.max(10, Math.min(19, L.R * 0.075));
+
+  // Keep the keyboard about as wide as the circle so the two read as one figure.
+  L.keysW = Math.min(width - 32, Math.max(520, L.R * 2 + 140));
+  L.keysLeft = (width - L.keysW) / 2;
+  L.whiteW = L.keysW / WHITE_COUNT;
+  L.blackW = L.whiteW * 0.58;
+  L.blackH = L.keyH * 0.62;
+
+  for (const n of neurons) {
+    n.angle = -Math.PI / 2 + n.index * (Math.PI * 2 / NOTES.length);
+    n.x = L.cx + L.R * Math.cos(n.angle);
+    n.y = L.cy + L.R * Math.sin(n.angle);
+  }
+  for (const s of synapses) s.geom = arcGeometry(s);
+}
+
+// Chords across the interior, pulled toward the centre so that arcs between distant
+// cells cut deeper than arcs between neighbours and the two nest instead of colliding.
+// An axon leaves its cell on the clockwise side and arrives on the anticlockwise side,
+// which keeps a synapse clear of its own reverse and shows at a glance which end is
+// which.
+function arcGeometry(s) {
+  const step = Math.PI * 2 / NOTES.length;
+  const half = NOTES.length / 2;
+  let span = Math.abs(s.to.index - s.from.index);
+  if (span > half) span = NOTES.length - span;
+
+  // A near chord has to be pulled a long way in to bow at all, one across the circle
+  // hardly at all, so the depth is scheduled by span. That also nests the spans.
+  const f = (span - 1) / (half - 1);
+  const port = step * (PORT_MIN + (PORT_MAX - PORT_MIN) * f);
+  const cr = L.R * (BOW_NEAR + (BOW_FAR - BOW_NEAR) * f);
+
+  const c1 = [L.cx + cr * Math.cos(s.from.angle + port), L.cy + cr * Math.sin(s.from.angle + port)];
+  const c2 = [L.cx + cr * Math.cos(s.to.angle - port), L.cy + cr * Math.sin(s.to.angle - port)];
+
+  // Start and end on the rim of each neuron, along the curve's tangent there.
+  const p0 = offsetAlong(s.from.x, s.from.y, c1[0] - s.from.x, c1[1] - s.from.y, L.radius + 2);
+  const p3 = offsetAlong(s.to.x, s.to.y, c2[0] - s.to.x, c2[1] - s.to.y, L.radius + 6);
+
+  const samples = [];
+  const N = 22;
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    samples.push([cubic(p0[0], c1[0], c2[0], p3[0], t), cubic(p0[1], c1[1], c2[1], p3[1], t)]);
+  }
+  const tip = [cubic(p0[0], c1[0], c2[0], p3[0], 0.97), cubic(p0[1], c1[1], c2[1], p3[1], 0.97)];
+  return {p0, c1, c2, p3, samples, arrowAngle: Math.atan2(p3[1] - tip[1], p3[0] - tip[0])};
+}
+
+function offsetAlong(x, y, dx, dy, r) {
+  const m = Math.hypot(dx, dy) || 1;
+  return [x + dx / m * r, y + dy / m * r];
+}
+
+function cubic(a, b, c, d, t) {
+  const u = 1 - t;
+  return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d;
+}
+
+function pointOn(g, t) {
+  return [cubic(g.p0[0], g.c1[0], g.c2[0], g.p3[0], t), cubic(g.p0[1], g.c1[1], g.c2[1], g.p3[1], t)];
+}
+
+// ---------------------------------------------------------------- p5
+
+function setup() {
+  const stage = document.getElementById('stage');
+  const c = createCanvas(stage.clientWidth, stage.clientHeight);
+  c.parent(stage);
+  buildControls();
+  buildNetwork();
+  computeLayout();
+  textFont('ui-monospace, Menlo, monospace');
+  // The stage can change size without the window doing so, and the first layout pass
+  // can land before it has settled, so follow the element rather than the window.
+  new ResizeObserver(fitCanvasToStage).observe(stage);
+}
+
+function fitCanvasToStage() {
+  const stage = document.getElementById('stage');
+  if (stage.clientWidth === width && stage.clientHeight === height) return;
+  resizeCanvas(stage.clientWidth, stage.clientHeight);
+  computeLayout();
+}
+
+function windowResized() {
+  fitCanvasToStage();
+}
+
+function draw() {
+  const real = Math.min(deltaTime, 50) / 1000;
+  const elapsed = real * P.timeScale;
+  const nSub = Math.max(1, Math.min(600, Math.ceil(elapsed / SUBSTEP)));
+  const dt = elapsed / nSub;
+  for (let i = 0; i < nSub; i++) step(dt);
+
+  const fade = Math.exp(-real / 0.22);
+  for (const s of synapses) s.glow *= fade;
+  for (const n of neurons) { n.flash *= fade; n.keyFlash *= fade; }
+
+  updateHover();
+
+  background(13, 16, 21);
+  drawKeys();
+  drawRing();
+  drawArcs();
+  drawTravellingSpikes();
+  drawNeurons();
+  drawOverlay();
+  drawTooltip();
+  refreshReadout();
+}
+
+// Blue for a key someone pressed, green for one the network played itself.
+function flashColor(neuron, black) {
+  if (neuron.keyFlashSource === 'key') return black ? color(70, 140, 220) : color(120, 190, 255);
+  return black ? color(52, 170, 105) : color(130, 240, 170);
+}
+
+function drawKeys() {
+  noStroke();
+  const whites = NOTES.filter(n => !n.black);
+  for (const note of whites) {
+    const neuron = neurons[NOTES.indexOf(note)];
+    const x = L.keysLeft + (note.slot - 0.5) * L.whiteW;
+    fill(lerpColor(color(226, 232, 240), flashColor(neuron, false), neuron.keyFlash));
+    rect(x + 1, L.keysTop, L.whiteW - 2, L.keyH, 0, 0, 5, 5);
+    textAlign(CENTER, BOTTOM);
+    fill(62, 74, 90);
+    textSize(13);
+    text(note.name, x + L.whiteW / 2, L.keysTop + L.keyH - 8);
+    fill(152, 164, 180);
+    textSize(10);
+    text(note.key.toUpperCase(), x + L.whiteW / 2, L.keysTop + L.keyH - 26);
+  }
+  for (const note of NOTES) {
+    if (!note.black) continue;
+    const neuron = neurons[NOTES.indexOf(note)];
+    const x = L.keysLeft + note.slot * L.whiteW - L.blackW / 2;
+    fill(lerpColor(color(24, 28, 35), flashColor(neuron, true), neuron.keyFlash));
+    rect(x, L.keysTop, L.blackW, L.blackH, 0, 0, 4, 4);
+    fill(140, 152, 170);
+    textAlign(CENTER, BOTTOM);
+    textSize(9.5);
+    text(note.key.toUpperCase(), x + L.blackW / 2, L.keysTop + L.blackH - 6);
+  }
+}
+
+function drawRing() {
+  noFill();
+  stroke(255, 255, 255, 14);
+  strokeWeight(1);
+  circle(L.cx, L.cy, L.R * 2);
+
+  // The letter that plays each cell, repeated outside the ring so the circle can be
+  // read against the keyboard without tracing anything.
+  noStroke();
+  fill(96, 110, 128);
+  textSize(10);
+  textAlign(CENTER, CENTER);
+  const out = L.R + L.radius + 12;
+  for (const n of neurons) {
+    text(n.note.key.toUpperCase(),
+         L.cx + out * Math.cos(n.angle),
+         L.cy + out * Math.sin(n.angle));
+  }
+}
+
+function drawArcs() {
+  const order = synapses.slice().sort((a, b) => Math.abs(a.w) - Math.abs(b.w));
+  noFill();
+  for (const s of order) {
+    if (s === hovered) continue;
+    strokeArc(s, false);
+  }
+  if (hovered) strokeArc(hovered, true);
+}
+
+function strokeArc(s, isHover) {
+  const g = s.geom;
+  const mag = Math.abs(s.w);
+  let col;
+  if (mag < NEAR_ZERO) {
+    col = color(150, 168, 190, isHover ? 200 : 26);
+  } else if (s.w > 0) {
+    col = lerpColor(color(50, 120, 80, 150), color(110, 255, 150, 255), Math.min(1, mag));
+  } else {
+    col = lerpColor(color(120, 60, 60, 150), color(255, 120, 110, 255), Math.min(1, mag));
+  }
+  if (s.glow > 0.01) col = lerpColor(col, color(255, 255, 255), s.glow * 0.85);
+  if (isHover) col = lerpColor(col, color(255, 255, 255), 0.5);
+
+  stroke(col);
+  strokeWeight((isHover ? 1.5 : 0) + (mag < NEAR_ZERO ? 1 : 1 + 3.5 * Math.min(1, mag)));
+  noFill();
+  bezier(g.p0[0], g.p0[1], g.c1[0], g.c1[1], g.c2[0], g.c2[1], g.p3[0], g.p3[1]);
+
+  if (mag >= NEAR_ZERO || isHover) {
+    push();
+    translate(g.p3[0], g.p3[1]);
+    rotate(g.arrowAngle);
+    noStroke();
+    fill(col);
+    const a = 4 + 3 * Math.min(1, mag);
+    triangle(0, 0, -a * 1.9, -a * 0.7, -a * 1.9, a * 0.7);
+    pop();
+  }
+}
+
+function drawTravellingSpikes() {
+  noStroke();
+  for (const s of synapses) {
+    if (!s.inflight.length) continue;
+    const d = s.delay();
+    for (const arrival of s.inflight) {
+      const t = Math.max(0, Math.min(1, 1 - (arrival - simTime) / d));
+      const [x, y] = pointOn(s.geom, t);
+      const mag = Math.abs(s.w);
+      if (s.w > NEAR_ZERO) fill(150, 255, 190, 235);
+      else if (s.w < -NEAR_ZERO) fill(255, 160, 150, 235);
+      else fill(210, 225, 245, 190);
+      circle(x, y, 5 + 5 * Math.min(1, mag));
+    }
+  }
+}
+
+function drawNeurons() {
+  for (const n of neurons) {
+    const r = L.radius;
+    const refractory = simTime < n.refractoryUntil;
+    noStroke();
+    fill(20, 26, 34);
+    circle(n.x, n.y, r * 2);
+
+    if (refractory) {
+      const frac = (n.refractoryUntil - simTime) / (P.refracMs / 1000);
+      fill(90, 100, 116, 200 * frac);
+      circle(n.x, n.y, r * 2 - 3);
+    } else {
+      const fill01 = Math.max(0, Math.min(1, n.v / P.threshold));
+      fill(90, 200, 255, 220);
+      circle(n.x, n.y, (r * 2 - 3) * fill01);
+    }
+    if (n.flash > 0.01) {
+      fill(255, 255, 255, 255 * n.flash);
+      circle(n.x, n.y, r * 2 - 2);
+    }
+    noFill();
+    stroke(n.note.black ? color(120, 134, 152) : color(170, 186, 206));
+    strokeWeight(1.5);
+    circle(n.x, n.y, r * 2);
+
+    noStroke();
+    fill(n.flash > 0.4 ? color(20, 26, 34) : color(190, 205, 224));
+    textAlign(CENTER, CENTER);
+    textSize(r * 0.85);
+    text(n.note.name, n.x, n.y + 0.5);
+  }
+}
+
+function drawOverlay() {
+  const T = P.noteMs;
+  noStroke();
+  textAlign(LEFT, TOP);
+
+  // The sequence, with the note currently being taught highlighted.
+  textSize(19);
+  let x = 18;
+  for (let i = 0; i < sequence.length; i++) {
+    const active = player.playing && i === player.active;
+    fill(active ? color(255, 255, 255) : color(120, 136, 155));
+    const label = sequence[i] < 0 ? '\u00b7' : NOTES[sequence[i]].name;
+    text(label, x, 18);
+    x += textWidth(label) + 7;
+  }
+
+  // Spikes as they happen: teacher-driven in blue, network-driven in green.
+  // A silence longer than a note interval starts a new group, so repeats read apart.
+  textSize(15);
+  let lx = 18;
+  const ly = 52;
+  let prevT = null;
+  for (const e of spikeLog) {
+    if (prevT !== null && e.t - prevT > 1.5 * T / 1000) lx += 16;
+    prevT = e.t;
+    fill(e.source === 'key' ? color(105, 175, 255) : color(120, 250, 160));
+    text(e.name, lx, ly);
+    lx += textWidth(e.name) + 5;
+    if (lx > width - 40) break;
+  }
+
+  textSize(11.5);
+  fill(90, 104, 122);
+  textAlign(RIGHT, TOP);
+  const ratio = (P.delayMs / T);
+  text(`delay / T = ${ratio.toFixed(2)}     presentations ${player.presentations}     ${frameRate().toFixed(0)} fps`,
+       width - 16, 20);
+}
+
+function drawTooltip() {
+  if (!hovered) return;
+  const s = hovered;
+  const label = `${s.from.note.name} \u2192 ${s.to.note.name}`;
+  const wStr = (s.w >= 0 ? '+' : '\u2212') + Math.abs(s.w).toFixed(3);
+  const dStr = `${(s.delay() * 1000).toFixed(0)} ms`;
+  textSize(12.5);
+  const lines = [`${label}    w = ${wStr}`, `delay ${dStr}`];
+  let w = 0;
+  for (const l of lines) w = Math.max(w, textWidth(l));
+  const bw = w + 18, bh = 42;
+  let bx = mouseX + 14, by = mouseY - bh - 8;
+  if (bx + bw > width) bx = mouseX - bw - 14;
+  if (by < 0) by = mouseY + 14;
+  noStroke();
+  fill(10, 14, 19, 235);
+  rect(bx, by, bw, bh, 6);
+  stroke(70, 92, 118);
+  strokeWeight(1);
+  noFill();
+  rect(bx, by, bw, bh, 6);
+  noStroke();
+  textAlign(LEFT, TOP);
+  fill(232, 238, 246);
+  text(lines[0], bx + 9, by + 8);
+  fill(130, 146, 166);
+  text(lines[1], bx + 9, by + 24);
+}
+
+function updateHover() {
+  hovered = null;
+  if (mouseX < 0 || mouseY < 0 || mouseX > width || mouseY > height) return;
+  let best = 9 * 9;
+  for (const s of synapses) {
+    for (const p of s.geom.samples) {
+      const d = (p[0] - mouseX) * (p[0] - mouseX) + (p[1] - mouseY) * (p[1] - mouseY);
+      if (d < best) { best = d; hovered = s; }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- interaction
+
+function mousePressed() {
+  for (const n of neurons) {
+    if (Math.hypot(mouseX - n.x, mouseY - n.y) < L.radius + 3) {
+      n.spike('key');
+      return;
+    }
+  }
+  if (mouseY >= L.keysTop && mouseX >= L.keysLeft && mouseX <= L.keysLeft + L.keysW) {
+    for (const note of NOTES) {
+      if (!note.black) continue;
+      const x = L.keysLeft + note.slot * L.whiteW - L.blackW / 2;
+      if (mouseX >= x && mouseX <= x + L.blackW && mouseY <= L.keysTop + L.blackH) {
+        pressNote(NOTES.indexOf(note));
+        return;
+      }
+    }
+    const slot = Math.floor((mouseX - L.keysLeft) / L.whiteW);
+    const white = NOTES.filter(n => !n.black)[Math.max(0, Math.min(6, slot))];
+    if (white) pressNote(NOTES.indexOf(white));
+  }
+}
+
+function pressNote(i) {
+  neurons[i].spike('key');
+}
+
+const held = new Set();
+window.addEventListener('keydown', (e) => {
+  if (e.target && e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (held.has(k)) return;
+  held.add(k);
+  const i = NOTES.findIndex(n => n.key === k);
+  if (i >= 0) { pressNote(i); e.preventDefault(); return; }
+  if (k === ' ') { player.playing ? stopPlayer() : startPlayer(); e.preventDefault(); }
+  if (k === 'c') cue();
+  if (k === 'r') resetWeights();
+});
+window.addEventListener('keyup', (e) => held.delete(e.key.toLowerCase()));
+
+// ---------------------------------------------------------------- panel
+
+function buildControls() {
+  const host = document.getElementById('controls');
+  for (const def of PARAM_DEFS) {
+    if (def.group) {
+      const h = document.createElement('div');
+      h.className = 'group';
+      h.textContent = def.group;
+      host.appendChild(h);
+      continue;
+    }
+    P[def.key] = def.val;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.id = 'row-' + def.key;
+    const digits = def.digits !== undefined ? def.digits : 0;
+    row.innerHTML =
+      `<div class="top"><label>${def.label}</label><span class="val"></span></div>` +
+      `<input type="range" min="${def.min}" max="${def.max}" step="${def.step}" value="${def.val}">` +
+      (def.note ? `<div class="note">${def.note}</div>` : '');
+    const slider = row.querySelector('input');
+    const out = row.querySelector('.val');
+    const show = () => { out.textContent = Number(P[def.key]).toFixed(digits) + (def.unit || ''); };
+    slider.addEventListener('input', () => { P[def.key] = parseFloat(slider.value); show(); });
+    show();
+    host.appendChild(row);
+  }
+
+  addCheck(host, 'Delay proportional to distance', false, (v) => {
+    distanceDelay = v;
+    document.getElementById('row-delayMs').classList.toggle('off', v);
+    document.getElementById('row-axonSpeed').classList.toggle('off', !v);
+  });
+  addCheck(host, 'Teacher only (no synaptic firing)', false, (v) => { teacherOnly = v; });
+  document.getElementById('row-axonSpeed').classList.add('off');
+
+  document.getElementById('btnPlay').onclick = () => player.playing ? stopPlayer() : startPlayer();
+  document.getElementById('btnCue').onclick = cue;
+  document.getElementById('btnReset').onclick = resetWeights;
+  document.getElementById('btnLearn').onclick = (e) => {
+    learning = !learning;
+    e.target.classList.toggle('on', learning);
+  };
+  document.getElementById('btnSound').onclick = (e) => {
+    soundEnabled = !soundEnabled;
+    e.target.classList.toggle('on', soundEnabled);
+    if (soundEnabled) { ensureAudio(); loadSamples(); }
+  };
+  document.getElementById('seqInput').addEventListener('input', () => {
+    sequence = parseSequence(document.getElementById('seqInput').value);
+  });
+  sequence = parseSequence(document.getElementById('seqInput').value);
+}
+
+function addCheck(host, label, initial, onChange) {
+  const el = document.createElement('label');
+  el.className = 'check';
+  el.innerHTML = `<input type="checkbox"${initial ? ' checked' : ''}><span>${label}</span>`;
+  el.querySelector('input').addEventListener('change', (e) => onChange(e.target.checked));
+  host.appendChild(el);
+}
+
+let lastReadout = 0;
+function refreshReadout() {
+  if (millis() - lastReadout < 200) return;
+  lastReadout = millis();
+
+  const pairs = new Set();
+  const notes = sequence.filter(i => i >= 0);
+  for (let i = 0; i + 1 < notes.length; i++) pairs.add(notes[i] + '-' + notes[i + 1]);
+
+  let seqSum = 0, seqN = 0, otherSum = 0, otherN = 0, seqMin = Infinity;
+  for (const s of synapses) {
+    const isSeq = pairs.has(s.from.index + '-' + s.to.index);
+    if (isSeq) { seqSum += s.w; seqN++; seqMin = Math.min(seqMin, s.w); }
+    else { otherSum += Math.abs(s.w); otherN++; }
+  }
+  const meanSeq = seqN ? seqSum / seqN : 0;
+  const meanOther = otherN ? otherSum / otherN : 0;
+  const sel = meanOther > 1e-4 ? (meanSeq / meanOther).toFixed(1) + '\u00d7' : '\u2014';
+
+  document.getElementById('readout').innerHTML =
+    `presentations   ${player.presentations}<br>` +
+    `sequence w      <b>${meanSeq.toFixed(3)}</b> (min ${seqN ? seqMin.toFixed(3) : '0'})<br>` +
+    `all other |w|   <i>${meanOther.toFixed(3)}</i><br>` +
+    `selectivity     ${sel}`;
+}
+
+// ---------------------------------------------------------------- sound
+
+let audioCtx = null;
+let samples = {};
+let samplesLoading = false;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+async function loadSamples() {
+  if (samplesLoading || Object.keys(samples).length) return;
+  ensureAudio();
+  samplesLoading = true;
+  try {
+    await Promise.all(NOTES.map(async (n, i) => {
+      const res = await fetch(SAMPLE_BASE + n.file);
+      samples[i] = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    }));
+  } catch (err) {
+    console.warn('Piano samples unavailable, falling back to synthesized tones.', err);
+    samples = {};
+  } finally {
+    samplesLoading = false;
+  }
+}
+
+function playNote(index, source) {
+  if (!soundEnabled || !audioCtx || P.timeScale > 2) return;
+  ensureAudio();
+  const gain = audioCtx.createGain();
+  const level = source === 'key' ? 0.32 : 0.24;
+  gain.gain.setValueAtTime(level, audioCtx.currentTime);
+  gain.connect(audioCtx.destination);
+
+  if (samples[index]) {
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.1);
+    const src = audioCtx.createBufferSource();
+    src.buffer = samples[index];
+    src.connect(gain);
+    src.start();
+    src.stop(audioCtx.currentTime + 1.2);
+  } else {
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+    const osc = audioCtx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = NOTES[index].freq;
+    osc.connect(gain);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.65);
+  }
+}
+</script>
+</body>
+</html>

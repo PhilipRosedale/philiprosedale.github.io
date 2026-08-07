@@ -195,6 +195,8 @@ let hovered = null;
 let spikeLog = [];
 let sequence = [];
 let player = {playing: false, idx: 0, nextTime: 0, presentations: 0, active: -1};
+let changeUp = 0, changeDown = 0;      // weight changes since the last rate measurement
+let rateStart = 0, rateUp = 0, rateDown = 0;
 
 const L = {};  // layout
 
@@ -249,6 +251,7 @@ class Synapse {
     this.xPre = 0;             // presynaptic STDP trace, at the synapse
     this.inflight = [];        // arrival times of spikes still in the axon
     this.glow = 0;
+    this.glowSign = 1;
     this.geom = null;
   }
 
@@ -260,7 +263,17 @@ class Synapse {
   bump(dw) {
     const before = this.w;
     this.w = Math.max(W_MIN, Math.min(W_MAX, this.w + dw));
-    if (this.w !== before) this.glow = 1;
+    const change = this.w - before;
+    if (change === 0) return;
+
+    // Flash in proportion to the size of the change, so a well timed pairing stands out
+    // against the pedestal of tiny updates from spikes that arrived far outside the
+    // window. Those are real, but they are not the learning.
+    this.glow = Math.max(this.glow, Math.sqrt(Math.min(1, Math.abs(change) / Math.max(1e-6, P.aPlus))));
+    this.glowSign = change > 0 ? 1 : -1;
+    if (Math.abs(change) >= 0.01) {
+      if (change > 0) changeUp++; else changeDown++;
+    }
   }
 
   // A spike has reached the far end of the axon.
@@ -302,6 +315,18 @@ function resetWeights() {
   }
   spikeLog = [];
   player.presentations = 0;
+  changeUp = changeDown = rateUp = rateDown = 0;
+  rateStart = simTime;
+}
+
+// Counted per second of simulation time, so the rate does not move with the speed slider.
+function updateChangeRate() {
+  const window = simTime - rateStart;
+  if (window < 1) return;
+  rateUp = changeUp / window;
+  rateDown = changeDown / window;
+  changeUp = changeDown = 0;
+  rateStart = simTime;
 }
 
 function step(dt) {
@@ -507,9 +532,11 @@ function draw() {
   for (let i = 0; i < nSub; i++) step(dt);
 
   const fade = Math.exp(-real / 0.22);
-  for (const s of synapses) s.glow *= fade;
+  const glowFade = Math.exp(-real / 0.45);
+  for (const s of synapses) s.glow *= glowFade;
   for (const n of neurons) { n.flash *= fade; n.keyFlash *= fade; }
 
+  updateChangeRate();
   updateHover();
 
   background(13, 16, 21);
@@ -579,13 +606,16 @@ function drawRing() {
 }
 
 function drawArcs() {
-  const order = synapses.slice().sort((a, b) => Math.abs(a.w) - Math.abs(b.w));
+  // A synapse that just changed is drawn last so its flash is never buried.
+  const key = s => Math.abs(s.w) + 2 * s.glow;
+  const order = synapses.slice().sort((a, b) => key(a) - key(b));
   noFill();
   for (const s of order) {
     if (s === hovered) continue;
     strokeArc(s, false);
   }
   if (hovered) strokeArc(hovered, true);
+  for (const s of order) if (s.glow > 0.25) labelChange(s);
 }
 
 function strokeArc(s, isHover) {
@@ -599,11 +629,24 @@ function strokeArc(s, isHover) {
   } else {
     col = lerpColor(color(120, 60, 60, 150), color(255, 120, 110, 255), Math.min(1, mag));
   }
-  if (s.glow > 0.01) col = lerpColor(col, color(255, 255, 255), s.glow * 0.85);
+  let weight = (isHover ? 1.5 : 0) + (mag < NEAR_ZERO ? 1 : 1 + 3.5 * Math.min(1, mag));
+
+  if (s.glow > 0.01) {
+    // Two-pass bloom behind the arc, then swell and wash out the arc itself.
+    const f = changeColor(s);
+    noFill();
+    for (const pass of [[26, 50], [11, 105]]) {
+      stroke(red(f), green(f), blue(f), pass[1] * s.glow);
+      strokeWeight(weight + pass[0] * s.glow);
+      bezier(g.p0[0], g.p0[1], g.c1[0], g.c1[1], g.c2[0], g.c2[1], g.p3[0], g.p3[1]);
+    }
+    col = lerpColor(col, f, Math.min(1, s.glow * 1.5));
+    weight += 6 * s.glow;
+  }
   if (isHover) col = lerpColor(col, color(255, 255, 255), 0.5);
 
   stroke(col);
-  strokeWeight((isHover ? 1.5 : 0) + (mag < NEAR_ZERO ? 1 : 1 + 3.5 * Math.min(1, mag)));
+  strokeWeight(weight);
   noFill();
   bezier(g.p0[0], g.p0[1], g.c1[0], g.c1[1], g.c2[0], g.c2[1], g.p3[0], g.p3[1]);
 
@@ -617,6 +660,29 @@ function strokeArc(s, isHover) {
     triangle(0, 0, -a * 1.9, -a * 0.7, -a * 1.9, a * 0.7);
     pop();
   }
+}
+
+// White for strengthening, magenta for weakening — neither can be confused with the
+// green and red that show the weight's own sign.
+function changeColor(s) {
+  return s.glowSign > 0 ? color(255, 255, 255) : color(255, 90, 220);
+}
+
+// The weight it just became, set beside the belly of the arc.
+function labelChange(s) {
+  const g = s.geom;
+  const [ax, ay] = g.samples[10];
+  const [bx, by] = g.samples[12];
+  const m = Math.hypot(bx - ax, by - ay) || 1;
+  const off = 12;
+  const [cxp, cyp] = g.samples[11];
+  const f = changeColor(s);
+  noStroke();
+  fill(red(f), green(f), blue(f), 255 * Math.min(1, s.glow / 0.5));
+  textAlign(CENTER, CENTER);
+  textSize(12.5);
+  text((s.w >= 0 ? '+' : '\u2212') + Math.abs(s.w).toFixed(2),
+       cxp - (by - ay) / m * off, cyp + (bx - ax) / m * off);
 }
 
 function drawTravellingSpikes() {
@@ -878,7 +944,8 @@ function refreshReadout() {
     `presentations   ${player.presentations}<br>` +
     `sequence w      <b>${meanSeq.toFixed(3)}</b> (min ${seqN ? seqMin.toFixed(3) : '0'})<br>` +
     `all other |w|   <i>${meanOther.toFixed(3)}</i><br>` +
-    `selectivity     ${sel}`;
+    `selectivity     ${sel}<br>` +
+    `changes/s       <b>${rateUp.toFixed(1)}\u2191</b> <i>${rateDown.toFixed(1)}\u2193</i>`;
 }
 
 // ---------------------------------------------------------------- sound

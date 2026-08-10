@@ -100,6 +100,13 @@
     before the target fires — so learning only happens when the conduction delay is
     close to the note interval. Hover an arc to read its weight.
   </div>
+  <div class="sub">
+    Cells tire as they fire and terminals run their vesicles down, so replay stops
+    after a few laps instead of looping forever. Every spike inhibits all the other
+    cells at once, with no delay, so of two learned successors only one wins — and
+    because the tired one loses, cueing twice tends to play the other tune. Turn on
+    the second-order lines to let the note before last pick the branch instead.
+  </div>
   <div class="buttons">
     <button id="btnPlay">Train</button>
     <button id="btnCue">Cue</button>
@@ -129,6 +136,38 @@
 // fired by the teacher one note interval T after note A, so the spike from A has to
 // spend nearly all of T in the axon to land inside the potentiation window. Delay is
 // therefore the parameter that encodes the tempo, and it has to be tuned to it.
+//
+// Learning the transitions is not enough to make the network sing. Left to itself a
+// tune that loops plays forever, and two tunes that open on the same note play on top
+// of each other, because nothing in a bare LIF network ever tires and nothing chooses.
+// Four mechanisms fix that, and they are the reason for most of the parameters below:
+//
+//   * ADAPTATION. Firing raises a cell's own threshold, which decays over seconds. A
+//     loop coming back round finds its own cells still tired, so replay dies out.
+//     This is the only mechanism here that can also tell two branches apart, because
+//     it is a property of the cell that fired rather than of the cell that drove it.
+//   * SHORT-TERM DEPRESSION. Each spike spends part of what its terminal has left.
+//     Note what it CANNOT do: depletion is presynaptic, so the shared cell at a fork
+//     drains the terminals of both branches whichever one goes on to fire. It shortens
+//     a replay; it does not choose between two tunes.
+//   * LATERAL INHIBITION, with no delay at all. Of two learned successors only one
+//     survives. The absence of delay is the point: an interneuron acts in a
+//     millisecond while these axons carry hundreds, and inhibition delayed by about
+//     the interval it regulates would brake the next note instead of the rivals.
+//   * NOISE, so a tie between two successors that are equally learned AND equally
+//     rested is broken by chance rather than by the order of the array.
+//
+// Competition is settled on how far each cell is past its OWN threshold, not on raw
+// membrane voltage. Two cells fed by the same spike receive identical charge, so
+// ranking them by voltage would leave adaptation with no say in who wins, and the
+// network would pick the same tune every time.
+//
+// None of that can tell the two tunes apart at their shared first note — with one
+// neuron per pitch, C is the same state in both, and the choice there is genuinely
+// arbitrary. The optional second-order lines are the fix from the second note on: a
+// second axon per pair, twice as slow, carries the note before last, and with the
+// threshold above what one line delivers the successor is chosen by the coincidence
+// of the last two notes rather than by the last one alone.
 
 const NOTES = [
   {name: 'C',  file: 'C4.mp3',  freq: 261.63, black: false, key: 'a', slot: 0.5},
@@ -149,6 +188,7 @@ const SAMPLE_BASE = "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/acou
 
 const W_MIN = -1.0;
 const W_MAX = 1.0;
+const V_MIN = -1.0;             // hyperpolarisation floor, so inhibition cannot dig forever
 const SUBSTEP = 0.002;          // simulation step, seconds
 const NEAR_ZERO = 0.04;         // below this a weight draws as "unlearned"
 const LOG_MAX = 64;
@@ -180,16 +220,35 @@ const PARAM_DEFS = [
    note: 'Charge delivered by a spike of weight 1. Above threshold, one learned synapse can drive its target.'},
   {key: 'tauMem', label: 'Membrane \u03c4', min: 10, max: 500, step: 5, val: 80, unit: ' ms'},
   {key: 'refracMs', label: 'Refractory period', min: 10, max: 400, step: 5, val: 120, unit: ' ms'},
+  {group: 'Competition and fatigue'},
+  {key: 'lateralInh', label: 'Lateral inhibition', min: 0, max: 2, step: 0.05, val: 1.0, digits: 2,
+   note: 'Charge every spike takes from all other cells, with no delay. This is what makes one successor win.'},
+  {key: 'noiseAmp', label: 'Membrane noise', min: 0, max: 0.5, step: 0.01, val: 0.15, digits: 2,
+   note: 'Decides a tie between two equally learned successors, so the winner is chance rather than array order.'},
+  {key: 'adapt', label: 'Adaptation per spike', min: 0, max: 1.2, step: 0.01, val: 0.25, digits: 2,
+   note: 'How much a cell raises its own threshold each time it fires. Teacher presses ignore it, so training is untouched. This is the only thing here that can tell two branches apart.'},
+  {key: 'tauAdapt', label: 'Adaptation \u03c4', min: 200, max: 8000, step: 100, val: 2500, unit: ' ms',
+   note: 'Must be long compared with a lap of the loop, or the cell has recovered by the time the loop comes back round.'},
+  {key: 'stpU', label: 'Vesicle depletion U', min: 0, max: 0.9, step: 0.05, val: 0.25, digits: 2,
+   note: 'Fraction of a synapse\u2019s resource spent by each spike. Presynaptic, so it fatigues a whole cell\u2019s output rather than one branch of it.'},
+  {key: 'tauRes', label: 'Resource recovery \u03c4', min: 200, max: 8000, step: 100, val: 2500, unit: ' ms'},
+  {key: 'restMs', label: 'Rest before a cue', min: 0, max: 8000, step: 100, val: 2500, unit: ' ms',
+   note: 'Quiet time a cue waits out first. Training leaves the network too tired to replay, and rest is when replay happens.'},
 ];
 
 const P = {};
+const paramUI = {};
 let learning = true;
 let distanceDelay = false;
 let teacherOnly = false;
 let soundEnabled = false;
+let secondOrder = false;
+let freezeOnRecall = true;
+let recalling = false;
 
 let neurons = [];
 let synapses = [];
+let pairs = [];                  // one per ordered pair of cells; owns the arc
 let simTime = 0;
 let hovered = null;
 let spikeLog = [];
@@ -202,12 +261,20 @@ const L = {};  // layout
 
 // ---------------------------------------------------------------- model
 
+// Plasticity is gated by mode, not just by the Learning button. During cue-driven
+// recall the network is retrieving rather than encoding, and a loop left free to
+// potentiate itself every lap runs away.
+function plastic() {
+  return learning && !(recalling && freezeOnRecall);
+}
+
 class Neuron {
   constructor(index) {
     this.index = index;
     this.note = NOTES[index];
     this.v = 0;
     this.yPost = 0;            // postsynaptic STDP trace
+    this.theta = 0;            // adaptation: this cell's own threshold offset
     this.refractoryUntil = -1;
     this.incoming = [];
     this.outgoing = [];
@@ -220,13 +287,14 @@ class Neuron {
     if (simTime < this.refractoryUntil) return false;
 
     // Potentiate every synapse that delivered a spike recently enough.
-    if (learning) {
+    if (plastic()) {
       for (const s of this.incoming) {
-        if (s.xPre > 1e-4) s.bump(P.aPlus * s.xPre);
+        if (s.active && s.xPre > 1e-4) s.bump(P.aPlus * s.xPre);
       }
     }
     this.yPost = 1;
     this.v = 0;
+    this.theta += P.adapt;
     this.refractoryUntil = simTime + P.refracMs / 1000;
     this.flash = 1;
     // Light the key on every spike, so a replay is visibly the network playing the
@@ -234,7 +302,20 @@ class Neuron {
     // nothing, which is worth seeing.
     this.keyFlash = 1;
     this.keyFlashSource = source;
-    for (const s of this.outgoing) s.inflight.push(simTime + s.delay());
+
+    // Feedback inhibition, delivered with no delay at all. A local interneuron acts
+    // within a millisecond or two while these axons carry hundreds, and it does not
+    // care whether the cell that recruited it was driven by the teacher or by the
+    // network. Getting this timing wrong is the whole difficulty: inhibition delayed
+    // by about the interval it regulates brakes the next note instead of its rivals.
+    if (P.lateralInh > 0) {
+      for (const o of neurons) {
+        if (o !== this && simTime >= o.refractoryUntil) {
+          o.v = Math.max(V_MIN, o.v - P.lateralInh);
+        }
+      }
+    }
+    for (const s of this.outgoing) if (s.active) s.launch();
 
     spikeLog.push({name: this.note.name, source: source, t: simTime});
     if (spikeLog.length > LOG_MAX) spikeLog.shift();
@@ -244,20 +325,37 @@ class Neuron {
 }
 
 class Synapse {
-  constructor(from, to) {
+  // `order` is how many notes back the line reaches: 1 carries the previous note,
+  // 2 the one before that, by taking twice as long in the axon.
+  constructor(from, to, order) {
     this.from = from;
     this.to = to;
+    this.order = order;
     this.w = 0;
+    this.res = 1;              // short-term depression: fraction of resource available
     this.xPre = 0;             // presynaptic STDP trace, at the synapse
-    this.inflight = [];        // arrival times of spikes still in the axon
+    this.inflight = [];        // {t, r}: arrival time, and the resource at launch
     this.glow = 0;
     this.glowSign = 1;
     this.geom = null;
   }
 
+  get active() {
+    return this.order === 1 || secondOrder;
+  }
+
   delay() {
-    if (!distanceDelay) return P.delayMs / 1000;
-    return Math.abs(this.to.x - this.from.x) / P.axonSpeed;
+    const base = distanceDelay
+      ? Math.abs(this.to.x - this.from.x) / P.axonSpeed
+      : P.delayMs / 1000;
+    return base * this.order;
+  }
+
+  // Each spike spends part of what the terminal has left, and the terminal refills
+  // over seconds. So a path that has just been used delivers less than a rested one.
+  launch() {
+    this.inflight.push({t: simTime + this.delay(), r: this.res});
+    this.res -= P.stpU * this.res;
   }
 
   bump(dw) {
@@ -276,12 +374,13 @@ class Synapse {
     }
   }
 
-  // A spike has reached the far end of the axon.
-  arrive() {
-    this.to.v += this.w * P.synGain;
+  // A spike has reached the far end of the axon, carrying the resource its terminal
+  // had when it left.
+  arrive(r) {
+    this.to.v = Math.max(V_MIN, this.to.v + this.w * P.synGain * r);
     this.xPre = 1;
     // Weaken if the target fired just before this spike showed up.
-    if (learning && this.to.yPost > 1e-4) {
+    if (plastic() && this.to.yPost > 1e-4) {
       this.bump(-P.aPlus * P.aRatio * this.to.yPost);
     }
   }
@@ -290,13 +389,22 @@ class Synapse {
 function buildNetwork() {
   neurons = NOTES.map((_, i) => new Neuron(i));
   synapses = [];
+  pairs = [];
   for (const a of neurons) {
     for (const b of neurons) {
       if (a === b) continue;
-      const s = new Synapse(a, b);
-      a.outgoing.push(s);
-      b.incoming.push(s);
-      synapses.push(s);
+      // Both delay lines of a pair share one arc on screen, so the picture does not
+      // double when the second-order lines are switched on.
+      const pair = {from: a, to: b, lines: [], geom: null};
+      for (const order of [1, 2]) {
+        const s = new Synapse(a, b, order);
+        s.pair = pair;
+        pair.lines.push(s);
+        a.outgoing.push(s);
+        b.incoming.push(s);
+        synapses.push(s);
+      }
+      pairs.push(pair);
     }
   }
 }
@@ -305,15 +413,18 @@ function resetWeights() {
   for (const s of synapses) {
     s.w = 0;
     s.xPre = 0;
+    s.res = 1;
     s.inflight.length = 0;
     s.glow = 0;
   }
   for (const n of neurons) {
     n.v = 0;
     n.yPost = 0;
+    n.theta = 0;
     n.refractoryUntil = -1;
   }
   spikeLog = [];
+  recalling = false;
   player.presentations = 0;
   changeUp = changeDown = rateUp = rateDown = 0;
   rateStart = simTime;
@@ -333,26 +444,54 @@ function step(dt) {
   simTime += dt;
   const memDecay = Math.exp(-dt / (P.tauMem / 1000));
   const traceDecay = Math.exp(-dt / (P.tauStdp / 1000));
+  const adaptDecay = Math.exp(-dt / (P.tauAdapt / 1000));
+  const resRecover = 1 - Math.exp(-dt / (P.tauRes / 1000));
+  // Noise is a random walk on the membrane, so its increments scale with the square
+  // root of the step and the jitter does not change with the integration resolution.
+  const noiseStep = P.noiseAmp * Math.sqrt(dt);
 
   for (const n of neurons) {
     n.v *= memDecay;
     n.yPost *= traceDecay;
+    n.theta *= adaptDecay;
+    if (noiseStep > 0 && simTime >= n.refractoryUntil) {
+      n.v = Math.max(V_MIN, n.v + noiseStep * randomGaussian());
+    }
   }
   for (const s of synapses) {
     s.xPre *= traceDecay;
-    if (s.inflight.length && s.inflight[0] <= simTime) {
-      while (s.inflight.length && s.inflight[0] <= simTime) {
-        s.inflight.shift();
-        s.arrive();
-      }
+    s.res += (1 - s.res) * resRecover;
+    if (!s.inflight.length) continue;
+    if (!s.active) { s.inflight.length = 0; continue; }
+    while (s.inflight.length && s.inflight[0].t <= simTime) {
+      s.arrive(s.inflight.shift().r);
     }
   }
 
   advancePlayer();
 
   if (!teacherOnly) {
-    for (const n of neurons) {
-      if (n.v >= P.threshold) n.spike('net');
+    // Resolve firing one cell at a time so that the winner's inhibition can veto its
+    // rivals inside the same step. Cells are ranked by how far each is past its OWN
+    // threshold, not by raw membrane voltage: two competitors fed by the same cell
+    // receive identical charge, so the race is decided by how excitable each of them
+    // is, and ranking by voltage alone would leave adaptation with no say in who wins.
+    // That matters because adaptation is the only mechanism here that can tell two
+    // branches apart. Vesicle depletion cannot: it is presynaptic, and the shared
+    // cell at a fork drains every one of its terminals whichever branch then fires.
+    //
+    // Firing zeroes a cell's membrane and starts its refractory period, so this can
+    // only go round once per cell and always terminates.
+    for (;;) {
+      let best = null, bestMargin = 0;
+      for (const n of neurons) {
+        if (simTime < n.refractoryUntil) continue;
+        const margin = n.v - (P.threshold + n.theta);
+        if (margin < 0) continue;
+        if (!best || margin > bestMargin) { best = n; bestMargin = margin; }
+      }
+      if (!best) break;
+      best.spike('net');
     }
   }
 }
@@ -396,6 +535,7 @@ function advancePlayer() {
 
 function startPlayer() {
   sequence = parseSequence(document.getElementById('seqInput').value);
+  recalling = false;
   player.playing = true;
   player.idx = 0;
   player.nextTime = simTime;
@@ -411,14 +551,36 @@ function stopPlayer() {
 }
 
 // Fire only the first note of the sequence and watch what the network does on its own.
+//
+// Adaptation and synaptic resource are deliberately NOT cleared here. They are what
+// the network remembers about the last few seconds, so a second cue arrives with the
+// path it just used still tired — which is what makes it pick the other tune.
 function cue() {
   stopPlayer();
   sequence = parseSequence(document.getElementById('seqInput').value);
   spikeLog = [];
+  recalling = true;
   for (const n of neurons) { n.v = 0; n.yPost = 0; n.refractoryUntil = -1; }
   for (const s of synapses) { s.inflight.length = 0; s.xPre = 0; }
+  rest(P.restMs / 1000);
   const first = sequence.find(i => i >= 0);
   if (first !== undefined) neurons[first].spike('key');
+}
+
+// Sit quiet for a while. Training leaves the cells adapted and the terminals spent —
+// often too spent to replay anything at all — and rest is when replay happens rather
+// than something that gets in its way. Recovery is exponential in both variables, so
+// the interval is applied in closed form instead of being simulated. It shrinks the
+// difference between a path just used and a path left alone without erasing it, which
+// is what still makes the two tunes take turns.
+function rest(seconds) {
+  if (seconds <= 0) return;
+  const thetaLeft = Math.exp(-seconds / (P.tauAdapt / 1000));
+  const resGained = 1 - Math.exp(-seconds / (P.tauRes / 1000));
+  for (const n of neurons) n.theta *= thetaLeft;
+  for (const s of synapses) s.res += (1 - s.res) * resGained;
+  simTime += seconds;
+  rateStart = simTime;
 }
 
 // ---------------------------------------------------------------- layout and geometry
@@ -447,7 +609,10 @@ function computeLayout() {
     n.x = L.cx + L.R * Math.cos(n.angle);
     n.y = L.cy + L.R * Math.sin(n.angle);
   }
-  for (const s of synapses) s.geom = arcGeometry(s);
+  for (const p of pairs) {
+    p.geom = arcGeometry(p);
+    for (const s of p.lines) s.geom = p.geom;
+  }
 }
 
 // Chords across the interior, pulled toward the centre so that arcs between distant
@@ -455,10 +620,10 @@ function computeLayout() {
 // An axon leaves its cell on the clockwise side and arrives on the anticlockwise side,
 // which keeps a synapse clear of its own reverse and shows at a glance which end is
 // which.
-function arcGeometry(s) {
+function arcGeometry(pair) {
   const step = Math.PI * 2 / NOTES.length;
   const half = NOTES.length / 2;
-  let span = Math.abs(s.to.index - s.from.index);
+  let span = Math.abs(pair.to.index - pair.from.index);
   if (span > half) span = NOTES.length - span;
 
   // A near chord has to be pulled a long way in to bow at all, one across the circle
@@ -467,12 +632,13 @@ function arcGeometry(s) {
   const port = step * (PORT_MIN + (PORT_MAX - PORT_MIN) * f);
   const cr = L.R * (BOW_NEAR + (BOW_FAR - BOW_NEAR) * f);
 
-  const c1 = [L.cx + cr * Math.cos(s.from.angle + port), L.cy + cr * Math.sin(s.from.angle + port)];
-  const c2 = [L.cx + cr * Math.cos(s.to.angle - port), L.cy + cr * Math.sin(s.to.angle - port)];
+  const a = pair.from, b = pair.to;
+  const c1 = [L.cx + cr * Math.cos(a.angle + port), L.cy + cr * Math.sin(a.angle + port)];
+  const c2 = [L.cx + cr * Math.cos(b.angle - port), L.cy + cr * Math.sin(b.angle - port)];
 
   // Start and end on the rim of each neuron, along the curve's tangent there.
-  const p0 = offsetAlong(s.from.x, s.from.y, c1[0] - s.from.x, c1[1] - s.from.y, L.radius + 2);
-  const p3 = offsetAlong(s.to.x, s.to.y, c2[0] - s.to.x, c2[1] - s.to.y, L.radius + 6);
+  const p0 = offsetAlong(a.x, a.y, c1[0] - a.x, c1[1] - a.y, L.radius + 2);
+  const p3 = offsetAlong(b.x, b.y, c2[0] - b.x, c2[1] - b.y, L.radius + 6);
 
   const samples = [];
   const N = 22;
@@ -605,21 +771,44 @@ function drawRing() {
   }
 }
 
-function drawArcs() {
-  // A synapse that just changed is drawn last so its flash is never buried.
-  const key = s => Math.abs(s.w) + 2 * s.glow;
-  const order = synapses.slice().sort((a, b) => key(a) - key(b));
-  noFill();
-  for (const s of order) {
-    if (s === hovered) continue;
-    strokeArc(s, false);
+// A pair may carry two delay lines, but it is one object on screen. The stronger line
+// decides how the arc is drawn and the brighter one decides its flash, so switching
+// the second-order lines on adds information to the arcs rather than more arcs.
+function dominant(pair) {
+  let best = null;
+  for (const s of pair.lines) {
+    if (!s.active) continue;
+    if (!best || Math.abs(s.w) > Math.abs(best.w)) best = s;
   }
-  if (hovered) strokeArc(hovered, true);
-  for (const s of order) if (s.glow > 0.25) labelChange(s);
+  return best || pair.lines[0];
 }
 
-function strokeArc(s, isHover) {
-  const g = s.geom;
+function brightest(pair) {
+  let best = null;
+  for (const s of pair.lines) {
+    if (!s.active) continue;
+    if (!best || s.glow > best.glow) best = s;
+  }
+  return best || pair.lines[0];
+}
+
+function drawArcs() {
+  // A pair that just changed is drawn last so its flash is never buried.
+  const key = p => Math.abs(dominant(p).w) + 2 * brightest(p).glow;
+  const order = pairs.slice().sort((a, b) => key(a) - key(b));
+  noFill();
+  for (const p of order) {
+    if (p === hovered) continue;
+    strokeArc(p, false);
+  }
+  if (hovered) strokeArc(hovered, true);
+  for (const p of order) if (brightest(p).glow > 0.25) labelChange(p);
+}
+
+function strokeArc(pair, isHover) {
+  const g = pair.geom;
+  const s = dominant(pair);
+  const flash = brightest(pair);
   const mag = Math.abs(s.w);
   let col;
   if (mag < NEAR_ZERO) {
@@ -631,17 +820,17 @@ function strokeArc(s, isHover) {
   }
   let weight = (isHover ? 1.5 : 0) + (mag < NEAR_ZERO ? 1 : 1 + 3.5 * Math.min(1, mag));
 
-  if (s.glow > 0.01) {
+  if (flash.glow > 0.01) {
     // Two-pass bloom behind the arc, then swell and wash out the arc itself.
-    const f = changeColor(s);
+    const f = changeColor(flash);
     noFill();
     for (const pass of [[26, 50], [11, 105]]) {
-      stroke(red(f), green(f), blue(f), pass[1] * s.glow);
-      strokeWeight(weight + pass[0] * s.glow);
+      stroke(red(f), green(f), blue(f), pass[1] * flash.glow);
+      strokeWeight(weight + pass[0] * flash.glow);
       bezier(g.p0[0], g.p0[1], g.c1[0], g.c1[1], g.c2[0], g.c2[1], g.p3[0], g.p3[1]);
     }
-    col = lerpColor(col, f, Math.min(1, s.glow * 1.5));
-    weight += 6 * s.glow;
+    col = lerpColor(col, f, Math.min(1, flash.glow * 1.5));
+    weight += 6 * flash.glow;
   }
   if (isHover) col = lerpColor(col, color(255, 255, 255), 0.5);
 
@@ -669,8 +858,9 @@ function changeColor(s) {
 }
 
 // The weight it just became, set beside the belly of the arc.
-function labelChange(s) {
-  const g = s.geom;
+function labelChange(pair) {
+  const s = brightest(pair);
+  const g = pair.geom;
   const [ax, ay] = g.samples[10];
   const [bx, by] = g.samples[12];
   const m = Math.hypot(bx - ax, by - ay) || 1;
@@ -690,14 +880,17 @@ function drawTravellingSpikes() {
   for (const s of synapses) {
     if (!s.inflight.length) continue;
     const d = s.delay();
-    for (const arrival of s.inflight) {
-      const t = Math.max(0, Math.min(1, 1 - (arrival - simTime) / d));
+    for (const f of s.inflight) {
+      const t = Math.max(0, Math.min(1, 1 - (f.t - simTime) / d));
       const [x, y] = pointOn(s.geom, t);
       const mag = Math.abs(s.w);
+      // The dot shrinks with the resource its terminal had left, so a path being
+      // worked hard visibly thins out before it stops driving its target.
+      const size = (5 + 5 * Math.min(1, mag)) * (s.order === 1 ? 1 : 0.62) * (0.45 + 0.55 * f.r);
       if (s.w > NEAR_ZERO) fill(150, 255, 190, 235);
       else if (s.w < -NEAR_ZERO) fill(255, 160, 150, 235);
       else fill(210, 225, 245, 190);
-      circle(x, y, 5 + 5 * Math.min(1, mag));
+      circle(x, y, size);
     }
   }
 }
@@ -727,6 +920,16 @@ function drawNeurons() {
     stroke(n.note.black ? color(120, 134, 152) : color(170, 186, 206));
     strokeWeight(1.5);
     circle(n.x, n.y, r * 2);
+
+    // Adaptation, as an arc outside the cell: how much of its own threshold the cell
+    // has piled up by firing. A full turn means it needs twice the usual charge.
+    if (n.theta > 0.01) {
+      const frac = Math.min(1, n.theta / P.threshold);
+      stroke(235, 150, 90, 210);
+      strokeWeight(2.5);
+      noFill();
+      arc(n.x, n.y, r * 2 + 9, r * 2 + 9, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    }
 
     noStroke();
     fill(n.flash > 0.4 ? color(20, 26, 34) : color(190, 205, 224));
@@ -771,21 +974,26 @@ function drawOverlay() {
   fill(90, 104, 122);
   textAlign(RIGHT, TOP);
   const ratio = (P.delayMs / T);
-  text(`delay / T = ${ratio.toFixed(2)}     presentations ${player.presentations}     ${frameRate().toFixed(0)} fps`,
+  const mode = recalling && freezeOnRecall ? 'recall (frozen)' : 'encode';
+  text(`delay / T = ${ratio.toFixed(2)}     ${mode}     presentations ${player.presentations}     ${frameRate().toFixed(0)} fps`,
        width - 16, 20);
 }
 
 function drawTooltip() {
   if (!hovered) return;
-  const s = hovered;
-  const label = `${s.from.note.name} \u2192 ${s.to.note.name}`;
-  const wStr = (s.w >= 0 ? '+' : '\u2212') + Math.abs(s.w).toFixed(3);
-  const dStr = `${(s.delay() * 1000).toFixed(0)} ms`;
+  const head = `${hovered.from.note.name} \u2192 ${hovered.to.note.name}`;
+  const lines = [];
+  for (const s of hovered.lines) {
+    if (!s.active) continue;
+    const wStr = (s.w >= 0 ? '+' : '\u2212') + Math.abs(s.w).toFixed(3);
+    const back = s.order === 1 ? 'one note back ' : 'two notes back';
+    lines.push(`${back}  w ${wStr}   ${(s.delay() * 1000).toFixed(0)} ms   res ${s.res.toFixed(2)}`);
+  }
+
   textSize(12.5);
-  const lines = [`${label}    w = ${wStr}`, `delay ${dStr}`];
-  let w = 0;
+  let w = textWidth(head);
   for (const l of lines) w = Math.max(w, textWidth(l));
-  const bw = w + 18, bh = 42;
+  const bw = w + 18, bh = 26 + lines.length * 16;
   let bx = mouseX + 14, by = mouseY - bh - 8;
   if (bx + bw > width) bx = mouseX - bw - 14;
   if (by < 0) by = mouseY + 14;
@@ -799,19 +1007,19 @@ function drawTooltip() {
   noStroke();
   textAlign(LEFT, TOP);
   fill(232, 238, 246);
-  text(lines[0], bx + 9, by + 8);
+  text(head, bx + 9, by + 8);
   fill(130, 146, 166);
-  text(lines[1], bx + 9, by + 24);
+  lines.forEach((l, i) => text(l, bx + 9, by + 24 + i * 16));
 }
 
 function updateHover() {
   hovered = null;
   if (mouseX < 0 || mouseY < 0 || mouseX > width || mouseY > height) return;
   let best = 9 * 9;
-  for (const s of synapses) {
-    for (const p of s.geom.samples) {
+  for (const pair of pairs) {
+    for (const p of pair.geom.samples) {
       const d = (p[0] - mouseX) * (p[0] - mouseX) + (p[1] - mouseY) * (p[1] - mouseY);
-      if (d < best) { best = d; hovered = s; }
+      if (d < best) { best = d; hovered = pair; }
     }
   }
 }
@@ -821,7 +1029,7 @@ function updateHover() {
 function mousePressed() {
   for (const n of neurons) {
     if (Math.hypot(mouseX - n.x, mouseY - n.y) < L.radius + 3) {
-      n.spike('key');
+      pressNote(n.index);
       return;
     }
   }
@@ -840,7 +1048,10 @@ function mousePressed() {
   }
 }
 
+// Playing by hand is input from outside, so it puts the network back into encoding
+// mode the way the teacher does.
 function pressNote(i) {
+  recalling = false;
   neurons[i].spike('key');
 }
 
@@ -884,6 +1095,7 @@ function buildControls() {
     const show = () => { out.textContent = Number(P[def.key]).toFixed(digits) + (def.unit || ''); };
     slider.addEventListener('input', () => { P[def.key] = parseFloat(slider.value); show(); });
     show();
+    paramUI[def.key] = {slider, show};
     host.appendChild(row);
   }
 
@@ -893,6 +1105,16 @@ function buildControls() {
     document.getElementById('row-axonSpeed').classList.toggle('off', !v);
   });
   addCheck(host, 'Teacher only (no synaptic firing)', false, (v) => { teacherOnly = v; });
+  addCheck(host, 'Freeze learning during recall', true, (v) => { freezeOnRecall = v; },
+    'A cue retrieves rather than encodes. Without this a loop potentiates itself every lap.');
+  addCheck(host, 'Second-order delay lines', false, (v) => {
+    secondOrder = v;
+    // A second line is only worth having if one line on its own cannot fire the
+    // target, so the successor is chosen by a coincidence of the last two notes.
+    // Move the threshold with the toggle, since the demonstration silently fails
+    // otherwise and the slider moving makes the requirement visible.
+    setParam('threshold', v ? 1.6 : 1.0);
+  }, 'A second axon per pair, twice as slow, carrying the note before last. Raises the firing threshold so a successor needs both.');
   document.getElementById('row-axonSpeed').classList.add('off');
 
   document.getElementById('btnPlay').onclick = () => player.playing ? stopPlayer() : startPlayer();
@@ -913,12 +1135,29 @@ function buildControls() {
   sequence = parseSequence(document.getElementById('seqInput').value);
 }
 
-function addCheck(host, label, initial, onChange) {
+function addCheck(host, label, initial, onChange, note) {
   const el = document.createElement('label');
   el.className = 'check';
   el.innerHTML = `<input type="checkbox"${initial ? ' checked' : ''}><span>${label}</span>`;
   el.querySelector('input').addEventListener('change', (e) => onChange(e.target.checked));
   host.appendChild(el);
+  if (note) {
+    const n = document.createElement('div');
+    n.className = 'note';
+    n.style.margin = '-4px 0 10px 24px';
+    n.textContent = note;
+    host.appendChild(n);
+  }
+}
+
+// Move a slider from code, so a toggle that only makes sense at a particular setting
+// can take the setting with it and show that it has.
+function setParam(key, value) {
+  const ui = paramUI[key];
+  if (!ui) return;
+  P[key] = value;
+  ui.slider.value = value;
+  ui.show();
 }
 
 let lastReadout = 0;
@@ -926,26 +1165,42 @@ function refreshReadout() {
   if (millis() - lastReadout < 200) return;
   lastReadout = millis();
 
-  const pairs = new Set();
+  // A line carries the sequence if it spans exactly as many notes as its order, so
+  // the second-order lines are scored against the transitions they could actually
+  // learn rather than counted as noise.
+  const wanted = new Set();
   const notes = sequence.filter(i => i >= 0);
-  for (let i = 0; i + 1 < notes.length; i++) pairs.add(notes[i] + '-' + notes[i + 1]);
+  for (let i = 0; i + 1 < notes.length; i++) wanted.add('1:' + notes[i] + '-' + notes[i + 1]);
+  for (let i = 0; i + 2 < notes.length; i++) wanted.add('2:' + notes[i] + '-' + notes[i + 2]);
 
   let seqSum = 0, seqN = 0, otherSum = 0, otherN = 0, seqMin = Infinity;
   for (const s of synapses) {
-    const isSeq = pairs.has(s.from.index + '-' + s.to.index);
-    if (isSeq) { seqSum += s.w; seqN++; seqMin = Math.min(seqMin, s.w); }
-    else { otherSum += Math.abs(s.w); otherN++; }
+    if (!s.active) continue;
+    if (wanted.has(s.order + ':' + s.from.index + '-' + s.to.index)) {
+      seqSum += s.w; seqN++; seqMin = Math.min(seqMin, s.w);
+    } else {
+      otherSum += Math.abs(s.w); otherN++;
+    }
   }
   const meanSeq = seqN ? seqSum / seqN : 0;
   const meanOther = otherN ? otherSum / otherN : 0;
   const sel = meanOther > 1e-4 ? (meanSeq / meanOther).toFixed(1) + '\u00d7' : '\u2014';
+
+  const meanTheta = neurons.reduce((a, n) => a + n.theta, 0) / neurons.length;
+  let resSum = 0, resN = 0;
+  for (const s of synapses) {
+    if (s.active && Math.abs(s.w) >= NEAR_ZERO) { resSum += s.res; resN++; }
+  }
+  const meanRes = resN ? resSum / resN : 1;
 
   document.getElementById('readout').innerHTML =
     `presentations   ${player.presentations}<br>` +
     `sequence w      <b>${meanSeq.toFixed(3)}</b> (min ${seqN ? seqMin.toFixed(3) : '0'})<br>` +
     `all other |w|   <i>${meanOther.toFixed(3)}</i><br>` +
     `selectivity     ${sel}<br>` +
-    `changes/s       <b>${rateUp.toFixed(1)}\u2191</b> <i>${rateDown.toFixed(1)}\u2193</i>`;
+    `changes/s       <b>${rateUp.toFixed(1)}\u2191</b> <i>${rateDown.toFixed(1)}\u2193</i><br>` +
+    `adaptation \u03b8    <i>${meanTheta.toFixed(3)}</i><br>` +
+    `resource        <i>${meanRes.toFixed(2)}</i> on learned paths`;
 }
 
 // ---------------------------------------------------------------- sound

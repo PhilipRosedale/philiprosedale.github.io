@@ -890,3 +890,112 @@ footer {
         top: 10px;
     }
 } 
+/* Navigation wrapping (added with Recent section) */
+nav ul {
+    flex-wrap: wrap;
+}
+
+/* Experiments grid */
+.experiment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 2rem;
+}
+
+.experiment-card {
+    background-color: var(--light-gray);
+    padding: 1.5rem;
+    border-radius: 6px;
+    transition: var(--transition);
+    height: 100%;
+}
+
+.experiment-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+}
+
+.experiment-card h3 {
+    font-size: 1.3rem;
+    margin-bottom: 0.25rem;
+}
+
+.experiment-card h3 a {
+    color: var(--accent-color);
+}
+
+.experiment-card h3 a:hover {
+    color: var(--primary-color);
+}
+
+.experiment-card .item-date {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--dark-gray);
+    margin-bottom: 0.75rem;
+}
+
+/* Recent */
+.recent-list {
+    border-top: 1px solid var(--medium-gray);
+}
+
+.recent-item {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--medium-gray);
+    text-decoration: none;
+    color: inherit;
+    transition: var(--transition);
+}
+
+.recent-item:hover .recent-title {
+    color: var(--primary-color);
+}
+
+.recent-tag {
+    flex-shrink: 0;
+    width: 6.5rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.recent-title {
+    flex-grow: 1;
+    font-weight: 500;
+    transition: var(--transition);
+}
+
+.recent-date {
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    color: var(--dark-gray);
+    white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+    .recent-item {
+        flex-wrap: wrap;
+        gap: 0.25rem 0.75rem;
+    }
+    .recent-tag { width: auto; }
+    .recent-title { flex-basis: 100%; order: 3; }
+}
+
+/* Talk and podcast card dates */
+.video-card .item-date {
+    display: block;
+    margin: -0.5rem 1rem 0.6rem;
+    font-size: 0.85rem;
+    color: var(--dark-gray);
+}
+
+.video-thumbnail i {
+    color: var(--dark-gray);
+    opacity: 0.45;
+}

@@ -999,3 +999,103 @@ nav ul {
     color: var(--dark-gray);
     opacity: 0.45;
 }
+
+/* ---- Mobile navigation (hamburger) ---- */
+.nav-toggle {
+    display: none;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    padding: 0.95rem 1rem;
+    background: none;
+    border: none;
+    color: var(--white);
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+
+.nav-toggle-bars {
+    display: inline-flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 20px;
+    height: 14px;
+}
+
+.nav-toggle-bars span {
+    display: block;
+    height: 2px;
+    width: 100%;
+    background-color: var(--white);
+    border-radius: 2px;
+    transition: var(--transition);
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars span:nth-child(1) {
+    transform: translateY(6px) rotate(45deg);
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars span:nth-child(2) {
+    opacity: 0;
+}
+
+.nav-toggle[aria-expanded="true"] .nav-toggle-bars span:nth-child(3) {
+    transform: translateY(-6px) rotate(-45deg);
+}
+
+@media (max-width: 768px) {
+    .nav-toggle {
+        display: flex;
+    }
+
+    nav ul {
+        display: none;
+        flex-direction: column;
+        padding-bottom: 0.4rem;
+    }
+
+    nav ul.nav-open {
+        display: flex;
+    }
+
+    nav a {
+        padding: 0.8rem 1rem;
+    }
+
+    /* Stop the header and portrait from eating the first two screens */
+    header {
+        padding: 1.4rem 0;
+    }
+
+    header h1 {
+        font-size: 1.9rem;
+    }
+
+    main {
+        padding: 1.5rem 0;
+    }
+
+    .profile-image {
+        flex: 0 0 auto;
+        max-width: 190px;
+    }
+}
+
+@media (max-width: 768px) {
+    .profile-subtitle {
+        font-size: 1rem;
+        margin-bottom: 0.4rem;
+    }
+
+    .profile-text h2 {
+        font-size: 1.45rem;
+        line-height: 1.3;
+    }
+
+    .social-links {
+        margin-top: 0.9rem;
+    }
+}

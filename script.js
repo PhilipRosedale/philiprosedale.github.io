@@ -251,3 +251,22 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
     document.head.appendChild(playButtonStyle);
 }); 
+// Mobile nav toggle
+document.addEventListener('DOMContentLoaded', function () {
+    var toggle = document.getElementById('nav-toggle');
+    var list = document.getElementById('nav-list');
+    if (!toggle || !list) return;
+
+    toggle.addEventListener('click', function () {
+        var open = list.classList.toggle('nav-open');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    // Tapping a section closes the menu so you land on the content
+    list.addEventListener('click', function (e) {
+        if (e.target.tagName === 'A') {
+            list.classList.remove('nav-open');
+            toggle.setAttribute('aria-expanded', 'false');
+        }
+    });
+});

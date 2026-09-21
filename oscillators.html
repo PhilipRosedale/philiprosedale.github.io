@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Camera Oscillators</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #05070a;
+  }
+  body {
+    display: grid;
+    place-items: center;
+  }
+  #view {
+    display: block;
+    width: min(100vw, 100vh);
+    height: min(100vw, 100vh);
+    background: #05070a;
+  }
+  #panel {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 2;
+    width: min(330px, calc(100vw - 28px));
+    padding: 13px 15px 12px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    background: rgba(5, 8, 13, 0.76);
+    box-shadow: 0 10px 32px rgba(0,0,0,0.28);
+    backdrop-filter: blur(12px);
+    color: rgba(255,255,255,0.86);
+  }
+  h1 {
+    margin: 0 0 3px;
+    font-size: 16px;
+    font-weight: 580;
+    letter-spacing: 0.02em;
+  }
+  #status {
+    min-height: 16px;
+    margin: 0 0 10px;
+    color: rgba(255,255,255,0.52);
+    font-size: 11px;
+  }
+  .control {
+    display: grid;
+    grid-template-columns: 82px 1fr 48px;
+    align-items: center;
+    gap: 8px;
+    margin: 7px 0;
+    font-size: 11px;
+  }
+  .control output {
+    text-align: right;
+    color: rgba(255,255,255,0.58);
+    font-variant-numeric: tabular-nums;
+  }
+  input[type="range"] {
+    width: 100%;
+    height: 3px;
+    accent-color: #72e6d1;
+  }
+  select, button {
+    border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.08);
+    color: inherit;
+    font: inherit;
+  }
+  select { padding: 3px 5px; }
+  .buttons {
+    display: flex;
+    gap: 7px;
+    margin-top: 11px;
+  }
+  button {
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,0.14); }
+  #cameraButton { color: #93f4df; }
+  #legend {
+    position: fixed;
+    right: 14px;
+    bottom: 13px;
+    color: rgba(255,255,255,0.46);
+    font-size: 10px;
+    text-shadow: 0 1px 3px #000;
+    pointer-events: none;
+  }
+  @media (max-width: 600px) {
+    #panel { padding: 10px 12px; }
+    .control { margin: 5px 0; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<video id="camera" muted playsinline hidden></video>
+<canvas id="sampler" hidden></canvas>
+
+<section id="panel">
+  <h1>Camera Oscillators</h1>
+  <p id="status">Camera input is local and never leaves this page.</p>
+
+  <label class="control">
+    <span>Grid</span>
+    <select id="gridSize">
+      <option value="32">32 × 32</option>
+      <option value="48">48 × 48</option>
+      <option value="64" selected>64 × 64</option>
+      <option value="96">96 × 96</option>
+    </select>
+    <output id="cellCount">4096</output>
+  </label>
+  <label class="control">
+    <span>Bright =</span>
+    <input id="maxHz" type="range" min="0.5" max="10" value="10" step="0.5">
+    <output id="maxHzValue">10 Hz</output>
+  </label>
+  <label class="control">
+    <span>Input light</span>
+    <input id="manualBrightness" type="range" min="0" max="1" value="0" step="0.01">
+    <output id="manualBrightnessValue">0%</output>
+  </label>
+  <label class="control">
+    <span>Input hue</span>
+    <input id="manualHue" type="range" min="0" max="360" value="0" step="1">
+    <output id="manualHueValue">0°</output>
+  </label>
+  <label class="control">
+    <span>Follow</span>
+    <input id="follow" type="range" min="0.1" max="8" value="2.2" step="0.1">
+    <output id="followValue">2.2/s</output>
+  </label>
+  <label class="control">
+    <span>Video</span>
+    <input id="videoOpacity" type="range" min="0" max="1" value="0.36" step="0.01">
+    <output id="videoOpacityValue">36%</output>
+  </label>
+  <div class="buttons">
+    <button id="cameraButton">Start camera</button>
+    <button id="pauseButton">Pause</button>
+    <button id="randomizeButton">Scatter</button>
+  </div>
+</section>
+<div id="legend">brightness → frequency · hue → phase offset</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const TAU = Math.PI * 2;
+  const SAMPLE_HZ = 15;
+  const canvas = document.getElementById('view');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const video = document.getElementById('camera');
+  const sampler = document.getElementById('sampler');
+  const sampleCtx = sampler.getContext('2d', { willReadFrequently: true });
+  const status = document.getElementById('status');
+  const gridSize = document.getElementById('gridSize');
+  const cellCount = document.getElementById('cellCount');
+  const maxHz = document.getElementById('maxHz');
+  const maxHzValue = document.getElementById('maxHzValue');
+  const manualBrightness = document.getElementById('manualBrightness');
+  const manualBrightnessValue = document.getElementById('manualBrightnessValue');
+  const manualHue = document.getElementById('manualHue');
+  const manualHueValue = document.getElementById('manualHueValue');
+  const follow = document.getElementById('follow');
+  const followValue = document.getElementById('followValue');
+  const videoOpacity = document.getElementById('videoOpacity');
+  const videoOpacityValue = document.getElementById('videoOpacityValue');
+  const cameraButton = document.getElementById('cameraButton');
+  const pauseButton = document.getElementById('pauseButton');
+  const randomizeButton = document.getElementById('randomizeButton');
+
+  let size = 64;
+  let phaseOffsets;
+  let frequencies;
+  let targetOffsets;
+  let targetFrequencies;
+  let targetSaturations;
+  let cameraReady = false;
+  let paused = false;
+  let simulationTime = 0;
+  let lastFrame = performance.now();
+  let lastSample = -Infinity;
+  let sourceRect = { x: 0, y: 0, size: 1 };
+
+  function makeField() {
+    size = Number(gridSize.value);
+    const count = size * size;
+    phaseOffsets = new Float32Array(count);
+    frequencies = new Float32Array(count);
+    targetOffsets = new Float32Array(count);
+    targetFrequencies = new Float32Array(count);
+    targetSaturations = new Float32Array(count);
+    sampler.width = size;
+    sampler.height = size;
+    cellCount.value = count.toLocaleString();
+    scatter();
+    if (!cameraReady) setManualTargets();
+  }
+
+  function scatter() {
+    for (let i = 0; i < phaseOffsets.length; i++) {
+      const offset = Math.random() * TAU;
+      const frequency = 0.15 + Math.random() * 1.6;
+      phaseOffsets[i] = offset;
+      frequencies[i] = frequency;
+    }
+  }
+
+  function setManualTargets() {
+    if (cameraReady || !targetOffsets) return;
+    const brightness = Number(manualBrightness.value);
+    const offset = Number(manualHue.value) / 360 * TAU;
+    const frequency = brightness * Number(maxHz.value);
+    targetOffsets.fill(offset);
+    targetFrequencies.fill(frequency);
+    targetSaturations.fill(brightness > 0 ? 0.9 : 0);
+    status.textContent = brightness === 0
+      ? 'Camera off: every oscillator is chasing black (0 Hz, offset 0).'
+      : `Camera off: every oscillator is chasing ${frequency.toFixed(1)} Hz with a ${manualHue.value}° offset.`;
+  }
+
+  function resize() {
+    const cssSize = Math.min(innerWidth, innerHeight);
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const pixels = Math.max(1, Math.round(cssSize * dpr));
+    if (canvas.width !== pixels || canvas.height !== pixels) {
+      canvas.width = pixels;
+      canvas.height = pixels;
+    }
+  }
+
+  function getSquareCrop() {
+    const side = Math.min(video.videoWidth, video.videoHeight);
+    return {
+      x: (video.videoWidth - side) * 0.5,
+      y: (video.videoHeight - side) * 0.5,
+      size: side
+    };
+  }
+
+  function rgbToHue(r, g, b) {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let hue = 0;
+    if (delta > 0) {
+      if (max === r) hue = ((g - b) / delta) % 6;
+      else if (max === g) hue = (b - r) / delta + 2;
+      else hue = (r - g) / delta + 4;
+      hue /= 6;
+      if (hue < 0) hue += 1;
+    }
+    return { hue, saturation: max === 0 ? 0 : delta / max };
+  }
+
+  function sampleCamera(now) {
+    if (!cameraReady || now - lastSample < 1000 / SAMPLE_HZ) return;
+    lastSample = now;
+    sourceRect = getSquareCrop();
+
+    sampleCtx.save();
+    sampleCtx.setTransform(-1, 0, 0, 1, size, 0);
+    sampleCtx.drawImage(
+      video,
+      sourceRect.x, sourceRect.y, sourceRect.size, sourceRect.size,
+      0, 0, size, size
+    );
+    sampleCtx.restore();
+
+    const pixels = sampleCtx.getImageData(0, 0, size, size).data;
+    const brightestHz = Number(maxHz.value);
+    for (let i = 0; i < phaseOffsets.length; i++) {
+      const p = i * 4;
+      const r = pixels[p] / 255;
+      const g = pixels[p + 1] / 255;
+      const b = pixels[p + 2] / 255;
+      // Perceptual luminance: darkness is still, full white reaches max Hz.
+      const brightness = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const color = rgbToHue(r, g, b);
+      targetFrequencies[i] = brightness * brightestHz;
+      targetOffsets[i] = color.hue * TAU;
+      targetSaturations[i] = color.saturation;
+    }
+  }
+
+  function shortestAngle(from, to) {
+    return ((to - from + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  }
+
+  function update(dt) {
+    if (paused) return;
+    const amount = 1 - Math.exp(-Number(follow.value) * dt);
+    for (let i = 0; i < phaseOffsets.length; i++) {
+      const oldFrequency = frequencies[i];
+      const newFrequency = oldFrequency + (targetFrequencies[i] - oldFrequency) * amount;
+      frequencies[i] = newFrequency;
+      // Rebase the offset when frequency changes so the hand stays continuous.
+      phaseOffsets[i] += (oldFrequency - newFrequency) * TAU * simulationTime;
+      phaseOffsets[i] = ((phaseOffsets[i] % TAU) + TAU) % TAU;
+      // Hue controls an offset from a shared clock; it does not fight rotation.
+      phaseOffsets[i] += shortestAngle(phaseOffsets[i], targetOffsets[i]) * amount * 0.22;
+      phaseOffsets[i] = ((phaseOffsets[i] % TAU) + TAU) % TAU;
+    }
+    simulationTime += dt;
+  }
+
+  function drawVideo(width) {
+    if (!cameraReady || Number(videoOpacity.value) <= 0) {
+      ctx.fillStyle = '#05070a';
+      ctx.fillRect(0, 0, width, width);
+      return;
+    }
+    ctx.save();
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+    ctx.globalAlpha = Number(videoOpacity.value);
+    ctx.drawImage(
+      video,
+      sourceRect.x, sourceRect.y, sourceRect.size, sourceRect.size,
+      0, 0, width, width
+    );
+    ctx.restore();
+    ctx.fillStyle = 'rgba(2, 6, 10, 0.26)';
+    ctx.fillRect(0, 0, width, width);
+  }
+
+  function render() {
+    const width = canvas.width;
+    const cell = width / size;
+    const hand = cell * 0.36;
+    const radius = cell * 0.39;
+    drawVideo(width);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.lineCap = 'round';
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = y * size + x;
+        const phase = (simulationTime * frequencies[i] * TAU + phaseOffsets[i]) % TAU;
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.5) * cell;
+        const hue = (phase / TAU) * 360;
+        const saturation = 48 + targetSaturations[i] * 45;
+
+        if (cell >= 8) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, TAU);
+          ctx.strokeStyle = `hsla(${hue}, ${saturation}%, 62%, 0.17)`;
+          ctx.lineWidth = Math.max(0.65, cell * 0.045);
+          ctx.stroke();
+        }
+
+        const ex = cx + Math.sin(phase) * hand;
+        const ey = cy - Math.cos(phase) * hand;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(ex, ey);
+        ctx.strokeStyle = `hsla(${hue}, ${saturation}%, 73%, 0.84)`;
+        ctx.lineWidth = Math.max(0.75, cell * 0.105);
+        ctx.stroke();
+
+        if (cell >= 12) {
+          ctx.beginPath();
+          ctx.arc(ex, ey, Math.max(0.7, cell * 0.065), 0, TAU);
+          ctx.fillStyle = `hsla(${hue}, 95%, 82%, 0.9)`;
+          ctx.fill();
+        }
+      }
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let n = 1; n < size; n++) {
+      const p = Math.round(n * cell) + 0.5;
+      ctx.moveTo(p, 0);
+      ctx.lineTo(p, width);
+      ctx.moveTo(0, p);
+      ctx.lineTo(width, p);
+    }
+    ctx.stroke();
+  }
+
+  async function startCamera() {
+    if (cameraReady) {
+      for (const track of video.srcObject?.getTracks() || []) track.stop();
+      video.srcObject = null;
+      cameraReady = false;
+      cameraButton.textContent = 'Start camera';
+      setManualTargets();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      status.textContent = 'Camera access requires HTTPS or localhost.';
+      return;
+    }
+    cameraButton.disabled = true;
+    status.textContent = 'Waiting for camera permission…';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 1280 }, facingMode: 'user' },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      cameraReady = true;
+      sourceRect = getSquareCrop();
+      cameraButton.disabled = false;
+      cameraButton.textContent = 'Stop camera';
+      status.textContent = 'Live: brightness sets speed; hue attracts phase offset.';
+    } catch (error) {
+      cameraButton.disabled = false;
+      status.textContent = `Camera unavailable: ${error.message}`;
+    }
+  }
+
+  function bindRange(input, output, format) {
+    const refresh = () => { output.value = format(Number(input.value)); };
+    input.addEventListener('input', refresh);
+    refresh();
+  }
+
+  gridSize.addEventListener('change', makeField);
+  cameraButton.addEventListener('click', startCamera);
+  randomizeButton.addEventListener('click', () => {
+    scatter();
+    if (!cameraReady) setManualTargets();
+  });
+  manualBrightness.addEventListener('input', setManualTargets);
+  manualHue.addEventListener('input', setManualTargets);
+  maxHz.addEventListener('input', setManualTargets);
+  pauseButton.addEventListener('click', () => {
+    paused = !paused;
+    pauseButton.textContent = paused ? 'Resume' : 'Pause';
+  });
+  bindRange(maxHz, maxHzValue, value => `${Number.isInteger(value) ? value : value.toFixed(1)} Hz`);
+  bindRange(manualBrightness, manualBrightnessValue, value => `${Math.round(value * 100)}%`);
+  bindRange(manualHue, manualHueValue, value => `${Math.round(value)}°`);
+  bindRange(follow, followValue, value => `${value.toFixed(1)}/s`);
+  bindRange(videoOpacity, videoOpacityValue, value => `${Math.round(value * 100)}%`);
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastFrame) / 1000);
+    lastFrame = now;
+    resize();
+    sampleCamera(now);
+    update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  makeField();
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

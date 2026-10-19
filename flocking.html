@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flocking</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #07080d;
+    color: #e8e8ec;
+    font-family: Inter, Arial, Helvetica, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  .panel {
+    position: absolute;
+    background: rgba(16, 18, 24, 0.82);
+    border: 1px solid #2c2e38;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    line-height: 1.45;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    user-select: none;
+  }
+  #info { top: 12px; left: 12px; max-width: 320px; }
+  #info h2 { margin: 0 0 6px 0; font-size: 15px; font-weight: 600; }
+  #info .hint { color: #9aa; }
+  #info .stat { font-family: ui-monospace, Menlo, Consolas, monospace; color: #cfd8ff; }
+  #error { color: #ffb4a8; white-space: pre-wrap; margin-top: 8px; }
+
+  #sliders { top: 12px; right: 12px; width: 260px; max-height: calc(100vh - 24px); overflow: auto; }
+  #sliders h3 { margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: #cfd; }
+  .slider-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+  .slider-row label { flex: 0 0 88px; color: #aab; }
+  .slider-row input[type=range] { flex: 1; min-width: 0; }
+  .slider-row .v {
+    flex: 0 0 42px; text-align: right;
+    font-family: ui-monospace, Menlo, Consolas, monospace; color: #cfd8ff;
+  }
+  #sliders button {
+    margin-top: 8px;
+    margin-right: 6px;
+    background: #1c1c22;
+    color: #e8e8ec;
+    border: 1px solid #3a3a44;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  #sliders button:hover { background: #2a2a32; border-color: #5a5a66; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="info" class="panel">
+  <h2>Flocking</h2>
+  <div>Birds in a box. Each one is two triangles that flap along its direction of flight.</div>
+  <div class="hint" style="margin-top:6px;">Separation, alignment, and cohesion use only the nearest neighbors inside a fixed search radius. The box is split into cells of that same size, so a bird looks through just the cells the radius can reach — at most a 3×3×3 block — instead of every other bird.</div>
+  <div class="hint" style="margin-top:6px;">Drag to orbit · scroll to zoom</div>
+  <div style="margin-top:8px;">
+    <span class="stat" id="fps">fps —</span> ·
+    <span class="stat" id="count-readout">birds —</span>
+  </div>
+  <div id="error"></div>
+</div>
+<div id="sliders" class="panel">
+  <h3>Controls</h3>
+  <div class="slider-row">
+    <label for="s-count">Birds</label>
+    <input type="range" id="s-count" min="50" max="12000" step="50" value="1200">
+    <span class="v" id="v-count">1200</span>
+  </div>
+  <div class="slider-row">
+    <label for="s-sep">Separation</label>
+    <input type="range" id="s-sep" min="0" max="3" step="0.01" value="1.60">
+    <span class="v" id="v-sep">1.60</span>
+  </div>
+  <div class="slider-row">
+    <label for="s-ali">Alignment</label>
+    <input type="range" id="s-ali" min="0" max="3" step="0.01" value="1.45">
+    <span class="v" id="v-ali">1.45</span>
+  </div>
+  <div class="slider-row">
+    <label for="s-coh">Cohesion</label>
+    <input type="range" id="s-coh" min="0" max="3" step="0.01" value="0.65">
+    <span class="v" id="v-coh">0.65</span>
+  </div>
+  <div class="slider-row">
+    <label for="s-k">Neighbors</label>
+    <input type="range" id="s-k" min="1" max="32" step="1" value="8">
+    <span class="v" id="v-k">8</span>
+  </div>
+  <div class="slider-row">
+    <label for="s-size">Size</label>
+    <input type="range" id="s-size" min="0.05" max="2" step="0.01" value="0.25">
+    <span class="v" id="v-size">0.25</span>
+  </div>
+  <button id="btn-pause" type="button">Pause</button>
+  <button id="btn-reset" type="button">Reset</button>
+</div>
+
+<script>
+/*
+ * Flocking
+ * --------
+ * Reynolds boids on the GPU. Each bird steers from its K nearest neighbors
+ * inside a search radius (separation, alignment, cohesion).
+ *
+ * Neighbor search is a uniform grid, not an all-pairs loop. The cell edge
+ * equals the search radius, so the sphere around a bird overlaps at most
+ * the 3x3x3 block of cells around it. The loop bounds are the cells that
+ * sphere can actually touch, and each of those cells is skipped unless its
+ * box meets the sphere. Birds inside a cell are listed with a counting sort
+ * (atomic histogram, exclusive prefix sum, scatter), so a cell can hold as
+ * many birds as actually land there.
+ */
+
+const BOX_HALF = 40;
+const RADIUS = 9;
+const CELL_SIZE = RADIUS; // one cell edge == search radius => <= 27 cells visited
+const GRID = Math.ceil((BOX_HALF * 2) / CELL_SIZE);
+const NUM_CELLS = GRID * GRID * GRID;
+const MAX_BIRDS = 12000;
+const MAX_K = 32;
+const MIN_SPEED = 6;
+const MAX_SPEED = 12;
+const BIRD_FLOATS = 8; // pos.xyz, pad, vel.xyz, bank
+
+const canvas = document.getElementById('view');
+const errorEl = document.getElementById('error');
+const fpsEl = document.getElementById('fps');
+const countEl = document.getElementById('count-readout');
+
+const ui = {
+  count: document.getElementById('s-count'),
+  sep: document.getElementById('s-sep'),
+  ali: document.getElementById('s-ali'),
+  coh: document.getElementById('s-coh'),
+  k: document.getElementById('s-k'),
+  size: document.getElementById('s-size'),
+};
+const readouts = {
+  count: document.getElementById('v-count'),
+  sep: document.getElementById('v-sep'),
+  ali: document.getElementById('v-ali'),
+  coh: document.getElementById('v-coh'),
+  k: document.getElementById('v-k'),
+  size: document.getElementById('v-size'),
+};
+
+let birdCount = 1200;
+let separation = 1.6;
+let alignment = 1.45;
+let cohesion = 0.65;
+let neighbors = 8;
+let birdSize = 0.25;
+let paused = false;
+let simTime = 0;
+
+let yaw = 0.55;
+let pitch = 0.42;
+let distance = 118;
+
+function showError(message) {
+  errorEl.textContent = message;
+  console.error(message);
+}
+
+function randomBirds() {
+  const data = new Float32Array(MAX_BIRDS * BIRD_FLOATS);
+  const span = (BOX_HALF - 6) * 2;
+  for (let i = 0; i < MAX_BIRDS; i++) {
+    const o = i * BIRD_FLOATS;
+    data[o + 0] = (Math.random() - 0.5) * span;
+    data[o + 1] = (Math.random() - 0.5) * span;
+    data[o + 2] = (Math.random() - 0.5) * span;
+    let x = Math.random() * 2 - 1;
+    let y = Math.random() * 2 - 1;
+    let z = Math.random() * 2 - 1;
+    const len = Math.hypot(x, y, z) || 1;
+    const speed = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
+    data[o + 4] = x / len * speed;
+    data[o + 5] = y / len * speed;
+    data[o + 6] = z / len * speed;
+    data[o + 7] = 0;
+  }
+  return data;
+}
+
+function perspective(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2);
+  const nf = 1 / (near - far);
+  const m = new Float32Array(16);
+  m[0] = f / aspect;
+  m[5] = f;
+  m[10] = (far + near) * nf;
+  m[11] = -1;
+  m[14] = 2 * far * near * nf;
+  return m;
+}
+
+function lookAt(eye, target, up) {
+  let fx = target[0] - eye[0];
+  let fy = target[1] - eye[1];
+  let fz = target[2] - eye[2];
+  const fl = Math.hypot(fx, fy, fz) || 1;
+  fx /= fl; fy /= fl; fz /= fl;
+  let sx = fy * up[2] - fz * up[1];
+  let sy = fz * up[0] - fx * up[2];
+  let sz = fx * up[1] - fy * up[0];
+  const sl = Math.hypot(sx, sy, sz) || 1;
+  sx /= sl; sy /= sl; sz /= sl;
+  const ux = sy * fz - sz * fy;
+  const uy = sz * fx - sx * fz;
+  const uz = sx * fy - sy * fx;
+  const m = new Float32Array(16);
+  m[0] = sx;  m[1] = ux;  m[2] = -fx; m[3] = 0;
+  m[4] = sy;  m[5] = uy;  m[6] = -fy; m[7] = 0;
+  m[8] = sz;  m[9] = uz;  m[10] = -fz; m[11] = 0;
+  m[12] = -(sx * eye[0] + sy * eye[1] + sz * eye[2]);
+  m[13] = -(ux * eye[0] + uy * eye[1] + uz * eye[2]);
+  m[14] =  (fx * eye[0] + fy * eye[1] + fz * eye[2]);
+  m[15] = 1;
+  return m;
+}
+
+function multiply(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] =
+        a[r] * b[c * 4] +
+        a[4 + r] * b[c * 4 + 1] +
+        a[8 + r] * b[c * 4 + 2] +
+        a[12 + r] * b[c * 4 + 3];
+    }
+  }
+  return o;
+}
+
+function viewProj() {
+  const cp = Math.cos(pitch);
+  const eye = [
+    distance * cp * Math.sin(yaw),
+    distance * Math.sin(pitch),
+    distance * cp * Math.cos(yaw),
+  ];
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  return multiply(perspective(0.85, aspect, 0.1, 2000), lookAt(eye, [0, 0, 0], [0, 1, 0]));
+}
+
+const shaderCode = `
+struct Bird {
+  pos: vec3<f32>,
+  pad: f32,
+  vel: vec3<f32>,
+  bank: f32,
+}
+
+struct Uniforms {
+  viewProj: mat4x4<f32>,
+  count: u32,
+  neighbors: u32,
+  time: f32,
+  dt: f32,
+  separation: f32,
+  alignment: f32,
+  cohesion: f32,
+  birdSize: f32,
+}
+
+const BOX_HALF: f32 = ${BOX_HALF}.0;
+const CELL_SIZE: f32 = ${CELL_SIZE}.0;
+const RADIUS: f32 = ${RADIUS}.0;
+const GRID: i32 = ${GRID};
+const NUM_CELLS: u32 = ${NUM_CELLS}u;
+const MAX_K: u32 = ${MAX_K}u;
+const MIN_SPEED: f32 = ${MIN_SPEED}.0;
+const MAX_SPEED: f32 = ${MAX_SPEED}.0;
+const MAX_FORCE: f32 = 48.0;
+const SEP_RADIUS: f32 = ${RADIUS}.0 * 0.50;
+const WALL_MARGIN: f32 = 9.0;
+const BIRD_SCALE: f32 = 2.15;
+
+@group(0) @binding(0) var<uniform> params: Uniforms;
+@group(0) @binding(1) var<storage, read> birdsIn: array<Bird>;
+@group(0) @binding(2) var<storage, read_write> birdsOut: array<Bird>;
+@group(0) @binding(3) var<storage, read_write> cellAtomic: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> cellCount: array<u32>;
+@group(0) @binding(5) var<storage, read_write> cellStarts: array<u32>;
+@group(0) @binding(6) var<storage, read_write> cellCursor: array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> indices: array<u32>;
+
+fn worldToCell(p: vec3<f32>) -> vec3<i32> {
+  let g = vec3<i32>(floor((p + vec3<f32>(BOX_HALF)) / CELL_SIZE));
+  return clamp(g, vec3<i32>(0), vec3<i32>(GRID - 1));
+}
+
+fn cellIndex(c: vec3<i32>) -> u32 {
+  return u32(c.x) + u32(GRID) * (u32(c.y) + u32(GRID) * u32(c.z));
+}
+
+fn cellTouchesSphere(c: vec3<i32>, p: vec3<f32>, r2: f32) -> bool {
+  let bmin = vec3<f32>(c) * CELL_SIZE - vec3<f32>(BOX_HALF);
+  let bmax = bmin + vec3<f32>(CELL_SIZE);
+  let closest = clamp(p, bmin, bmax);
+  let d = p - closest;
+  return dot(d, d) <= r2;
+}
+
+fn limitLen(v: vec3<f32>, maxLen: f32) -> vec3<f32> {
+  let len = length(v);
+  if (len > maxLen) { return v * (maxLen / len); }
+  return v;
+}
+
+fn steer(desired: vec3<f32>, vel: vec3<f32>) -> vec3<f32> {
+  let len = length(desired);
+  if (len < 1e-5) { return vec3<f32>(0.0); }
+  return limitLen((desired / len) * MAX_SPEED - vel, MAX_FORCE);
+}
+
+fn hash11(n: u32) -> f32 {
+  var x = n;
+  x = (x ^ 61u) ^ (x >> 16u);
+  x = x * 9u;
+  x = x ^ (x >> 4u);
+  x = x * 0x27d4eb2du;
+  x = x ^ (x >> 15u);
+  return f32(x) / 4294967295.0;
+}
+
+@compute @workgroup_size(64)
+fn clearCells(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (gid.x >= NUM_CELLS) { return; }
+  atomicStore(&cellAtomic[gid.x], 0u);
+}
+
+@compute @workgroup_size(64)
+fn countBirds(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= params.count) { return; }
+  let c = cellIndex(worldToCell(birdsIn[i].pos));
+  atomicAdd(&cellAtomic[c], 1u);
+}
+
+@compute @workgroup_size(1)
+fn prefixSum() {
+  var sum = 0u;
+  for (var i = 0u; i < NUM_CELLS; i++) {
+    let c = atomicLoad(&cellAtomic[i]);
+    cellCount[i] = c;
+    cellStarts[i] = sum;
+    atomicStore(&cellCursor[i], sum);
+    sum = sum + c;
+  }
+}
+
+@compute @workgroup_size(64)
+fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= params.count) { return; }
+  let c = cellIndex(worldToCell(birdsIn[i].pos));
+  let slot = atomicAdd(&cellCursor[c], 1u);
+  indices[slot] = i;
+}
+
+@compute @workgroup_size(64)
+fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= params.count) { return; }
+
+  let me = birdsIn[i];
+  var pos = me.pos;
+  var vel = me.vel;
+  let kmax = min(params.neighbors, MAX_K);
+  let r2 = RADIUS * RADIUS;
+
+  var bestD: array<f32, 32>;
+  var bestI: array<u32, 32>;
+  for (var k = 0u; k < MAX_K; k++) {
+    bestD[k] = 1e20;
+    bestI[k] = 0xffffffffu;
+  }
+
+  // Exact cell range overlapped by the search sphere. With CELL_SIZE == RADIUS
+  // this is at most 3 cells on a side. Cells whose box misses the sphere are skipped.
+  let minC = worldToCell(pos - vec3<f32>(RADIUS));
+  let maxC = worldToCell(pos + vec3<f32>(RADIUS));
+  for (var z = minC.z; z <= maxC.z; z++) {
+    for (var y = minC.y; y <= maxC.y; y++) {
+      for (var x = minC.x; x <= maxC.x; x++) {
+        let cell = vec3<i32>(x, y, z);
+        if (!cellTouchesSphere(cell, pos, r2)) { continue; }
+        let ci = cellIndex(cell);
+        let start = cellStarts[ci];
+        let n = cellCount[ci];
+        for (var j = 0u; j < n; j++) {
+          let id = indices[start + j];
+          if (id == i) { continue; }
+          let d = birdsIn[id].pos - pos;
+          let d2 = dot(d, d);
+          if (d2 > r2 || d2 >= bestD[kmax - 1u]) { continue; }
+          var slot = kmax - 1u;
+          loop {
+            if (slot == 0u) { break; }
+            if (d2 >= bestD[slot - 1u]) { break; }
+            bestD[slot] = bestD[slot - 1u];
+            bestI[slot] = bestI[slot - 1u];
+            slot = slot - 1u;
+          }
+          bestD[slot] = d2;
+          bestI[slot] = id;
+        }
+      }
+    }
+  }
+
+  var sep = vec3<f32>(0.0);
+  var ali = vec3<f32>(0.0);
+  var coh = vec3<f32>(0.0);
+  var used = 0u;
+  let sepR2 = SEP_RADIUS * SEP_RADIUS;
+  for (var n = 0u; n < kmax; n++) {
+    let id = bestI[n];
+    if (id == 0xffffffffu) { break; }
+    let other = birdsIn[id];
+    let d2 = bestD[n];
+    ali = ali + other.vel;
+    coh = coh + other.pos;
+    used = used + 1u;
+    if (d2 < 1e-4) {
+      let h = hash11(i * 17u + n);
+      sep = sep + vec3<f32>(h * 2.0 - 1.0, hash11(i + n + 3u) * 2.0 - 1.0, hash11(i + 9u + n) * 2.0 - 1.0);
+    } else if (d2 < sepR2) {
+      let dist = sqrt(d2);
+      sep = sep + (pos - other.pos) / (dist * dist);
+    }
+  }
+
+  var acc = vec3<f32>(0.0);
+  if (used > 0u) {
+    let inv = 1.0 / f32(used);
+    acc = acc + steer(ali * inv, vel) * params.alignment;
+    acc = acc + steer((coh * inv) - pos, vel) * params.cohesion;
+    acc = acc + steer(sep, vel) * params.separation;
+  }
+
+  // Soft turn away from the walls, then a hard reflect if a bird still hits one.
+  let margin = WALL_MARGIN;
+  if (pos.x > BOX_HALF - margin) { acc.x = acc.x - (1.0 - (BOX_HALF - pos.x) / margin) * 80.0; }
+  if (pos.x < -BOX_HALF + margin) { acc.x = acc.x + (1.0 - (pos.x + BOX_HALF) / margin) * 80.0; }
+  if (pos.y > BOX_HALF - margin) { acc.y = acc.y - (1.0 - (BOX_HALF - pos.y) / margin) * 80.0; }
+  if (pos.y < -BOX_HALF + margin) { acc.y = acc.y + (1.0 - (pos.y + BOX_HALF) / margin) * 80.0; }
+  if (pos.z > BOX_HALF - margin) { acc.z = acc.z - (1.0 - (BOX_HALF - pos.z) / margin) * 80.0; }
+  if (pos.z < -BOX_HALF + margin) { acc.z = acc.z + (1.0 - (pos.z + BOX_HALF) / margin) * 80.0; }
+  acc = limitLen(acc, 70.0);
+
+  vel = vel + acc * params.dt;
+  let sp = length(vel);
+  if (sp > 1e-4) {
+    let clamped = clamp(sp, MIN_SPEED, MAX_SPEED);
+    vel = vel * (clamped / sp);
+  } else {
+    vel = vec3<f32>(0.0, 0.0, MIN_SPEED);
+  }
+  pos = pos + vel * params.dt;
+
+  if (pos.x > BOX_HALF) { pos.x = BOX_HALF; vel.x = -abs(vel.x); }
+  if (pos.x < -BOX_HALF) { pos.x = -BOX_HALF; vel.x = abs(vel.x); }
+  if (pos.y > BOX_HALF) { pos.y = BOX_HALF; vel.y = -abs(vel.y); }
+  if (pos.y < -BOX_HALF) { pos.y = -BOX_HALF; vel.y = abs(vel.y); }
+  if (pos.z > BOX_HALF) { pos.z = BOX_HALF; vel.z = -abs(vel.z); }
+  if (pos.z < -BOX_HALF) { pos.z = -BOX_HALF; vel.z = abs(vel.z); }
+
+  var upRef = vec3<f32>(0.0, 1.0, 0.0);
+  var fwd = vel;
+  let fwdLen = length(fwd);
+  if (fwdLen > 1e-4) { fwd = fwd / fwdLen; } else { fwd = vec3<f32>(0.0, 0.0, 1.0); }
+  if (abs(dot(fwd, upRef)) > 0.95) { upRef = vec3<f32>(1.0, 0.0, 0.0); }
+  let right = normalize(cross(fwd, upRef));
+  let side = dot(acc, right);
+  let targetBank = clamp(-side * 0.018, -0.9, 0.9);
+  let bank = me.bank + (targetBank - me.bank) * min(1.0, params.dt * 4.0);
+
+  var outBird: Bird;
+  outBird.pos = pos;
+  outBird.pad = 0.0;
+  outBird.vel = vel;
+  outBird.bank = bank;
+  birdsOut[i] = outBird;
+}
+
+struct VSOut {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) color: vec3<f32>,
+  @location(1) nose: f32,
+  @location(2) @interpolate(flat) normal: vec3<f32>,
+}
+
+fn birdBasis(vel: vec3<f32>, bank: f32) -> mat3x3<f32> {
+  var fwd = vel;
+  let sp = length(fwd);
+  if (sp > 1e-4) { fwd = fwd / sp; } else { fwd = vec3<f32>(0.0, 0.0, 1.0); }
+  var upRef = vec3<f32>(0.0, 1.0, 0.0);
+  if (abs(dot(fwd, upRef)) > 0.95) { upRef = vec3<f32>(1.0, 0.0, 0.0); }
+  let right0 = normalize(cross(fwd, upRef));
+  let up0 = normalize(cross(right0, fwd));
+  let cb = cos(bank);
+  let sb = sin(bank);
+  let right = right0 * cb + up0 * sb;
+  let up = up0 * cb - right0 * sb;
+  return mat3x3<f32>(right, up, fwd);
+}
+
+fn wingCorner(which: u32, corner: u32, lift: f32) -> vec3<f32> {
+  // Two separate triangles. The nose is the forward vertex of each wing,
+  // so the heading stays obvious even when a wing is edge-on.
+  if (which == 0u) {
+    if (corner == 0u) { return vec3<f32>(-0.12, 0.08, 1.35); }
+    if (corner == 1u) { return vec3<f32>(-1.55, lift, -0.05); }
+    return vec3<f32>(-0.28, lift * 0.2, -0.72);
+  }
+  if (corner == 0u) { return vec3<f32>(0.12, 0.08, 1.35); }
+  if (corner == 1u) { return vec3<f32>(0.28, lift * 0.2, -0.72); }
+  return vec3<f32>(1.55, lift, -0.05);
+}
+
+@vertex
+fn vsBird(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) -> VSOut {
+  let b = birdsIn[inst];
+  let basis = birdBasis(b.vel, b.bank);
+  let h = hash11(inst);
+  let freq = 6.5 + h * 5.0;
+  let flap = sin(params.time * freq + h * 6.2831853);
+  let lift = 0.55 + flap * 0.9;
+  let which = vi / 3u;
+  let corner = vi % 3u;
+  let scale = BIRD_SCALE * params.birdSize * (0.88 + 0.24 * h);
+  let local = wingCorner(which, corner, lift) * scale;
+  let world = b.pos + basis * local;
+
+  let p0 = wingCorner(which, 0u, lift);
+  let p1 = wingCorner(which, 1u, lift);
+  let p2 = wingCorner(which, 2u, lift);
+  let nLocal = normalize(cross(p1 - p0, p2 - p0));
+  let nWorld = normalize(basis * nLocal);
+
+  var color: vec3<f32>;
+  let band = h * 4.0;
+  if (band < 1.0) { color = mix(vec3<f32>(0.95, 0.94, 0.90), vec3<f32>(0.78, 0.80, 0.84), band); }
+  else if (band < 2.0) { color = mix(vec3<f32>(0.93, 0.78, 0.52), vec3<f32>(0.86, 0.62, 0.42), band - 1.0); }
+  else if (band < 3.0) { color = mix(vec3<f32>(0.62, 0.76, 0.86), vec3<f32>(0.45, 0.55, 0.68), band - 2.0); }
+  else { color = mix(vec3<f32>(0.82, 0.48, 0.40), vec3<f32>(0.55, 0.34, 0.32), band - 3.0); }
+  if (which == 1u) { color = color * 0.78; }
+
+  var out: VSOut;
+  out.clip = params.viewProj * vec4<f32>(world, 1.0);
+  out.color = color;
+  out.nose = select(0.15, 1.0, corner == 0u);
+  out.normal = nWorld;
+  return out;
+}
+
+@fragment
+fn fsBird(in: VSOut) -> @location(0) vec4<f32> {
+  let lightDir = normalize(vec3<f32>(-0.25, 0.82, 0.45));
+  let nd = abs(dot(normalize(in.normal), lightDir));
+  let lit = (0.34 + 0.66 * nd) * (0.72 + 0.40 * in.nose);
+  return vec4<f32>(in.color * lit, 1.0);
+}
+
+@vertex
+fn vsBox(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+  let edge = vi / 2u;
+  let end = vi & 1u;
+  let axis = edge / 4u;
+  let pair = edge % 4u;
+  var bits: u32;
+  if (axis == 0u) {
+    bits = end | (pair << 1u);
+  } else if (axis == 1u) {
+    bits = (pair & 1u) | (end << 1u) | ((pair & 2u) << 1u);
+  } else {
+    bits = pair | (end << 2u);
+  }
+  let x = select(-BOX_HALF, BOX_HALF, (bits & 1u) == 1u);
+  let y = select(-BOX_HALF, BOX_HALF, (bits & 2u) == 2u);
+  let z = select(-BOX_HALF, BOX_HALF, (bits & 4u) == 4u);
+  return params.viewProj * vec4<f32>(x, y, z, 1.0);
+}
+
+@fragment
+fn fsBox() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.45, 0.55, 0.78, 1.0);
+}
+`;
+
+function sliderValue(id) {
+  return parseFloat(ui[id].value);
+}
+
+function syncReadouts() {
+  readouts.count.textContent = String(birdCount);
+  readouts.sep.textContent = separation.toFixed(2);
+  readouts.ali.textContent = alignment.toFixed(2);
+  readouts.coh.textContent = cohesion.toFixed(2);
+  readouts.k.textContent = String(neighbors);
+  readouts.size.textContent = birdSize.toFixed(2);
+  countEl.textContent = birdCount + ' birds';
+}
+
+function readSliders() {
+  birdCount = Math.max(1, Math.min(MAX_BIRDS, sliderValue('count') | 0));
+  separation = sliderValue('sep');
+  alignment = sliderValue('ali');
+  cohesion = sliderValue('coh');
+  neighbors = Math.max(1, Math.min(MAX_K, sliderValue('k') | 0));
+  birdSize = sliderValue('size');
+  syncReadouts();
+}
+
+for (const key of Object.keys(ui)) {
+  ui[key].addEventListener('input', readSliders);
+}
+
+let dragging = false;
+let lastX = 0;
+let lastY = 0;
+canvas.addEventListener('pointerdown', (event) => {
+  dragging = true;
+  lastX = event.clientX;
+  lastY = event.clientY;
+  canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener('pointermove', (event) => {
+  if (!dragging) return;
+  yaw -= (event.clientX - lastX) * 0.005;
+  pitch += (event.clientY - lastY) * 0.005;
+  pitch = Math.max(-1.25, Math.min(1.25, pitch));
+  lastX = event.clientX;
+  lastY = event.clientY;
+});
+canvas.addEventListener('pointerup', () => { dragging = false; });
+canvas.addEventListener('pointercancel', () => { dragging = false; });
+canvas.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  distance *= Math.exp(event.deltaY * 0.001);
+  distance = Math.min(420, Math.max(30, distance));
+}, { passive: false });
+
+document.getElementById('btn-pause').addEventListener('click', () => {
+  paused = !paused;
+  document.getElementById('btn-pause').textContent = paused ? 'Resume' : 'Pause';
+});
+
+let device, context, format;
+let birdBuffers, srcIndex;
+let cellAtomic, cellCountBuf, cellStarts, cellCursor, indices;
+let uniformBuffer, uniformData, uniformF32, uniformU32;
+let pipelines;
+let depthTexture, msaaTexture, msaaView, depthView;
+let groups;
+
+function storageBuffer(size) {
+  return device.createBuffer({
+    size,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+}
+
+function uploadBirds(data) {
+  device.queue.writeBuffer(birdBuffers[0], 0, data);
+  device.queue.writeBuffer(birdBuffers[1], 0, data);
+  srcIndex = 0;
+}
+
+function resizeTargets() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+  const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+  if (canvas.width === w && canvas.height === h && depthTexture) return;
+  canvas.width = w;
+  canvas.height = h;
+  if (depthTexture) depthTexture.destroy();
+  if (msaaTexture) msaaTexture.destroy();
+  msaaTexture = device.createTexture({
+    size: [w, h],
+    sampleCount: 4,
+    format,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  depthTexture = device.createTexture({
+    size: [w, h],
+    sampleCount: 4,
+    format: 'depth24plus',
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  msaaView = msaaTexture.createView();
+  depthView = depthTexture.createView();
+}
+
+function makeGroups() {
+  const layout = (pipe) => pipe.getBindGroupLayout(0);
+  groups = {
+    clear: device.createBindGroup({
+      layout: layout(pipelines.clear),
+      entries: [
+        { binding: 3, resource: { buffer: cellAtomic } },
+      ],
+    }),
+    prefix: device.createBindGroup({
+      layout: layout(pipelines.prefix),
+      entries: [
+        { binding: 3, resource: { buffer: cellAtomic } },
+        { binding: 4, resource: { buffer: cellCountBuf } },
+        { binding: 5, resource: { buffer: cellStarts } },
+        { binding: 6, resource: { buffer: cellCursor } },
+      ],
+    }),
+    box: device.createBindGroup({
+      layout: layout(pipelines.box),
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+      ],
+    }),
+  };
+  groups.count = [0, 1].map((i) => device.createBindGroup({
+    layout: layout(pipelines.count),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: birdBuffers[i] } },
+      { binding: 3, resource: { buffer: cellAtomic } },
+    ],
+  }));
+  groups.scatter = [0, 1].map((i) => device.createBindGroup({
+    layout: layout(pipelines.scatter),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: birdBuffers[i] } },
+      { binding: 6, resource: { buffer: cellCursor } },
+      { binding: 7, resource: { buffer: indices } },
+    ],
+  }));
+  groups.flock = [0, 1].map((i) => device.createBindGroup({
+    layout: layout(pipelines.flock),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: birdBuffers[i] } },
+      { binding: 2, resource: { buffer: birdBuffers[1 - i] } },
+      { binding: 4, resource: { buffer: cellCountBuf } },
+      { binding: 5, resource: { buffer: cellStarts } },
+      { binding: 7, resource: { buffer: indices } },
+    ],
+  }));
+  groups.render = [0, 1].map((i) => device.createBindGroup({
+    layout: layout(pipelines.bird),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: birdBuffers[i] } },
+    ],
+  }));
+}
+
+function writeUniforms(dt) {
+  const vp = viewProj();
+  uniformF32.set(vp, 0);
+  uniformU32[16] = birdCount;
+  uniformU32[17] = neighbors;
+  uniformF32[18] = simTime;
+  uniformF32[19] = dt;
+  uniformF32[20] = separation;
+  uniformF32[21] = alignment;
+  uniformF32[22] = cohesion;
+  uniformF32[23] = birdSize;
+  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!device) return;
+  resizeTargets();
+
+  const dt = paused ? 0 : Math.min(0.033, Math.max(0.001, (now - (frame.last || now)) / 1000));
+  frame.last = now;
+  if (!paused) simTime += dt;
+  writeUniforms(paused ? 0 : dt);
+
+  const encoder = device.createCommandEncoder();
+  if (!paused && dt > 0) {
+    const src = srcIndex;
+    const birdGroups = Math.ceil(birdCount / 64);
+    const cellGroups = Math.ceil(NUM_CELLS / 64);
+    const clearPass = encoder.beginComputePass();
+    clearPass.setPipeline(pipelines.clear);
+    clearPass.setBindGroup(0, groups.clear);
+    clearPass.dispatchWorkgroups(cellGroups);
+    clearPass.end();
+
+    const countPass = encoder.beginComputePass();
+    countPass.setPipeline(pipelines.count);
+    countPass.setBindGroup(0, groups.count[src]);
+    countPass.dispatchWorkgroups(birdGroups);
+    countPass.end();
+
+    const prefixPass = encoder.beginComputePass();
+    prefixPass.setPipeline(pipelines.prefix);
+    prefixPass.setBindGroup(0, groups.prefix);
+    prefixPass.dispatchWorkgroups(1);
+    prefixPass.end();
+
+    const scatterPass = encoder.beginComputePass();
+    scatterPass.setPipeline(pipelines.scatter);
+    scatterPass.setBindGroup(0, groups.scatter[src]);
+    scatterPass.dispatchWorkgroups(birdGroups);
+    scatterPass.end();
+
+    const flockPass = encoder.beginComputePass();
+    flockPass.setPipeline(pipelines.flock);
+    flockPass.setBindGroup(0, groups.flock[src]);
+    flockPass.dispatchWorkgroups(birdGroups);
+    flockPass.end();
+    srcIndex = 1 - src;
+  }
+
+  const renderIndex = srcIndex;
+  const view = context.getCurrentTexture().createView();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view: msaaView,
+      resolveTarget: view,
+      clearValue: { r: 0.035, g: 0.04, b: 0.06, a: 1 },
+      loadOp: 'clear',
+      storeOp: 'discard',
+    }],
+    depthStencilAttachment: {
+      view: depthView,
+      depthClearValue: 1,
+      depthLoadOp: 'clear',
+      depthStoreOp: 'discard',
+    },
+  });
+  pass.setPipeline(pipelines.box);
+  pass.setBindGroup(0, groups.box);
+  pass.draw(24);
+  pass.setPipeline(pipelines.bird);
+  pass.setBindGroup(0, groups.render[renderIndex]);
+  pass.draw(6, birdCount);
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+
+  if (!frame.stamp) frame.stamp = now;
+  frame.frames = (frame.frames || 0) + 1;
+  if (now - frame.stamp > 500) {
+    fpsEl.textContent = 'fps ' + Math.round(frame.frames * 1000 / (now - frame.stamp));
+    frame.frames = 0;
+    frame.stamp = now;
+  }
+}
+
+async function compile(code) {
+  const module = device.createShaderModule({ code });
+  const info = await module.getCompilationInfo();
+  const errors = info.messages.filter((m) => m.type === 'error');
+  if (errors.length) {
+    throw new Error(errors.map((m) => 'L' + m.lineNum + ': ' + m.message).join('\n'));
+  }
+  return module;
+}
+
+async function main() {
+  if (!navigator.gpu) {
+    showError('WebGPU is not available in this browser.');
+    return;
+  }
+  let adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    showError('No WebGPU adapter found.');
+    return;
+  }
+  device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', (event) => {
+    showError(event.error.message);
+  });
+  context = canvas.getContext('webgpu');
+  format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode: 'opaque' });
+
+  const module = await compile(shaderCode);
+  const targets = [{ format }];
+  pipelines = {
+    clear: device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'clearCells' } }),
+    count: device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'countBirds' } }),
+    prefix: device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'prefixSum' } }),
+    scatter: device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'scatter' } }),
+    flock: device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'flock' } }),
+    bird: device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBird' },
+      fragment: { module, entryPoint: 'fsBird', targets },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: 4 },
+    }),
+    box: device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsBox' },
+      fragment: { module, entryPoint: 'fsBox', targets },
+      primitive: { topology: 'line-list' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: 4 },
+    }),
+  };
+
+  const initial = randomBirds();
+  birdBuffers = [0, 1].map(() => storageBuffer(initial.byteLength));
+  uploadBirds(initial);
+  cellAtomic = storageBuffer(NUM_CELLS * 4);
+  cellCountBuf = storageBuffer(NUM_CELLS * 4);
+  cellStarts = storageBuffer(NUM_CELLS * 4);
+  cellCursor = storageBuffer(NUM_CELLS * 4);
+  indices = storageBuffer(MAX_BIRDS * 4);
+  uniformData = new ArrayBuffer(96);
+  uniformF32 = new Float32Array(uniformData);
+  uniformU32 = new Uint32Array(uniformData);
+  uniformBuffer = device.createBuffer({
+    size: uniformData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  resizeTargets();
+  makeGroups();
+  readSliders();
+
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    uploadBirds(randomBirds());
+    simTime = 0;
+  });
+
+  device.pushErrorScope('validation');
+  requestAnimationFrame(frame);
+  const err = await device.popErrorScope();
+  if (err) showError(err.message);
+}
+
+syncReadouts();
+main().catch((err) => showError(err.stack || err.message));
+</script>
+</body>
+</html>

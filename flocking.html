@@ -39,8 +39,10 @@
   .slider-row label { flex: 0 0 88px; color: #aab; }
   .slider-row input[type=range] { flex: 1; min-width: 0; }
   .slider-row .v {
-    flex: 0 0 42px; text-align: right;
-    font-family: ui-monospace, Menlo, Consolas, monospace; color: #cfd8ff;
+    flex: 0 0 58px; width: 58px; min-width: 0; box-sizing: border-box;
+    text-align: right; background: #111218; color: #cfd8ff;
+    border: 1px solid #3a3a44; border-radius: 3px; padding: 2px 3px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
   }
   #sliders button {
     margin-top: 8px;
@@ -66,7 +68,8 @@
   <div class="hint" style="margin-top:6px;">Drag to orbit · scroll to zoom</div>
   <div style="margin-top:8px;">
     <span class="stat" id="fps">fps —</span> ·
-    <span class="stat" id="count-readout">birds —</span>
+    <span class="stat" id="count-readout">birds —</span> ·
+    <span class="stat" id="neighbors-readout">neighbors avg —</span>
   </div>
   <div id="error"></div>
 </div>
@@ -75,32 +78,47 @@
   <div class="slider-row">
     <label for="s-count">Birds</label>
     <input type="range" id="s-count" min="50" max="12000" step="50" value="1200">
-    <span class="v" id="v-count">1200</span>
+    <input type="number" class="v" id="v-count" min="50" max="12000" step="50" value="1200">
   </div>
   <div class="slider-row">
     <label for="s-sep">Separation</label>
-    <input type="range" id="s-sep" min="0" max="3" step="0.01" value="1.60">
-    <span class="v" id="v-sep">1.60</span>
+    <input type="range" id="s-sep" min="0" max="30" step="0.01" value="1.60">
+    <input type="number" class="v" id="v-sep" min="0" max="30" step="0.01" value="1.60">
+  </div>
+  <div class="slider-row">
+    <label for="s-sep-dist">Sep distance</label>
+    <input type="range" id="s-sep-dist" min="0" max="10" step="0.01" value="1.00">
+    <input type="number" class="v" id="v-sep-dist" min="0" max="10" step="0.01" value="1.00">
   </div>
   <div class="slider-row">
     <label for="s-ali">Alignment</label>
     <input type="range" id="s-ali" min="0" max="3" step="0.01" value="1.45">
-    <span class="v" id="v-ali">1.45</span>
+    <input type="number" class="v" id="v-ali" min="0" max="3" step="0.01" value="1.45">
   </div>
   <div class="slider-row">
     <label for="s-coh">Cohesion</label>
     <input type="range" id="s-coh" min="0" max="3" step="0.01" value="0.65">
-    <span class="v" id="v-coh">0.65</span>
+    <input type="number" class="v" id="v-coh" min="0" max="3" step="0.01" value="0.65">
   </div>
   <div class="slider-row">
     <label for="s-k">Neighbors</label>
     <input type="range" id="s-k" min="1" max="32" step="1" value="8">
-    <span class="v" id="v-k">8</span>
+    <input type="number" class="v" id="v-k" min="1" max="32" step="1" value="8">
   </div>
   <div class="slider-row">
     <label for="s-size">Size</label>
     <input type="range" id="s-size" min="0.05" max="2" step="0.01" value="0.25">
-    <span class="v" id="v-size">0.25</span>
+    <input type="number" class="v" id="v-size" min="0.05" max="2" step="0.01" value="0.25">
+  </div>
+  <div class="slider-row">
+    <label for="s-drag">Drag</label>
+    <input type="range" id="s-drag" min="0" max="0.1" step="0.001" value="0.015">
+    <input type="number" class="v" id="v-drag" min="0" max="0.1" step="0.001" value="0.015">
+  </div>
+  <div class="slider-row">
+    <label for="s-min-vel">Min velocity</label>
+    <input type="range" id="s-min-vel" min="0" max="20" step="0.1" value="6">
+    <input type="number" class="v" id="v-min-vel" min="0" max="20" step="0.1" value="6.0">
   </div>
   <button id="btn-pause" type="button">Pause</button>
   <button id="btn-reset" type="button">Reset</button>
@@ -129,38 +147,49 @@ const GRID = Math.ceil((BOX_HALF * 2) / CELL_SIZE);
 const NUM_CELLS = GRID * GRID * GRID;
 const MAX_BIRDS = 12000;
 const MAX_K = 32;
-const MIN_SPEED = 6;
-const MAX_SPEED = 12;
-const BIRD_FLOATS = 8; // pos.xyz, pad, vel.xyz, bank
+const INITIAL_MIN_SPEED = 6;
+const INITIAL_MAX_SPEED = 12;
+const COLOR_SPEED = 12;
+const BIRD_FLOATS = 8; // pos.xyz, flap timer, vel.xyz, bank
 
 const canvas = document.getElementById('view');
 const errorEl = document.getElementById('error');
 const fpsEl = document.getElementById('fps');
 const countEl = document.getElementById('count-readout');
+const neighborsEl = document.getElementById('neighbors-readout');
 
 const ui = {
   count: document.getElementById('s-count'),
   sep: document.getElementById('s-sep'),
+  sepDist: document.getElementById('s-sep-dist'),
   ali: document.getElementById('s-ali'),
   coh: document.getElementById('s-coh'),
   k: document.getElementById('s-k'),
   size: document.getElementById('s-size'),
+  drag: document.getElementById('s-drag'),
+  minVel: document.getElementById('s-min-vel'),
 };
 const readouts = {
   count: document.getElementById('v-count'),
   sep: document.getElementById('v-sep'),
+  sepDist: document.getElementById('v-sep-dist'),
   ali: document.getElementById('v-ali'),
   coh: document.getElementById('v-coh'),
   k: document.getElementById('v-k'),
   size: document.getElementById('v-size'),
+  drag: document.getElementById('v-drag'),
+  minVel: document.getElementById('v-min-vel'),
 };
 
 let birdCount = 1200;
 let separation = 1.6;
+let separationDistance = 1;
 let alignment = 1.45;
 let cohesion = 0.65;
 let neighbors = 8;
 let birdSize = 0.25;
+let drag = 0.015;
+let minVelocity = 6;
 let paused = false;
 let simTime = 0;
 
@@ -185,7 +214,7 @@ function randomBirds() {
     let y = Math.random() * 2 - 1;
     let z = Math.random() * 2 - 1;
     const len = Math.hypot(x, y, z) || 1;
-    const speed = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
+    const speed = INITIAL_MIN_SPEED + Math.random() * (INITIAL_MAX_SPEED - INITIAL_MIN_SPEED);
     data[o + 4] = x / len * speed;
     data[o + 5] = y / len * speed;
     data[o + 6] = z / len * speed;
@@ -259,7 +288,7 @@ function viewProj() {
 const shaderCode = `
 struct Bird {
   pos: vec3<f32>,
-  pad: f32,
+  flap: f32,
   vel: vec3<f32>,
   bank: f32,
 }
@@ -274,6 +303,9 @@ struct Uniforms {
   alignment: f32,
   cohesion: f32,
   birdSize: f32,
+  drag: f32,
+  minVelocity: f32,
+  separationDistance: f32,
 }
 
 const BOX_HALF: f32 = ${BOX_HALF}.0;
@@ -282,12 +314,13 @@ const RADIUS: f32 = ${RADIUS}.0;
 const GRID: i32 = ${GRID};
 const NUM_CELLS: u32 = ${NUM_CELLS}u;
 const MAX_K: u32 = ${MAX_K}u;
-const MIN_SPEED: f32 = ${MIN_SPEED}.0;
-const MAX_SPEED: f32 = ${MAX_SPEED}.0;
+const COLOR_SPEED: f32 = ${COLOR_SPEED}.0;
 const MAX_FORCE: f32 = 48.0;
-const SEP_RADIUS: f32 = ${RADIUS}.0 * 0.50;
 const WALL_MARGIN: f32 = 9.0;
 const BIRD_SCALE: f32 = 2.15;
+const FLAP_DV: f32 = 4.0;
+const FLAP_DURATION: f32 = 0.45;
+const RESTING_WING_LIFT: f32 = 0.895;
 
 @group(0) @binding(0) var<uniform> params: Uniforms;
 @group(0) @binding(1) var<storage, read> birdsIn: array<Bird>;
@@ -297,6 +330,7 @@ const BIRD_SCALE: f32 = 2.15;
 @group(0) @binding(5) var<storage, read_write> cellStarts: array<u32>;
 @group(0) @binding(6) var<storage, read_write> cellCursor: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> indices: array<u32>;
+@group(0) @binding(8) var<storage, read_write> neighborTotal: atomic<u32>;
 
 fn worldToCell(p: vec3<f32>) -> vec3<i32> {
   let g = vec3<i32>(floor((p + vec3<f32>(BOX_HALF)) / CELL_SIZE));
@@ -324,7 +358,7 @@ fn limitLen(v: vec3<f32>, maxLen: f32) -> vec3<f32> {
 fn steer(desired: vec3<f32>, vel: vec3<f32>) -> vec3<f32> {
   let len = length(desired);
   if (len < 1e-5) { return vec3<f32>(0.0); }
-  return limitLen((desired / len) * MAX_SPEED - vel, MAX_FORCE);
+  return limitLen((desired / len) * length(vel) - vel, MAX_FORCE);
 }
 
 fn hash11(n: u32) -> f32 {
@@ -341,6 +375,7 @@ fn hash11(n: u32) -> f32 {
 fn clearCells(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (gid.x >= NUM_CELLS) { return; }
   atomicStore(&cellAtomic[gid.x], 0u);
+  if (gid.x == 0u) { atomicStore(&neighborTotal, 0u); }
 }
 
 @compute @workgroup_size(64)
@@ -427,7 +462,8 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
   var ali = vec3<f32>(0.0);
   var coh = vec3<f32>(0.0);
   var used = 0u;
-  let sepR2 = SEP_RADIUS * SEP_RADIUS;
+  let sepRadius = BIRD_SCALE * params.birdSize * params.separationDistance;
+  let sepR2 = sepRadius * sepRadius;
   for (var n = 0u; n < kmax; n++) {
     let id = bestI[n];
     if (id == 0xffffffffu) { break; }
@@ -436,21 +472,32 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
     ali = ali + other.vel;
     coh = coh + other.pos;
     used = used + 1u;
-    if (d2 < 1e-4) {
-      let h = hash11(i * 17u + n);
-      sep = sep + vec3<f32>(h * 2.0 - 1.0, hash11(i + n + 3u) * 2.0 - 1.0, hash11(i + 9u + n) * 2.0 - 1.0);
-    } else if (d2 < sepR2) {
+    if (d2 < sepR2) {
       let dist = sqrt(d2);
-      sep = sep + (pos - other.pos) / (dist * dist);
+      var outward: vec3<f32>;
+      if (dist < 1e-4) {
+        // Give an exactly overlapping pair equal and opposite directions.
+        let lo = min(i, id);
+        let hi = max(i, id);
+        outward = normalize(vec3<f32>(
+          hash11(lo * 17u + hi) * 2.0 - 1.0,
+          hash11(lo + hi * 3u + 7u) * 2.0 - 1.0,
+          hash11(lo * 11u + hi * 5u + 13u) * 2.0 - 1.0
+        ));
+        if (i > id) { outward = -outward; }
+      } else {
+        outward = (pos - other.pos) / dist;
+      }
+      sep = sep + outward * (1.0 - dist / sepRadius);
     }
   }
+  atomicAdd(&neighborTotal, used);
 
   var acc = vec3<f32>(0.0);
   if (used > 0u) {
     let inv = 1.0 / f32(used);
     acc = acc + steer(ali * inv, vel) * params.alignment;
     acc = acc + steer((coh * inv) - pos, vel) * params.cohesion;
-    acc = acc + steer(sep, vel) * params.separation;
   }
 
   // Soft turn away from the walls, then a hard reflect if a bird still hits one.
@@ -463,14 +510,32 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (pos.z < -BOX_HALF + margin) { acc.z = acc.z + (1.0 - (pos.z + BOX_HALF) / margin) * 80.0; }
   acc = limitLen(acc, 70.0);
 
+  // Flocking and wall steering change heading without adding energy.
+  let speedBeforeSteering = length(vel);
   vel = vel + acc * params.dt;
-  let sp = length(vel);
-  if (sp > 1e-4) {
-    let clamped = clamp(sp, MIN_SPEED, MAX_SPEED);
-    vel = vel * (clamped / sp);
-  } else {
-    vel = vec3<f32>(0.0, 0.0, MIN_SPEED);
+  if (speedBeforeSteering > 1e-4 && length(vel) > 1e-4) {
+    vel = normalize(vel) * speedBeforeSteering;
   }
+
+  // Separation redirects velocity outward without changing its speed.
+  let speedBeforeSeparation = length(vel);
+  if (speedBeforeSeparation > 1e-4 && length(sep) > 1e-4) {
+    vel = vel + limitLen(sep, 1.0) * (MAX_FORCE * params.separation * params.dt);
+    vel = normalize(vel) * speedBeforeSeparation;
+  }
+
+  // Quadratic drag removes speed. A flap is a discrete impulse along the
+  // current heading once speed falls below the selected minimum.
+  var speed = length(vel);
+  var heading = vec3<f32>(0.0, 0.0, 1.0);
+  if (speed > 1e-4) { heading = vel / speed; }
+  speed = max(0.0, speed - params.drag * speed * speed * params.dt);
+  var flap = max(0.0, me.flap - params.dt);
+  if (speed < params.minVelocity && flap <= 0.0) {
+    speed = speed + FLAP_DV;
+    flap = FLAP_DURATION;
+  }
+  vel = heading * speed;
   pos = pos + vel * params.dt;
 
   if (pos.x > BOX_HALF) { pos.x = BOX_HALF; vel.x = -abs(vel.x); }
@@ -492,7 +557,7 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
 
   var outBird: Bird;
   outBird.pos = pos;
-  outBird.pad = 0.0;
+  outBird.flap = flap;
   outBird.vel = vel;
   outBird.bank = bank;
   birdsOut[i] = outBird;
@@ -521,15 +586,15 @@ fn birdBasis(vel: vec3<f32>, bank: f32) -> mat3x3<f32> {
 }
 
 fn wingCorner(which: u32, corner: u32, lift: f32) -> vec3<f32> {
-  // Two separate triangles. The nose is the forward vertex of each wing,
-  // so the heading stays obvious even when a wing is edge-on.
+  // The wings share their nose-to-tail edge. The nose is the forward vertex
+  // of each wing, so the heading stays obvious even when a wing is edge-on.
   if (which == 0u) {
-    if (corner == 0u) { return vec3<f32>(-0.12, 0.08, 1.35); }
+    if (corner == 0u) { return vec3<f32>(0.0, 0.08, 1.35); }
     if (corner == 1u) { return vec3<f32>(-1.55, lift, -0.05); }
-    return vec3<f32>(-0.28, lift * 0.2, -0.72);
+    return vec3<f32>(0.0, lift * 0.2, -0.72);
   }
-  if (corner == 0u) { return vec3<f32>(0.12, 0.08, 1.35); }
-  if (corner == 1u) { return vec3<f32>(0.28, lift * 0.2, -0.72); }
+  if (corner == 0u) { return vec3<f32>(0.0, 0.08, 1.35); }
+  if (corner == 1u) { return vec3<f32>(0.0, lift * 0.2, -0.72); }
   return vec3<f32>(1.55, lift, -0.05);
 }
 
@@ -538,9 +603,11 @@ fn vsBird(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   let b = birdsIn[inst];
   let basis = birdBasis(b.vel, b.bank);
   let h = hash11(inst);
-  let freq = 6.5 + h * 5.0;
-  let flap = sin(params.time * freq + h * 6.2831853);
-  let lift = 0.55 + flap * 0.9;
+  var lift = RESTING_WING_LIFT;
+  if (b.flap > 0.0) {
+    let phase = clamp(1.0 - b.flap / FLAP_DURATION, 0.0, 1.0);
+    lift = lift + sin(phase * 6.2831853) * 0.9;
+  }
   let which = vi / 3u;
   let corner = vi % 3u;
   let scale = BIRD_SCALE * params.birdSize * (0.88 + 0.24 * h);
@@ -553,12 +620,12 @@ fn vsBird(@builtin(vertex_index) vi: u32, @builtin(instance_index) inst: u32) ->
   let nLocal = normalize(cross(p1 - p0, p2 - p0));
   let nWorld = normalize(basis * nLocal);
 
-  var color: vec3<f32>;
-  let band = h * 4.0;
-  if (band < 1.0) { color = mix(vec3<f32>(0.95, 0.94, 0.90), vec3<f32>(0.78, 0.80, 0.84), band); }
-  else if (band < 2.0) { color = mix(vec3<f32>(0.93, 0.78, 0.52), vec3<f32>(0.86, 0.62, 0.42), band - 1.0); }
-  else if (band < 3.0) { color = mix(vec3<f32>(0.62, 0.76, 0.86), vec3<f32>(0.45, 0.55, 0.68), band - 2.0); }
-  else { color = mix(vec3<f32>(0.82, 0.48, 0.40), vec3<f32>(0.55, 0.34, 0.32), band - 3.0); }
+  // Map velocity components around the initial maximum speed to RGB [0, 1].
+  var color = clamp(
+    b.vel / (2.0 * COLOR_SPEED) + vec3<f32>(0.5),
+    vec3<f32>(0.0),
+    vec3<f32>(1.0)
+  );
   if (which == 1u) { color = color * 0.78; }
 
   var out: VSOut;
@@ -608,27 +675,38 @@ function sliderValue(id) {
 }
 
 function syncReadouts() {
-  readouts.count.textContent = String(birdCount);
-  readouts.sep.textContent = separation.toFixed(2);
-  readouts.ali.textContent = alignment.toFixed(2);
-  readouts.coh.textContent = cohesion.toFixed(2);
-  readouts.k.textContent = String(neighbors);
-  readouts.size.textContent = birdSize.toFixed(2);
+  readouts.count.value = String(birdCount);
+  readouts.sep.value = separation.toFixed(2);
+  readouts.sepDist.value = separationDistance.toFixed(2);
+  readouts.ali.value = alignment.toFixed(2);
+  readouts.coh.value = cohesion.toFixed(2);
+  readouts.k.value = String(neighbors);
+  readouts.size.value = birdSize.toFixed(2);
+  readouts.drag.value = drag.toFixed(3);
+  readouts.minVel.value = minVelocity.toFixed(1);
   countEl.textContent = birdCount + ' birds';
 }
 
 function readSliders() {
   birdCount = Math.max(1, Math.min(MAX_BIRDS, sliderValue('count') | 0));
   separation = sliderValue('sep');
+  separationDistance = sliderValue('sepDist');
   alignment = sliderValue('ali');
   cohesion = sliderValue('coh');
   neighbors = Math.max(1, Math.min(MAX_K, sliderValue('k') | 0));
   birdSize = sliderValue('size');
+  drag = sliderValue('drag');
+  minVelocity = sliderValue('minVel');
   syncReadouts();
 }
 
 for (const key of Object.keys(ui)) {
   ui[key].addEventListener('input', readSliders);
+  readouts[key].addEventListener('change', () => {
+    const value = parseFloat(readouts[key].value);
+    if (Number.isFinite(value)) ui[key].value = String(value);
+    readSliders();
+  });
 }
 
 let dragging = false;
@@ -664,10 +742,13 @@ document.getElementById('btn-pause').addEventListener('click', () => {
 let device, context, format;
 let birdBuffers, srcIndex;
 let cellAtomic, cellCountBuf, cellStarts, cellCursor, indices;
+let neighborTotalBuf, neighborReadback;
 let uniformBuffer, uniformData, uniformF32, uniformU32;
 let pipelines;
 let depthTexture, msaaTexture, msaaView, depthView;
 let groups;
+let neighborReadPending = false;
+let neighborReadAt = 0;
 
 function storageBuffer(size) {
   return device.createBuffer({
@@ -714,6 +795,7 @@ function makeGroups() {
       layout: layout(pipelines.clear),
       entries: [
         { binding: 3, resource: { buffer: cellAtomic } },
+        { binding: 8, resource: { buffer: neighborTotalBuf } },
       ],
     }),
     prefix: device.createBindGroup({
@@ -758,6 +840,7 @@ function makeGroups() {
       { binding: 4, resource: { buffer: cellCountBuf } },
       { binding: 5, resource: { buffer: cellStarts } },
       { binding: 7, resource: { buffer: indices } },
+      { binding: 8, resource: { buffer: neighborTotalBuf } },
     ],
   }));
   groups.render = [0, 1].map((i) => device.createBindGroup({
@@ -780,6 +863,9 @@ function writeUniforms(dt) {
   uniformF32[21] = alignment;
   uniformF32[22] = cohesion;
   uniformF32[23] = birdSize;
+  uniformF32[24] = drag;
+  uniformF32[25] = minVelocity;
+  uniformF32[26] = separationDistance;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 }
 
@@ -827,6 +913,11 @@ function frame(now) {
     flockPass.setBindGroup(0, groups.flock[src]);
     flockPass.dispatchWorkgroups(birdGroups);
     flockPass.end();
+    if (!neighborReadPending && now - neighborReadAt >= 500) {
+      encoder.copyBufferToBuffer(neighborTotalBuf, 0, neighborReadback, 0, 4);
+      neighborReadPending = true;
+      neighborReadAt = now;
+    }
     srcIndex = 1 - src;
   }
 
@@ -855,6 +946,17 @@ function frame(now) {
   pass.draw(6, birdCount);
   pass.end();
   device.queue.submit([encoder.finish()]);
+  if (neighborReadPending && neighborReadback.mapState === 'unmapped') {
+    neighborReadback.mapAsync(GPUMapMode.READ).then(() => {
+      const total = new Uint32Array(neighborReadback.getMappedRange())[0];
+      neighborsEl.textContent = 'neighbors avg ' + (total / birdCount).toFixed(1) + ' / ' + neighbors;
+      neighborReadback.unmap();
+      neighborReadPending = false;
+    }).catch((err) => {
+      neighborReadPending = false;
+      showError(err.message);
+    });
+  }
 
   if (!frame.stamp) frame.stamp = now;
   frame.frames = (frame.frames || 0) + 1;
@@ -928,7 +1030,15 @@ async function main() {
   cellStarts = storageBuffer(NUM_CELLS * 4);
   cellCursor = storageBuffer(NUM_CELLS * 4);
   indices = storageBuffer(MAX_BIRDS * 4);
-  uniformData = new ArrayBuffer(96);
+  neighborTotalBuf = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  neighborReadback = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  uniformData = new ArrayBuffer(112);
   uniformF32 = new Float32Array(uniformData);
   uniformU32 = new Uint32Array(uniformData);
   uniformBuffer = device.createBuffer({

@@ -57,19 +57,19 @@
     font-family: inherit;
   }
   #sliders button:hover { background: #2a2a32; border-color: #5a5a66; }
+  body.fullscreen-mode .panel { display: none; }
+  body.fullscreen-mode canvas { cursor: none; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="info" class="panel">
   <h2>Flocking</h2>
-  <div>Birds in a box. Each one is two triangles that flap along its direction of flight.</div>
-  <div class="hint" style="margin-top:6px;">Separation, alignment, and cohesion use only the nearest neighbors inside a fixed search radius. The box is split into cells of that same size, so a bird looks through just the cells the radius can reach — at most a 3×3×3 block — instead of every other bird.</div>
+  <div>Each bird finds only nearest neighbors and follows cohesion, separation, and alignment rules with them.</div>
   <div class="hint" style="margin-top:6px;">Drag to orbit · scroll to zoom</div>
   <div style="margin-top:8px;">
     <span class="stat" id="fps">fps —</span> ·
-    <span class="stat" id="count-readout">birds —</span> ·
-    <span class="stat" id="neighbors-readout">neighbors avg —</span>
+    <span class="stat" id="count-readout">birds —</span>
   </div>
   <div id="error"></div>
 </div>
@@ -77,18 +77,18 @@
   <h3>Controls</h3>
   <div class="slider-row">
     <label for="s-count">Birds</label>
-    <input type="range" id="s-count" min="50" max="12000" step="50" value="1200">
-    <input type="number" class="v" id="v-count" min="50" max="12000" step="50" value="1200">
+    <input type="range" id="s-count" min="50" max="100000" step="50" value="7750">
+    <input type="number" class="v" id="v-count" min="50" max="100000" step="50" value="7750">
   </div>
   <div class="slider-row">
     <label for="s-sep">Separation</label>
-    <input type="range" id="s-sep" min="0" max="30" step="0.01" value="1.60">
-    <input type="number" class="v" id="v-sep" min="0" max="30" step="0.01" value="1.60">
+    <input type="range" id="s-sep" min="0" max="30" step="0.01" value="6.88">
+    <input type="number" class="v" id="v-sep" min="0" max="30" step="0.01" value="6.88">
   </div>
   <div class="slider-row">
     <label for="s-sep-dist">Sep distance</label>
-    <input type="range" id="s-sep-dist" min="0" max="10" step="0.01" value="1.00">
-    <input type="number" class="v" id="v-sep-dist" min="0" max="10" step="0.01" value="1.00">
+    <input type="range" id="s-sep-dist" min="0" max="10" step="0.01" value="3.26">
+    <input type="number" class="v" id="v-sep-dist" min="0" max="10" step="0.01" value="3.26">
   </div>
   <div class="slider-row">
     <label for="s-ali">Alignment</label>
@@ -102,8 +102,8 @@
   </div>
   <div class="slider-row">
     <label for="s-k">Neighbors</label>
-    <input type="range" id="s-k" min="1" max="32" step="1" value="8">
-    <input type="number" class="v" id="v-k" min="1" max="32" step="1" value="8">
+    <input type="range" id="s-k" min="1" max="32" step="1" value="16">
+    <input type="number" class="v" id="v-k" min="1" max="32" step="1" value="16">
   </div>
   <div class="slider-row">
     <label for="s-size">Size</label>
@@ -112,16 +112,28 @@
   </div>
   <div class="slider-row">
     <label for="s-drag">Drag</label>
-    <input type="range" id="s-drag" min="0" max="0.1" step="0.001" value="0.015">
-    <input type="number" class="v" id="v-drag" min="0" max="0.1" step="0.001" value="0.015">
+    <input type="range" id="s-drag" min="0" max="0.1" step="0.001" value="0.011">
+    <input type="number" class="v" id="v-drag" min="0" max="0.1" step="0.001" value="0.011">
   </div>
   <div class="slider-row">
     <label for="s-min-vel">Min velocity</label>
     <input type="range" id="s-min-vel" min="0" max="20" step="0.1" value="6">
     <input type="number" class="v" id="v-min-vel" min="0" max="20" step="0.1" value="6.0">
   </div>
+  <div class="slider-row">
+    <label for="s-turn-response">Turn response</label>
+    <input type="range" id="s-turn-response" min="0" max="24" step="0.05" value="9.90">
+    <input type="number" class="v" id="v-turn-response" min="0" max="24" step="0.05" value="9.90">
+  </div>
+  <div class="slider-row">
+    <label for="s-turn-coupling">Turn coupling</label>
+    <input type="range" id="s-turn-coupling" min="0" max="24" step="0.05" value="10.20">
+    <input type="number" class="v" id="v-turn-coupling" min="0" max="24" step="0.05" value="10.20">
+  </div>
   <button id="btn-pause" type="button">Pause</button>
   <button id="btn-reset" type="button">Reset</button>
+  <button id="btn-box" type="button">Hide box</button>
+  <button id="btn-fullscreen" type="button">Fullscreen</button>
 </div>
 
 <script>
@@ -129,34 +141,29 @@
  * Flocking
  * --------
  * Reynolds boids on the GPU. Each bird steers from its K nearest neighbors
- * inside a search radius (separation, alignment, cohesion).
+ * by topological distance (separation, alignment, cohesion).
  *
- * Neighbor search is a uniform grid, not an all-pairs loop. The cell edge
- * equals the search radius, so the sphere around a bird overlaps at most
- * the 3x3x3 block of cells around it. The loop bounds are the cells that
- * sphere can actually touch, and each of those cells is skipped unless its
- * box meets the sphere. Birds inside a cell are listed with a counting sort
- * (atomic histogram, exclusive prefix sum, scatter), so a cell can hold as
- * many birds as actually land there.
+ * Neighbor search is a uniform grid, not an all-pairs loop. It expands in
+ * concentric cell shells until the K nearest birds are provably known.
+ * Birds inside a cell are listed with a counting sort (atomic histogram,
+ * exclusive prefix sum, scatter).
  */
 
 const BOX_HALF = 40;
-const RADIUS = 9;
-const CELL_SIZE = RADIUS; // one cell edge == search radius => <= 27 cells visited
+const CELL_SIZE = 9; // spatial-index cell edge; topological search expands across cells
 const GRID = Math.ceil((BOX_HALF * 2) / CELL_SIZE);
 const NUM_CELLS = GRID * GRID * GRID;
-const MAX_BIRDS = 12000;
+const MAX_BIRDS = 100000;
 const MAX_K = 32;
 const INITIAL_MIN_SPEED = 6;
 const INITIAL_MAX_SPEED = 12;
 const COLOR_SPEED = 12;
-const BIRD_FLOATS = 8; // pos.xyz, flap timer, vel.xyz, bank
+const BIRD_FLOATS = 12; // pos.xyz/flap, vel.xyz/bank, angular turn.xyz/pad
 
 const canvas = document.getElementById('view');
 const errorEl = document.getElementById('error');
 const fpsEl = document.getElementById('fps');
 const countEl = document.getElementById('count-readout');
-const neighborsEl = document.getElementById('neighbors-readout');
 
 const ui = {
   count: document.getElementById('s-count'),
@@ -168,6 +175,8 @@ const ui = {
   size: document.getElementById('s-size'),
   drag: document.getElementById('s-drag'),
   minVel: document.getElementById('s-min-vel'),
+  turnResponse: document.getElementById('s-turn-response'),
+  turnCoupling: document.getElementById('s-turn-coupling'),
 };
 const readouts = {
   count: document.getElementById('v-count'),
@@ -179,19 +188,25 @@ const readouts = {
   size: document.getElementById('v-size'),
   drag: document.getElementById('v-drag'),
   minVel: document.getElementById('v-min-vel'),
+  turnResponse: document.getElementById('v-turn-response'),
+  turnCoupling: document.getElementById('v-turn-coupling'),
 };
 
-let birdCount = 1200;
-let separation = 1.6;
-let separationDistance = 1;
+let birdCount = 7750;
+let separation = 6.88;
+let separationDistance = 3.26;
 let alignment = 1.45;
 let cohesion = 0.65;
-let neighbors = 8;
+let neighbors = 16;
 let birdSize = 0.25;
-let drag = 0.015;
+let drag = 0.011;
 let minVelocity = 6;
+let turnResponse = 9.9;
+let turnCoupling = 10.2;
 let paused = false;
 let simTime = 0;
+let showBox = true;
+let fullscreenMode = false;
 
 let yaw = 0.55;
 let pitch = 0.42;
@@ -291,6 +306,8 @@ struct Bird {
   flap: f32,
   vel: vec3<f32>,
   bank: f32,
+  turn: vec3<f32>,
+  pad: f32,
 }
 
 struct Uniforms {
@@ -306,11 +323,12 @@ struct Uniforms {
   drag: f32,
   minVelocity: f32,
   separationDistance: f32,
+  turnResponse: f32,
+  turnCoupling: f32,
 }
 
 const BOX_HALF: f32 = ${BOX_HALF}.0;
 const CELL_SIZE: f32 = ${CELL_SIZE}.0;
-const RADIUS: f32 = ${RADIUS}.0;
 const GRID: i32 = ${GRID};
 const NUM_CELLS: u32 = ${NUM_CELLS}u;
 const MAX_K: u32 = ${MAX_K}u;
@@ -321,6 +339,8 @@ const BIRD_SCALE: f32 = 2.15;
 const FLAP_DV: f32 = 4.0;
 const FLAP_DURATION: f32 = 0.45;
 const RESTING_WING_LIFT: f32 = 0.895;
+const TURN_DAMPING: f32 = 1.5;
+const MAX_TURN_RATE: f32 = 3.5;
 
 @group(0) @binding(0) var<uniform> params: Uniforms;
 @group(0) @binding(1) var<storage, read> birdsIn: array<Bird>;
@@ -330,7 +350,6 @@ const RESTING_WING_LIFT: f32 = 0.895;
 @group(0) @binding(5) var<storage, read_write> cellStarts: array<u32>;
 @group(0) @binding(6) var<storage, read_write> cellCursor: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> indices: array<u32>;
-@group(0) @binding(8) var<storage, read_write> neighborTotal: atomic<u32>;
 
 fn worldToCell(p: vec3<f32>) -> vec3<i32> {
   let g = vec3<i32>(floor((p + vec3<f32>(BOX_HALF)) / CELL_SIZE));
@@ -339,14 +358,6 @@ fn worldToCell(p: vec3<f32>) -> vec3<i32> {
 
 fn cellIndex(c: vec3<i32>) -> u32 {
   return u32(c.x) + u32(GRID) * (u32(c.y) + u32(GRID) * u32(c.z));
-}
-
-fn cellTouchesSphere(c: vec3<i32>, p: vec3<f32>, r2: f32) -> bool {
-  let bmin = vec3<f32>(c) * CELL_SIZE - vec3<f32>(BOX_HALF);
-  let bmax = bmin + vec3<f32>(CELL_SIZE);
-  let closest = clamp(p, bmin, bmax);
-  let d = p - closest;
-  return dot(d, d) <= r2;
 }
 
 fn limitLen(v: vec3<f32>, maxLen: f32) -> vec3<f32> {
@@ -359,6 +370,16 @@ fn steer(desired: vec3<f32>, vel: vec3<f32>) -> vec3<f32> {
   let len = length(desired);
   if (len < 1e-5) { return vec3<f32>(0.0); }
   return limitLen((desired / len) * length(vel) - vel, MAX_FORCE);
+}
+
+fn rotateByAngularVelocity(v: vec3<f32>, omega: vec3<f32>, dt: f32) -> vec3<f32> {
+  let rate = length(omega);
+  if (rate < 1e-5) { return v; }
+  let axis = omega / rate;
+  let angle = rate * dt;
+  let c = cos(angle);
+  let s = sin(angle);
+  return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }
 
 fn hash11(n: u32) -> f32 {
@@ -375,7 +396,6 @@ fn hash11(n: u32) -> f32 {
 fn clearCells(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (gid.x >= NUM_CELLS) { return; }
   atomicStore(&cellAtomic[gid.x], 0u);
-  if (gid.x == 0u) { atomicStore(&neighborTotal, 0u); }
 }
 
 @compute @workgroup_size(64)
@@ -416,7 +436,6 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
   var pos = me.pos;
   var vel = me.vel;
   let kmax = min(params.neighbors, MAX_K);
-  let r2 = RADIUS * RADIUS;
 
   var bestD: array<f32, 32>;
   var bestI: array<u32, 32>;
@@ -425,42 +444,60 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
     bestI[k] = 0xffffffffu;
   }
 
-  // Exact cell range overlapped by the search sphere. With CELL_SIZE == RADIUS
-  // this is at most 3 cells on a side. Cells whose box misses the sphere are skipped.
-  let minC = worldToCell(pos - vec3<f32>(RADIUS));
-  let maxC = worldToCell(pos + vec3<f32>(RADIUS));
-  for (var z = minC.z; z <= maxC.z; z++) {
-    for (var y = minC.y; y <= maxC.y; y++) {
-      for (var x = minC.x; x <= maxC.x; x++) {
-        let cell = vec3<i32>(x, y, z);
-        if (!cellTouchesSphere(cell, pos, r2)) { continue; }
-        let ci = cellIndex(cell);
-        let start = cellStarts[ci];
-        let n = cellCount[ci];
-        for (var j = 0u; j < n; j++) {
-          let id = indices[start + j];
-          if (id == i) { continue; }
-          let d = birdsIn[id].pos - pos;
-          let d2 = dot(d, d);
-          if (d2 > r2 || d2 >= bestD[kmax - 1u]) { continue; }
-          var slot = kmax - 1u;
-          loop {
-            if (slot == 0u) { break; }
-            if (d2 >= bestD[slot - 1u]) { break; }
-            bestD[slot] = bestD[slot - 1u];
-            bestI[slot] = bestI[slot - 1u];
-            slot = slot - 1u;
+  // Search concentric cell shells until the nearest K birds are provably
+  // known. This is topological: sparse birds search farther rather than
+  // accepting fewer neighbors because of a fixed metric radius.
+  let home = worldToCell(pos);
+  for (var shell = 0; shell < GRID; shell++) {
+    let minC = max(home - vec3<i32>(shell), vec3<i32>(0));
+    let maxC = min(home + vec3<i32>(shell), vec3<i32>(GRID - 1));
+    for (var z = minC.z; z <= maxC.z; z++) {
+      for (var y = minC.y; y <= maxC.y; y++) {
+        for (var x = minC.x; x <= maxC.x; x++) {
+          let delta = abs(vec3<i32>(x, y, z) - home);
+          if (max(delta.x, max(delta.y, delta.z)) != shell) { continue; }
+          let ci = cellIndex(vec3<i32>(x, y, z));
+          let start = cellStarts[ci];
+          let n = cellCount[ci];
+          for (var j = 0u; j < n; j++) {
+            let id = indices[start + j];
+            if (id == i) { continue; }
+            let d = birdsIn[id].pos - pos;
+            let d2 = dot(d, d);
+            if (d2 >= bestD[kmax - 1u]) { continue; }
+            var slot = kmax - 1u;
+            loop {
+              if (slot == 0u) { break; }
+              if (d2 >= bestD[slot - 1u]) { break; }
+              bestD[slot] = bestD[slot - 1u];
+              bestI[slot] = bestI[slot - 1u];
+              slot = slot - 1u;
+            }
+            bestD[slot] = d2;
+            bestI[slot] = id;
           }
-          bestD[slot] = d2;
-          bestI[slot] = id;
         }
       }
+    }
+
+    // Any unvisited cell lies beyond one of these six planes. Once the
+    // current Kth distance is inside all of them, no unseen bird can win.
+    if (bestI[kmax - 1u] != 0xffffffffu) {
+      var unseen = 1e20;
+      if (minC.x > 0) { unseen = min(unseen, pos.x - (f32(minC.x) * CELL_SIZE - BOX_HALF)); }
+      if (minC.y > 0) { unseen = min(unseen, pos.y - (f32(minC.y) * CELL_SIZE - BOX_HALF)); }
+      if (minC.z > 0) { unseen = min(unseen, pos.z - (f32(minC.z) * CELL_SIZE - BOX_HALF)); }
+      if (maxC.x < GRID - 1) { unseen = min(unseen, (f32(maxC.x + 1) * CELL_SIZE - BOX_HALF) - pos.x); }
+      if (maxC.y < GRID - 1) { unseen = min(unseen, (f32(maxC.y + 1) * CELL_SIZE - BOX_HALF) - pos.y); }
+      if (maxC.z < GRID - 1) { unseen = min(unseen, (f32(maxC.z + 1) * CELL_SIZE - BOX_HALF) - pos.z); }
+      if (bestD[kmax - 1u] <= unseen * unseen) { break; }
     }
   }
 
   var sep = vec3<f32>(0.0);
   var ali = vec3<f32>(0.0);
   var coh = vec3<f32>(0.0);
+  var neighborTurn = vec3<f32>(0.0);
   var used = 0u;
   let sepRadius = BIRD_SCALE * params.birdSize * params.separationDistance;
   let sepR2 = sepRadius * sepRadius;
@@ -471,6 +508,7 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
     let d2 = bestD[n];
     ali = ali + other.vel;
     coh = coh + other.pos;
+    neighborTurn = neighborTurn + other.turn;
     used = used + 1u;
     if (d2 < sepR2) {
       let dist = sqrt(d2);
@@ -491,8 +529,6 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
       sep = sep + outward * (1.0 - dist / sepRadius);
     }
   }
-  atomicAdd(&neighborTotal, used);
-
   var acc = vec3<f32>(0.0);
   if (used > 0u) {
     let inv = 1.0 / f32(used);
@@ -510,11 +546,19 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (pos.z < -BOX_HALF + margin) { acc.z = acc.z + (1.0 - (pos.z + BOX_HALF) / margin) * 80.0; }
   acc = limitLen(acc, 70.0);
 
-  // Flocking and wall steering change heading without adding energy.
+  // Heading changes have inertia: local steering accelerates angular velocity,
+  // and neighboring turn rates couple so a turn can propagate as a wave.
   let speedBeforeSteering = length(vel);
-  vel = vel + acc * params.dt;
-  if (speedBeforeSteering > 1e-4 && length(vel) > 1e-4) {
-    vel = normalize(vel) * speedBeforeSteering;
+  var turn = me.turn;
+  if (speedBeforeSteering > 1e-4) {
+    let fwdBeforeSteering = vel / speedBeforeSteering;
+    var turnAccel = cross(fwdBeforeSteering, acc) * (params.turnResponse / speedBeforeSteering);
+    if (used > 0u) {
+      turnAccel = turnAccel + (neighborTurn / f32(used) - turn) * params.turnCoupling;
+    }
+    turnAccel = turnAccel - turn * TURN_DAMPING;
+    turn = limitLen(turn + turnAccel * params.dt, MAX_TURN_RATE);
+    vel = normalize(rotateByAngularVelocity(fwdBeforeSteering, turn, params.dt)) * speedBeforeSteering;
   }
 
   // Separation redirects velocity outward without changing its speed.
@@ -560,6 +604,8 @@ fn flock(@builtin(global_invocation_id) gid: vec3<u32>) {
   outBird.flap = flap;
   outBird.vel = vel;
   outBird.bank = bank;
+  outBird.turn = turn;
+  outBird.pad = 0.0;
   birdsOut[i] = outBird;
 }
 
@@ -684,6 +730,8 @@ function syncReadouts() {
   readouts.size.value = birdSize.toFixed(2);
   readouts.drag.value = drag.toFixed(3);
   readouts.minVel.value = minVelocity.toFixed(1);
+  readouts.turnResponse.value = turnResponse.toFixed(2);
+  readouts.turnCoupling.value = turnCoupling.toFixed(2);
   countEl.textContent = birdCount + ' birds';
 }
 
@@ -697,6 +745,8 @@ function readSliders() {
   birdSize = sliderValue('size');
   drag = sliderValue('drag');
   minVelocity = sliderValue('minVel');
+  turnResponse = sliderValue('turnResponse');
+  turnCoupling = sliderValue('turnCoupling');
   syncReadouts();
 }
 
@@ -738,17 +788,43 @@ document.getElementById('btn-pause').addEventListener('click', () => {
   paused = !paused;
   document.getElementById('btn-pause').textContent = paused ? 'Resume' : 'Pause';
 });
+document.getElementById('btn-box').addEventListener('click', () => {
+  showBox = !showBox;
+  document.getElementById('btn-box').textContent = showBox ? 'Hide box' : 'Show box';
+});
+function setFullscreenMode(enabled) {
+  fullscreenMode = enabled;
+  document.body.classList.toggle('fullscreen-mode', enabled);
+  document.getElementById('btn-fullscreen').textContent = enabled ? 'Exit fullscreen' : 'Fullscreen';
+}
+document.getElementById('btn-fullscreen').addEventListener('click', async () => {
+  if (fullscreenMode) {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    setFullscreenMode(false);
+    return;
+  }
+  setFullscreenMode(true);
+  try {
+    await document.documentElement.requestFullscreen();
+  } catch (err) {
+    console.warn('Native fullscreen unavailable; using distraction-free mode.', err);
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement) setFullscreenMode(true);
+  else if (fullscreenMode) setFullscreenMode(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && fullscreenMode) setFullscreenMode(false);
+});
 
 let device, context, format;
 let birdBuffers, srcIndex;
 let cellAtomic, cellCountBuf, cellStarts, cellCursor, indices;
-let neighborTotalBuf, neighborReadback;
 let uniformBuffer, uniformData, uniformF32, uniformU32;
 let pipelines;
 let depthTexture, msaaTexture, msaaView, depthView;
 let groups;
-let neighborReadPending = false;
-let neighborReadAt = 0;
 
 function storageBuffer(size) {
   return device.createBuffer({
@@ -795,7 +871,6 @@ function makeGroups() {
       layout: layout(pipelines.clear),
       entries: [
         { binding: 3, resource: { buffer: cellAtomic } },
-        { binding: 8, resource: { buffer: neighborTotalBuf } },
       ],
     }),
     prefix: device.createBindGroup({
@@ -840,7 +915,6 @@ function makeGroups() {
       { binding: 4, resource: { buffer: cellCountBuf } },
       { binding: 5, resource: { buffer: cellStarts } },
       { binding: 7, resource: { buffer: indices } },
-      { binding: 8, resource: { buffer: neighborTotalBuf } },
     ],
   }));
   groups.render = [0, 1].map((i) => device.createBindGroup({
@@ -866,6 +940,8 @@ function writeUniforms(dt) {
   uniformF32[24] = drag;
   uniformF32[25] = minVelocity;
   uniformF32[26] = separationDistance;
+  uniformF32[27] = turnResponse;
+  uniformF32[28] = turnCoupling;
   device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 }
 
@@ -913,11 +989,6 @@ function frame(now) {
     flockPass.setBindGroup(0, groups.flock[src]);
     flockPass.dispatchWorkgroups(birdGroups);
     flockPass.end();
-    if (!neighborReadPending && now - neighborReadAt >= 500) {
-      encoder.copyBufferToBuffer(neighborTotalBuf, 0, neighborReadback, 0, 4);
-      neighborReadPending = true;
-      neighborReadAt = now;
-    }
     srcIndex = 1 - src;
   }
 
@@ -938,25 +1009,16 @@ function frame(now) {
       depthStoreOp: 'discard',
     },
   });
-  pass.setPipeline(pipelines.box);
-  pass.setBindGroup(0, groups.box);
-  pass.draw(24);
+  if (showBox && !fullscreenMode) {
+    pass.setPipeline(pipelines.box);
+    pass.setBindGroup(0, groups.box);
+    pass.draw(24);
+  }
   pass.setPipeline(pipelines.bird);
   pass.setBindGroup(0, groups.render[renderIndex]);
   pass.draw(6, birdCount);
   pass.end();
   device.queue.submit([encoder.finish()]);
-  if (neighborReadPending && neighborReadback.mapState === 'unmapped') {
-    neighborReadback.mapAsync(GPUMapMode.READ).then(() => {
-      const total = new Uint32Array(neighborReadback.getMappedRange())[0];
-      neighborsEl.textContent = 'neighbors avg ' + (total / birdCount).toFixed(1) + ' / ' + neighbors;
-      neighborReadback.unmap();
-      neighborReadPending = false;
-    }).catch((err) => {
-      neighborReadPending = false;
-      showError(err.message);
-    });
-  }
 
   if (!frame.stamp) frame.stamp = now;
   frame.frames = (frame.frames || 0) + 1;
@@ -1030,15 +1092,7 @@ async function main() {
   cellStarts = storageBuffer(NUM_CELLS * 4);
   cellCursor = storageBuffer(NUM_CELLS * 4);
   indices = storageBuffer(MAX_BIRDS * 4);
-  neighborTotalBuf = device.createBuffer({
-    size: 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-  });
-  neighborReadback = device.createBuffer({
-    size: 4,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
-  uniformData = new ArrayBuffer(112);
+  uniformData = new ArrayBuffer(128);
   uniformF32 = new Float32Array(uniformData);
   uniformU32 = new Uint32Array(uniformData);
   uniformBuffer = device.createBuffer({

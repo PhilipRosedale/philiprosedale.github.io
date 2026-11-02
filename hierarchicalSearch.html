@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hierarchical Life Rule Search</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #090d12;
+            --panel: #111820;
+            --panel2: #17212b;
+            --line: #2a3948;
+            --text: #e8f0f7;
+            --muted: #91a3b5;
+            --green: #55f58a;
+            --cyan: #4dd8ff;
+            --yellow: #ffd166;
+            --red: #ff6b6b;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: radial-gradient(circle at 45% -20%, #183043 0, var(--bg) 48%);
+            color: var(--text);
+            font: 14px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        button, input, select, textarea { font: inherit; }
+        button {
+            color: var(--text);
+            background: var(--panel2);
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            padding: 7px 11px;
+            cursor: pointer;
+        }
+        button:hover:not(:disabled) { border-color: var(--green); }
+        button:disabled { opacity: .45; cursor: default; }
+        button.primary { background: #174c2a; border-color: #2b8b4b; }
+        button.danger { color: #ffaaaa; }
+        input, select, textarea {
+            color: var(--text);
+            background: #0b1117;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 6px;
+        }
+        input[type="number"] { width: 74px; }
+        header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 18px 22px 12px;
+            border-bottom: 1px solid var(--line);
+        }
+        h1, h2, h3, p { margin-top: 0; }
+        h1 { margin-bottom: 2px; font-size: 22px; letter-spacing: .02em; }
+        h2 { margin-bottom: 12px; font-size: 15px; text-transform: uppercase; letter-spacing: .09em; color: var(--cyan); }
+        h3 { margin-bottom: 8px; font-size: 14px; }
+        .subtitle, .muted { color: var(--muted); }
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(500px, 1.35fr) minmax(410px, .85fr);
+            gap: 12px;
+            padding: 12px;
+        }
+        .stack { display: grid; gap: 12px; align-content: start; }
+        .panel {
+            background: color-mix(in srgb, var(--panel) 94%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 14px;
+            box-shadow: 0 12px 32px rgba(0,0,0,.18);
+        }
+        .controls, .settings, .stat-grid, .rule-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+        }
+        .settings { margin-top: 12px; color: var(--muted); }
+        .settings label { display: inline-flex; align-items: center; gap: 5px; }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(70px, 1fr));
+            margin: 14px 0 10px;
+        }
+        .stat { background: #0b1117; border: 1px solid #1e2b37; border-radius: 5px; padding: 8px; }
+        .stat .value { font-size: 18px; font-variant-numeric: tabular-nums; color: var(--green); }
+        .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+        .metric-bar {
+            display: grid;
+            grid-template-columns: 85px 1fr 45px;
+            align-items: center;
+            gap: 8px;
+            margin: 5px 0;
+            font-size: 12px;
+        }
+        .bar-track { height: 7px; background: #090d12; border-radius: 10px; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0; background: var(--cyan); transition: width .2s; }
+        canvas {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            display: block;
+            background: #05080b;
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            image-rendering: pixelated;
+        }
+        .canvas-footer { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font-size: 12px; }
+        .leaderboard { display: grid; gap: 6px; max-height: 222px; overflow: auto; }
+        .leader {
+            display: grid;
+            grid-template-columns: 32px 62px 1fr auto;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            text-align: left;
+            padding: 8px;
+        }
+        .leader.selected { border-color: var(--green); background: #12301e; }
+        .leader .score { color: var(--green); font-variant-numeric: tabular-nums; }
+        .leader .code { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-family: ui-monospace, monospace; }
+        .rule-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .rule-tabs { display: flex; gap: 5px; }
+        .rule-tabs button.active { border-color: var(--yellow); color: var(--yellow); }
+        .rule-table { overflow-x: auto; }
+        .rule-section { margin-bottom: 10px; }
+        .rule-section-title { color: var(--muted); margin: 4px 0; font-size: 12px; }
+        .rule-row {
+            display: grid;
+            grid-template-columns: 65px repeat(9, 27px);
+            gap: 3px;
+            align-items: center;
+            margin: 3px 0;
+            min-width: 345px;
+        }
+        .rule-row:first-child { color: var(--muted); font-size: 11px; text-align: center; }
+        .rule-cell {
+            padding: 3px 0;
+            width: 27px;
+            height: 25px;
+            font-size: 11px;
+            background: #0b1117;
+        }
+        .rule-cell.on { color: #051007; background: var(--green); border-color: var(--green); font-weight: 700; }
+        .rule-code { width: 100%; height: 48px; resize: vertical; margin: 9px 0; font: 12px ui-monospace, monospace; }
+        .help { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+        .status-line { min-height: 19px; margin-top: 8px; color: var(--muted); }
+        .status-line.error { color: var(--red); }
+        @media (max-width: 980px) {
+            .layout { grid-template-columns: 1fr; }
+            .stat-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Hierarchical Life Rule Search</h1>
+            <div class="subtitle">Evolving rules whose individual cells resist repetition and compression</div>
+        </div>
+        <div class="muted" id="selfCheck">Self-checking…</div>
+    </header>
+
+    <main class="layout">
+        <div class="stack">
+            <section class="panel">
+                <h2>Evolution</h2>
+                <div class="controls">
+                    <button class="primary" id="startBtn">Start search</button>
+                    <button id="pauseBtn" disabled>Pause</button>
+                    <button class="danger" id="resetBtn">Reset</button>
+                    <button id="singleBtn">One generation</button>
+                </div>
+                <div class="settings">
+                    <label>Population <input id="populationInput" type="number" min="8" max="256" step="4" value="48"></label>
+                    <label>Seeds <input id="seedsInput" type="number" min="1" max="8" value="2"></label>
+                    <label>Burn-in <input id="burnInput" type="number" min="16" max="512" step="16" value="64"></label>
+                    <label>Record <input id="recordInput" type="number" min="32" max="512" step="16" value="128"></label>
+                    <label>Mutation <input id="mutationInput" type="number" min=".001" max=".2" step=".001" value=".015"></label>
+                    <label><input id="slowerInput" type="checkbox" checked> Higher layers slower</label>
+                </div>
+                <div class="stat-grid">
+                    <div class="stat"><div class="value" id="generationStat">0</div><div class="label">Generation</div></div>
+                    <div class="stat"><div class="value" id="bestStat">—</div><div class="label">Best score</div></div>
+                    <div class="stat"><div class="value" id="medianStat">—</div><div class="label">Median</div></div>
+                    <div class="stat"><div class="value" id="testedStat">0</div><div class="label">Rules tested</div></div>
+                    <div class="stat"><div class="value" id="rateStat">0</div><div class="label">Rules / sec</div></div>
+                    <div class="stat"><div class="value" id="workerStat">—</div><div class="label">Workers</div></div>
+                </div>
+                <div id="metrics"></div>
+                <div class="status-line" id="searchStatus">Ready. Conway is the first member of the initial population.</div>
+            </section>
+
+            <section class="panel">
+                <div class="rule-head">
+                    <h2 style="margin:0">Champion replay</h2>
+                    <div class="controls">
+                        <label class="muted">Speed
+                            <select id="replaySpeed">
+                                <option value="2">Slow</option>
+                                <option value="8" selected>Medium</option>
+                                <option value="30">Fast</option>
+                                <option value="0">Paused</option>
+                            </select>
+                        </label>
+                        <button id="reseedBtn">New seed</button>
+                    </div>
+                </div>
+                <canvas id="lifeCanvas" width="960" height="540"></canvas>
+                <div class="canvas-footer"><span>Every tile is one hierarchy layer</span><span id="replayFrame">Frame 0</span></div>
+            </section>
+
+            <section class="panel">
+                <h2>Leaderboard</h2>
+                <div class="leaderboard" id="leaderboard"></div>
+            </section>
+        </div>
+
+        <div class="stack">
+            <section class="panel">
+                <div class="rule-head">
+                    <h2 style="margin:0">Rule inspector</h2>
+                    <div class="rule-tabs">
+                        <button data-state="0" class="active">Birth</button>
+                        <button data-state="1">Survive</button>
+                    </div>
+                </div>
+                <p class="help">For each current state, the next state is looked up independently by lateral neighbors (0–8), parent state (0–1), and living children (0–4). Click cells to edit the selected rule.</p>
+                <div class="rule-table" id="ruleTable"></div>
+                <textarea class="rule-code" id="ruleCode" aria-label="Encoded rule"></textarea>
+                <div class="rule-actions">
+                    <button id="loadCodeBtn">Load code</button>
+                    <button id="copyCodeBtn">Copy code</button>
+                    <button id="conwayBtn">Conway</button>
+                    <button id="discoveredBtn">Discovered 88.25</button>
+                    <button id="useSeedBtn">Use as search seed</button>
+                </div>
+                <div class="status-line" id="ruleStatus">Editing a rule immediately updates its replay.</div>
+            </section>
+
+            <section class="panel">
+                <h2>Interestingness metric</h2>
+                <p class="help">After burn-in, deterministic sample cells are recorded through time. The score rewards hard-to-compress Lempel–Ziv histories, changing cells, balanced density, and low short-lag autocorrelation. Exact repeated global states receive a severe penalty.</p>
+                <div class="metric-bar"><span>Complexity</span><div class="bar-track"><div class="bar-fill" id="complexityBar"></div></div><span id="complexityValue">—</span></div>
+                <div class="metric-bar"><span>Non-periodic</span><div class="bar-track"><div class="bar-fill" id="periodBar"></div></div><span id="periodValue">—</span></div>
+                <div class="metric-bar"><span>Active cells</span><div class="bar-track"><div class="bar-fill" id="activeBar"></div></div><span id="activeValue">—</span></div>
+                <div class="metric-bar"><span>Density</span><div class="bar-track"><div class="bar-fill" id="densityBar"></div></div><span id="densityValue">—</span></div>
+                <div class="metric-bar"><span>No repeats</span><div class="bar-track"><div class="bar-fill" id="repeatBar"></div></div><span id="repeatValue">—</span></div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+    "use strict";
+
+    function installEngine(scope) {
+        const RULE_BITS = 180;
+        const RULE_CONTEXTS = 90;
+
+        function ruleIndex(state, lateral, parent, children) {
+            return state * RULE_CONTEXTS + children * 18 + parent * 9 + lateral;
+        }
+
+        function conwayRule() {
+            const rule = new Uint8Array(RULE_BITS);
+            for (let children = 0; children <= 4; children++) {
+                for (let parent = 0; parent <= 1; parent++) {
+                    rule[ruleIndex(0, 3, parent, children)] = 1;
+                    rule[ruleIndex(1, 2, parent, children)] = 1;
+                    rule[ruleIndex(1, 3, parent, children)] = 1;
+                }
+            }
+            return rule;
+        }
+
+        function mulberry32(seed) {
+            let a = seed >>> 0;
+            return function() {
+                a = (a + 0x6D2B79F5) | 0;
+                let t = a;
+                t = Math.imul(t ^ (t >>> 15), t | 1);
+                t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+
+        class HierSim {
+            constructor(baseSize, seed, fill, slowerHigher) {
+                this.frame = 0;
+                this.slowerHigher = slowerHigher;
+                this.layers = [];
+                const random = mulberry32(seed);
+                for (let size = baseSize; size >= 2; size >>= 1) {
+                    const grid = new Uint8Array(size * size);
+                    for (let i = 0; i < grid.length; i++) grid[i] = random() < fill ? 1 : 0;
+                    this.layers.push({ size, grid, next: new Uint8Array(grid.length) });
+                }
+            }
+
+            step(rule) {
+                this.frame++;
+                const layers = this.layers;
+                for (let li = 0; li < layers.length; li++) {
+                    if (this.slowerHigher && this.frame % (1 << li) !== 0) continue;
+                    const layer = layers[li];
+                    const size = layer.size;
+                    const grid = layer.grid;
+                    const next = layer.next;
+                    const parentGrid = li + 1 < layers.length ? layers[li + 1].grid : null;
+                    const childGrid = li > 0 ? layers[li - 1].grid : null;
+                    const childSize = childGrid ? layers[li - 1].size : 0;
+                    for (let y = 0; y < size; y++) {
+                        const ym = (y + size - 1) % size;
+                        const yp = (y + 1) % size;
+                        for (let x = 0; x < size; x++) {
+                            const xm = (x + size - 1) % size;
+                            const xp = (x + 1) % size;
+                            let lateral =
+                                grid[ym * size + xm] + grid[ym * size + x] + grid[ym * size + xp] +
+                                grid[y * size + xm]                              + grid[y * size + xp] +
+                                grid[yp * size + xm] + grid[yp * size + x] + grid[yp * size + xp];
+                            const parent = parentGrid ? parentGrid[(y >> 1) * (size >> 1) + (x >> 1)] : 0;
+                            let children = 0;
+                            if (childGrid) {
+                                const cx = x << 1, cy = y << 1;
+                                const row = cy * childSize + cx;
+                                children = childGrid[row] + childGrid[row + 1] +
+                                    childGrid[row + childSize] + childGrid[row + childSize + 1];
+                            }
+                            const state = grid[y * size + x];
+                            next[y * size + x] = rule[ruleIndex(state, lateral, parent, children)];
+                        }
+                    }
+                }
+                for (let li = 0; li < layers.length; li++) {
+                    if (this.slowerHigher && this.frame % (1 << li) !== 0) continue;
+                    const layer = layers[li];
+                    const old = layer.grid;
+                    layer.grid = layer.next;
+                    layer.next = old;
+                }
+            }
+        }
+
+        function ruleToCode(rule) {
+            const bytes = new Uint8Array(Math.ceil(RULE_BITS / 8));
+            for (let i = 0; i < RULE_BITS; i++) if (rule[i]) bytes[i >> 3] |= 1 << (i & 7);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        }
+
+        function codeToRule(code) {
+            const clean = code.trim().replace(/-/g, "+").replace(/_/g, "/");
+            const binary = atob(clean + "=".repeat((4 - clean.length % 4) % 4));
+            if (binary.length !== Math.ceil(RULE_BITS / 8)) throw new Error("Rule code must contain exactly 180 bits.");
+            const rule = new Uint8Array(RULE_BITS);
+            for (let i = 0; i < RULE_BITS; i++) rule[i] = (binary.charCodeAt(i >> 3) >> (i & 7)) & 1;
+            return rule;
+        }
+
+        scope.RULE_BITS = RULE_BITS;
+        scope.ruleIndex = ruleIndex;
+        scope.conwayRule = conwayRule;
+        scope.mulberry32 = mulberry32;
+        scope.HierSim = HierSim;
+        scope.ruleToCode = ruleToCode;
+        scope.codeToRule = codeToRule;
+    }
+    installEngine(window);
+
+    function workerMain(scope) {
+        function lzComplexity(bits, offset, length) {
+            let phrases = 0;
+            const dictionary = new Set();
+            let phrase = "";
+            for (let i = 0; i < length; i++) {
+                phrase += bits[offset + i] ? "1" : "0";
+                if (!dictionary.has(phrase)) {
+                    dictionary.add(phrase);
+                    phrases++;
+                    phrase = "";
+                }
+            }
+            if (phrase) phrases++;
+            const normalized = phrases * Math.log2(Math.max(2, length)) / length;
+            return Math.min(1, normalized);
+        }
+
+        function stateHash(sim) {
+            let hash = 2166136261;
+            for (const layer of sim.layers) {
+                const grid = layer.grid;
+                for (let i = 0; i < grid.length; i++) {
+                    hash ^= grid[i] + (i & 7);
+                    hash = Math.imul(hash, 16777619);
+                }
+            }
+            return hash >>> 0;
+        }
+
+        function sampleLocations(sim, count, seed) {
+            const locations = [];
+            const random = scope.mulberry32(seed ^ 0x9e3779b9);
+            const perLayer = Math.max(4, Math.floor(count / sim.layers.length));
+            for (let li = 0; li < sim.layers.length; li++) {
+                const length = sim.layers[li].grid.length;
+                const n = Math.min(length, perLayer);
+                for (let i = 0; i < n; i++) locations.push([li, Math.floor(random() * length)]);
+            }
+            return locations;
+        }
+
+        function evaluateOnce(rule, seed, config) {
+            const sim = new scope.HierSim(config.baseSize, seed, .30, config.slowerHigher);
+            for (let t = 0; t < config.burn; t++) sim.step(rule);
+            const locations = sampleLocations(sim, config.samples, seed);
+            const histories = new Uint8Array(locations.length * config.record);
+            const seen = new Map();
+            let repeated = false;
+            let densitySum = 0;
+
+            for (let t = 0; t < config.record; t++) {
+                sim.step(rule);
+                let alive = 0, total = 0;
+                for (const layer of sim.layers) {
+                    const grid = layer.grid;
+                    total += grid.length;
+                    for (let i = 0; i < grid.length; i++) alive += grid[i];
+                }
+                densitySum += alive / total;
+                const hash = stateHash(sim);
+                if (seen.has(hash)) repeated = true;
+                else seen.set(hash, t);
+                for (let s = 0; s < locations.length; s++) {
+                    const loc = locations[s];
+                    histories[s * config.record + t] = sim.layers[loc[0]].grid[loc[1]];
+                }
+            }
+
+            let complexity = 0, dynamicCells = 0, nonperiodic = 0;
+            for (let s = 0; s < locations.length; s++) {
+                const offset = s * config.record;
+                let changes = 0;
+                for (let t = 1; t < config.record; t++) {
+                    if (histories[offset + t] !== histories[offset + t - 1]) changes++;
+                }
+                const changeRate = changes / (config.record - 1);
+                if (changeRate > .02 && changeRate < .98) dynamicCells++;
+                complexity += lzComplexity(histories, offset, config.record);
+
+                let worstAgreement = 0;
+                const maxLag = Math.min(16, Math.floor(config.record / 3));
+                for (let lag = 1; lag <= maxLag; lag++) {
+                    let same = 0;
+                    for (let t = lag; t < config.record; t++) {
+                        if (histories[offset + t] === histories[offset + t - lag]) same++;
+                    }
+                    worstAgreement = Math.max(worstAgreement, same / (config.record - lag));
+                }
+                nonperiodic += Math.max(0, Math.min(1, (1 - worstAgreement) / .45));
+            }
+
+            complexity /= locations.length;
+            nonperiodic /= locations.length;
+            const active = dynamicCells / locations.length;
+            const meanDensity = densitySum / config.record;
+            const density = Math.max(0, 1 - Math.abs(meanDensity - .5) / .5);
+            const noRepeat = repeated ? .08 : 1;
+            const score = 100 * (.42 * complexity + .28 * nonperiodic + .20 * active + .10 * density) * noRepeat;
+            return { score, complexity, nonperiodic, active, density, noRepeat };
+        }
+
+        scope.onmessage = event => {
+            const { id, rule, seeds, config } = event.data;
+            try {
+                const totals = { score: 0, complexity: 0, nonperiodic: 0, active: 0, density: 0, noRepeat: 0 };
+                for (const seed of seeds) {
+                    const result = evaluateOnce(rule, seed, config);
+                    for (const key in totals) totals[key] += result[key];
+                }
+                for (const key in totals) totals[key] /= seeds.length;
+                scope.postMessage({ id, result: totals });
+            } catch (error) {
+                scope.postMessage({ id, error: error.message || String(error) });
+            }
+        };
+    }
+
+    class WorkerPool {
+        constructor(count) {
+            const source = `(${installEngine.toString()})(self);(${workerMain.toString()})(self);`;
+            const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+            this.workers = [];
+            this.queue = [];
+            this.callbacks = new Map();
+            this.nextId = 1;
+            for (let i = 0; i < count; i++) {
+                const worker = new Worker(url);
+                const entry = { worker, busy: false };
+                worker.onmessage = event => this.finish(entry, event.data);
+                worker.onerror = event => this.finish(entry, { error: event.message || "Worker failed" });
+                this.workers.push(entry);
+            }
+            URL.revokeObjectURL(url);
+        }
+        evaluate(rule, seeds, config) {
+            return new Promise((resolve, reject) => {
+                const id = this.nextId++;
+                this.callbacks.set(id, { resolve, reject });
+                this.queue.push({ id, rule, seeds, config });
+                this.pump();
+            });
+        }
+        pump() {
+            for (const entry of this.workers) {
+                if (entry.busy || !this.queue.length) continue;
+                const job = this.queue.shift();
+                entry.busy = true;
+                entry.jobId = job.id;
+                entry.worker.postMessage(job);
+            }
+        }
+        finish(entry, message) {
+            entry.busy = false;
+            const id = message.id || entry.jobId;
+            const callback = this.callbacks.get(id);
+            this.callbacks.delete(id);
+            if (callback) message.error ? callback.reject(new Error(message.error)) : callback.resolve(message.result);
+            this.pump();
+        }
+        terminate() {
+            for (const entry of this.workers) entry.worker.terminate();
+        }
+    }
+
+    const $ = selector => document.querySelector(selector);
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    // Found by this page after 134 generations / 6,432 evaluations using the
+    // default settings. It is a convenient reproducible starting point.
+    const DISCOVERED_RULE_CODE = "HVn877XvbrL_n5ugUwjEASCAUBYzIAA";
+    const workerCount = clamp((navigator.hardwareConcurrency || 4) - 1, 1, 12);
+    const pool = new WorkerPool(workerCount);
+    $("#workerStat").textContent = workerCount;
+
+    let population = [];
+    let ranked = [];
+    let generation = 0;
+    let tested = 0;
+    let running = false;
+    let singleGeneration = false;
+    let evolutionSeed = 0x51f15e;
+    let evolutionRandom = mulberry32(evolutionSeed);
+    let inspectedRule = conwayRule();
+    let selectedState = 0;
+    let champion = { rule: inspectedRule.slice(), score: 0, metrics: null };
+    let replay = null;
+    let replaySeed = 0xC0FFEE;
+    let lastReplayTime = 0;
+    let searchStartedAt = performance.now();
+
+    const metricKeys = [
+        ["complexity", "complexityBar", "complexityValue"],
+        ["nonperiodic", "periodBar", "periodValue"],
+        ["active", "activeBar", "activeValue"],
+        ["density", "densityBar", "densityValue"],
+        ["noRepeat", "repeatBar", "repeatValue"]
+    ];
+
+    function configFromUI() {
+        return {
+            baseSize: 32,
+            burn: clamp(parseInt($("#burnInput").value) || 64, 16, 512),
+            record: clamp(parseInt($("#recordInput").value) || 128, 32, 512),
+            samples: 96,
+            slowerHigher: $("#slowerInput").checked
+        };
+    }
+
+    function makeInitialPopulation(count) {
+        const base = inspectedRule.slice();
+        const result = [base];
+        while (result.length < count) {
+            const rule = base.slice();
+            const flips = 2 + Math.floor(evolutionRandom() * 14);
+            for (let i = 0; i < flips; i++) rule[Math.floor(evolutionRandom() * RULE_BITS)] ^= 1;
+            result.push(rule);
+        }
+        return result;
+    }
+
+    function mutate(rule, rate) {
+        const child = rule.slice();
+        let changed = false;
+        for (let i = 0; i < RULE_BITS; i++) {
+            if (evolutionRandom() < rate) {
+                child[i] ^= 1;
+                changed = true;
+            }
+        }
+        if (!changed) child[Math.floor(evolutionRandom() * RULE_BITS)] ^= 1;
+        return child;
+    }
+
+    function breed(ranking, count, rate) {
+        const eliteCount = Math.max(2, Math.floor(count * .12));
+        const next = ranking.slice(0, eliteCount).map(item => item.rule.slice());
+        const parentPool = ranking.slice(0, Math.max(4, Math.floor(count * .45)));
+        while (next.length < count) {
+            const a = parentPool[Math.floor(evolutionRandom() * parentPool.length)].rule;
+            const b = parentPool[Math.floor(evolutionRandom() * parentPool.length)].rule;
+            const child = new Uint8Array(RULE_BITS);
+            for (let i = 0; i < RULE_BITS; i++) child[i] = evolutionRandom() < .5 ? a[i] : b[i];
+            next.push(mutate(child, rate));
+        }
+        return next;
+    }
+
+    async function runGeneration() {
+        const count = clamp(parseInt($("#populationInput").value) || 48, 8, 256);
+        if (!population.length) population = makeInitialPopulation(count);
+        while (population.length < count) population.push(mutate(population[population.length % Math.max(1, population.length)], .03));
+        population.length = count;
+        const config = configFromUI();
+        const seedCount = clamp(parseInt($("#seedsInput").value) || 2, 1, 8);
+        const seeds = Array.from({ length: seedCount }, (_, i) => (0xC0FFEE + generation * 0x9e3779b9 + i * 0x85ebca6b) >>> 0);
+        $("#searchStatus").textContent = `Evaluating generation ${generation + 1} across ${workerCount} workers…`;
+
+        const results = await Promise.all(population.map(rule => pool.evaluate(rule, seeds, config)));
+        tested += results.length;
+        generation++;
+        ranked = population.map((rule, i) => ({ rule, score: results[i].score, metrics: results[i] }))
+            .sort((a, b) => b.score - a.score);
+        const best = ranked[0];
+        if (!champion.metrics || best.score > champion.score) {
+            champion = { rule: best.rule.slice(), score: best.score, metrics: best.metrics };
+            inspectRule(champion.rule);
+        }
+        updateSearchUI();
+        population = breed(ranked, count, clamp(parseFloat($("#mutationInput").value) || .015, .001, .2));
+        $("#searchStatus").textContent = running ? `Generation ${generation} complete. Continuing…` : `Generation ${generation} complete.`;
+    }
+
+    async function searchLoop() {
+        if (running) return;
+        running = true;
+        $("#startBtn").disabled = true;
+        $("#pauseBtn").disabled = false;
+        setSettingsDisabled(true);
+        try {
+            do {
+                await runGeneration();
+                if (singleGeneration) {
+                    singleGeneration = false;
+                    running = false;
+                    $("#searchStatus").textContent = `Generation ${generation} complete.`;
+                }
+                await new Promise(resolve => setTimeout(resolve, 0));
+            } while (running);
+        } catch (error) {
+            running = false;
+            $("#searchStatus").textContent = `Search error: ${error.message}`;
+            $("#searchStatus").classList.add("error");
+        } finally {
+            $("#startBtn").disabled = false;
+            $("#pauseBtn").disabled = true;
+            setSettingsDisabled(false);
+        }
+    }
+
+    function setSettingsDisabled(disabled) {
+        document.querySelectorAll(".settings input").forEach(input => input.disabled = disabled);
+        $("#singleBtn").disabled = disabled;
+    }
+
+    function updateSearchUI() {
+        $("#generationStat").textContent = generation;
+        $("#bestStat").textContent = champion.metrics ? champion.score.toFixed(2) : "—";
+        $("#medianStat").textContent = ranked.length ? ranked[Math.floor(ranked.length / 2)].score.toFixed(2) : "—";
+        $("#testedStat").textContent = tested.toLocaleString();
+        const elapsed = Math.max(.001, (performance.now() - searchStartedAt) / 1000);
+        $("#rateStat").textContent = (tested / elapsed).toFixed(1);
+        updateMetricUI(champion.metrics);
+        renderLeaderboard();
+    }
+
+    function updateMetricUI(metrics) {
+        for (const [key, barId, valueId] of metricKeys) {
+            const value = metrics ? metrics[key] : 0;
+            $("#" + barId).style.width = `${clamp(value, 0, 1) * 100}%`;
+            $("#" + valueId).textContent = metrics ? value.toFixed(2) : "—";
+        }
+    }
+
+    function renderLeaderboard() {
+        const board = $("#leaderboard");
+        board.textContent = "";
+        const items = ranked.slice(0, 10);
+        if (!items.length) {
+            board.innerHTML = '<div class="muted">Run a generation to compare candidate rules.</div>';
+            return;
+        }
+        items.forEach((item, i) => {
+            const button = document.createElement("button");
+            button.className = "leader" + (ruleToCode(inspectedRule) === ruleToCode(item.rule) ? " selected" : "");
+            const code = ruleToCode(item.rule);
+            button.innerHTML = `<span>#${i + 1}</span><span class="score">${item.score.toFixed(2)}</span><span class="code">${code}</span><span>Inspect</span>`;
+            button.addEventListener("click", () => {
+                inspectRule(item.rule);
+                updateMetricUI(item.metrics);
+                renderLeaderboard();
+            });
+            board.appendChild(button);
+        });
+    }
+
+    function inspectRule(rule) {
+        inspectedRule = rule.slice();
+        $("#ruleCode").value = ruleToCode(inspectedRule);
+        renderRuleTable();
+        resetReplay();
+    }
+
+    function renderRuleTable() {
+        const container = $("#ruleTable");
+        container.textContent = "";
+        for (let parent = 0; parent <= 1; parent++) {
+            const section = document.createElement("div");
+            section.className = "rule-section";
+            section.innerHTML = `<div class="rule-section-title">Parent ${parent ? "alive" : "dead / absent"}</div>`;
+            const header = document.createElement("div");
+            header.className = "rule-row";
+            header.innerHTML = "<span>Children ↓</span>" + Array.from({ length: 9 }, (_, n) => `<span>${n}</span>`).join("");
+            section.appendChild(header);
+            for (let children = 0; children <= 4; children++) {
+                const row = document.createElement("div");
+                row.className = "rule-row";
+                row.innerHTML = `<span>${children} alive</span>`;
+                for (let lateral = 0; lateral <= 8; lateral++) {
+                    const index = ruleIndex(selectedState, lateral, parent, children);
+                    const button = document.createElement("button");
+                    button.className = "rule-cell" + (inspectedRule[index] ? " on" : "");
+                    button.textContent = inspectedRule[index] ? "1" : "·";
+                    button.title = `${selectedState ? "Survive" : "Birth"}: lateral ${lateral}, parent ${parent}, children ${children}`;
+                    button.addEventListener("click", () => {
+                        inspectedRule[index] ^= 1;
+                        $("#ruleCode").value = ruleToCode(inspectedRule);
+                        renderRuleTable();
+                        resetReplay();
+                    });
+                    row.appendChild(button);
+                }
+                section.appendChild(row);
+            }
+            container.appendChild(section);
+        }
+    }
+
+    function resetReplay() {
+        replay = new HierSim(64, replaySeed, .30, $("#slowerInput").checked);
+        $("#replayFrame").textContent = "Frame 0";
+        drawReplay();
+    }
+
+    function drawReplay() {
+        if (!replay) return;
+        const canvas = $("#lifeCanvas");
+        const ctx = canvas.getContext("2d");
+        const width = canvas.width, height = canvas.height;
+        ctx.fillStyle = "#05080b";
+        ctx.fillRect(0, 0, width, height);
+        const count = replay.layers.length;
+        const gap = 13;
+        const tileWidth = (width - gap * (count + 1)) / count;
+        const top = 46;
+        const tileHeight = Math.min(tileWidth, height - top - 20);
+        ctx.font = "13px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        for (let li = 0; li < count; li++) {
+            const layer = replay.layers[li];
+            const x0 = gap + li * (tileWidth + gap);
+            const y0 = top;
+            const pixel = tileHeight / layer.size;
+            ctx.fillStyle = "#91a3b5";
+            ctx.fillText(`${layer.size}×${layer.size}`, x0 + tileWidth / 2, 26);
+            ctx.fillStyle = "#101820";
+            ctx.fillRect(x0, y0, tileWidth, tileHeight);
+            ctx.fillStyle = li === 0 ? "#55f58a" : `hsl(${145 + li * 16} 80% ${62 + li * 2}%)`;
+            const grid = layer.grid;
+            for (let y = 0; y < layer.size; y++) {
+                for (let x = 0; x < layer.size; x++) {
+                    if (grid[y * layer.size + x]) {
+                        ctx.fillRect(x0 + x * pixel, y0 + y * pixel, Math.ceil(pixel), Math.ceil(pixel));
+                    }
+                }
+            }
+        }
+    }
+
+    function replayLoop(time) {
+        requestAnimationFrame(replayLoop);
+        const speed = parseInt($("#replaySpeed").value);
+        if (!replay || speed === 0 || time - lastReplayTime < 1000 / speed) return;
+        const steps = speed >= 30 ? 2 : 1;
+        for (let i = 0; i < steps; i++) replay.step(inspectedRule);
+        lastReplayTime = time;
+        $("#replayFrame").textContent = `Frame ${replay.frame}`;
+        drawReplay();
+    }
+
+    function resetSearch() {
+        running = false;
+        generation = 0;
+        tested = 0;
+        ranked = [];
+        population = [];
+        champion = { rule: inspectedRule.slice(), score: 0, metrics: null };
+        evolutionRandom = mulberry32(evolutionSeed);
+        searchStartedAt = performance.now();
+        $("#searchStatus").classList.remove("error");
+        $("#searchStatus").textContent = "Reset. The inspected rule will seed the next population.";
+        updateSearchUI();
+    }
+
+    function runSelfChecks() {
+        try {
+            const conway = conwayRule();
+            if (conway.length !== 180) throw new Error("wrong rule size");
+            if (!conway[ruleIndex(0, 3, 1, 4)] || conway[ruleIndex(0, 2, 1, 4)]) throw new Error("lookup indexing");
+            const code = ruleToCode(conway);
+            const decoded = codeToRule(code);
+            if (decoded.some((bit, i) => bit !== conway[i])) throw new Error("rule encoding");
+            const a = new HierSim(8, 123, .3, false);
+            const b = new HierSim(8, 123, .3, false);
+            for (let i = 0; i < 5; i++) { a.step(conway); b.step(conway); }
+            if (a.layers.some((layer, li) => layer.grid.some((bit, i) => bit !== b.layers[li].grid[i]))) throw new Error("determinism");
+            $("#selfCheck").textContent = "Engine checks passed";
+            $("#selfCheck").style.color = "var(--green)";
+        } catch (error) {
+            $("#selfCheck").textContent = `Engine check failed: ${error.message}`;
+            $("#selfCheck").style.color = "var(--red)";
+            $("#startBtn").disabled = true;
+            $("#singleBtn").disabled = true;
+        }
+    }
+
+    $("#startBtn").addEventListener("click", searchLoop);
+    $("#pauseBtn").addEventListener("click", () => {
+        running = false;
+        $("#searchStatus").textContent = "Pausing after the current generation…";
+    });
+    $("#singleBtn").addEventListener("click", () => {
+        singleGeneration = true;
+        searchLoop();
+    });
+    $("#resetBtn").addEventListener("click", resetSearch);
+    $("#reseedBtn").addEventListener("click", () => {
+        replaySeed = (replaySeed + 0x9e3779b9) >>> 0;
+        resetReplay();
+    });
+    $("#slowerInput").addEventListener("change", resetReplay);
+    document.querySelectorAll(".rule-tabs button").forEach(button => {
+        button.addEventListener("click", () => {
+            selectedState = parseInt(button.dataset.state);
+            document.querySelectorAll(".rule-tabs button").forEach(b => b.classList.toggle("active", b === button));
+            renderRuleTable();
+        });
+    });
+    $("#loadCodeBtn").addEventListener("click", () => {
+        try {
+            inspectRule(codeToRule($("#ruleCode").value));
+            $("#ruleStatus").textContent = "Rule loaded.";
+            $("#ruleStatus").classList.remove("error");
+        } catch (error) {
+            $("#ruleStatus").textContent = error.message;
+            $("#ruleStatus").classList.add("error");
+        }
+    });
+    $("#copyCodeBtn").addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText(ruleToCode(inspectedRule));
+            $("#ruleStatus").textContent = "Rule code copied.";
+        } catch (_) {
+            $("#ruleCode").select();
+            $("#ruleStatus").textContent = "Rule selected; copy it with your keyboard.";
+        }
+    });
+    $("#conwayBtn").addEventListener("click", () => inspectRule(conwayRule()));
+    $("#discoveredBtn").addEventListener("click", () => {
+        inspectRule(codeToRule(DISCOVERED_RULE_CODE));
+        $("#ruleStatus").textContent = "Loaded the rule found after 6,432 evaluations (score 88.25).";
+    });
+    $("#useSeedBtn").addEventListener("click", () => {
+        running = false;
+        population = [];
+        ranked = [];
+        generation = 0;
+        tested = 0;
+        champion = { rule: inspectedRule.slice(), score: 0, metrics: null };
+        searchStartedAt = performance.now();
+        updateSearchUI();
+        $("#ruleStatus").textContent = "This rule will seed the next search.";
+    });
+    window.addEventListener("resize", drawReplay);
+    window.addEventListener("beforeunload", () => pool.terminate());
+
+    runSelfChecks();
+    inspectRule(conwayRule());
+    updateSearchUI();
+    renderLeaderboard();
+    resetReplay();
+    requestAnimationFrame(replayLoop);
+    </script>
+</body>
+</html>

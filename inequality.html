@@ -287,8 +287,8 @@
       <p class="sub">A free market simulation</p>
     </header>
     <p class="desc">
-      Two hundred identical people trade at random: one pays the other a random amount, never more than
-      a fifth of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top
+      Two hundred identical people trade at random: one pays the other a small random amount, at most
+      4% of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top
       and the <b>middle class</b> shrinks. The curve sorts everyone from poorest to richest and shows how
       much of the total wealth they hold.
     </p>
@@ -326,28 +326,28 @@
       </div>
       <div class="control">
         <div class="row"><span>Demurrage</span><output id="demOut">0% / day</output></div>
-        <input type="range" id="dem" min="0" max="5" step="0.05" value="0">
+        <input type="range" id="dem" min="0" max="2" step="0.05" value="0">
         <div class="note">A daily tax on wealth held, paid out equally to everyone.</div>
       </div>
       <div class="control">
-        <div class="row"><span>Speed</span><output id="speedOut">500 trades / s</output></div>
-        <input type="range" id="speed" min="0" max="1" step="0.001" value="0.686">
+        <div class="row"><span>Speed</span><output id="speedOut">12,500 trades / s</output></div>
+        <input type="range" id="speed" min="0" max="1" step="0.001" value="0.777">
       </div>
     </div>
 
     <div class="income">
       <span>Basic income per person</span>
-      <span><b id="income">0.0</b> <span style="color:var(--muted)">/ day</span></span>
+      <span><b id="income">$0.00</b> <span style="color:var(--muted)">/ day</span></span>
     </div>
 
     <div class="legend">
-      <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range">under 50</span></div>
-      <div><span class="swatch" style="background:var(--mid)"></span><span class="name">Middle class</span><span class="range">50 – 150</span></div>
-      <div><span class="swatch" style="background:var(--rich)"></span><span class="name">Rich</span><span class="range">over 150</span></div>
+      <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range">under $50</span></div>
+      <div><span class="swatch" style="background:var(--mid)"></span><span class="name">Middle class</span><span class="range">$50 – $150</span></div>
+      <div><span class="swatch" style="background:var(--rich)"></span><span class="name">Rich</span><span class="range">over $150</span></div>
     </div>
 
     <div class="foot">
-      Average wealth is always 100. Each arc is one trade, payer to receiver.
+      Average wealth is always $100. Arcs are trades, payer to receiver (a sample of them at high speed).
       <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset · <kbd>↑</kbd><kbd>↓</kbd> starting Gini ·
       Inspired by <a href="https://fairshare.social" target="_blank" rel="noopener">FairShare</a> ·
       <a href="index.html">philiprosedale.com</a>
@@ -366,8 +366,9 @@
   const MEAN = 100;              // starting average wealth
   const START_GINI = 0.5;        // starting inequality (adjustable with the ▲▼ buttons)
   const GINI_STEP = 0.01, GINI_MAX = 0.9;
-  const MAX_FRACTION = 0.2;      // a trade moves at most this fraction of the poorer party's wealth
-  const TRADES_PER_DAY = N / 2;  // one day = every person trades about once
+  const MAX_FRACTION = 0.04;     // a trade moves at most this fraction of the poorer party's wealth
+  const TRADES_PER_DAY = 5 * N;  // one day = every person trades about ten times
+  const ARC_RATE = 300;          // at most this many trades per second are drawn as arcs
   const MID_LO = 0.5, MID_HI = 1.5; // middle class band, as multiples of average wealth
   const SEED = 1337;
 
@@ -452,19 +453,20 @@
   }
 
   // ---------- Simulation ----------
-  const params = { tax: 0, dem: 0, speed: 500 };
+  const params = { tax: 0, dem: 0, speed: 12500 };
+  let tradeCount = 0;
 
-  function trade(now) {
+  function trade(now, drawEvery) {
     let a = (Math.random() * N) | 0;
     let b = (Math.random() * N) | 0;
     while (b === a) b = (Math.random() * N) | 0;
     if (Math.random() < 0.5) { const t = a; a = b; b = t; }  // a pays b
     const amt = Math.random() * MAX_FRACTION * Math.min(wealth[a], wealth[b]);
-    const tax = amt * params.tax;
+    const tax = amt * params.tax;        // every trade is taxed...
     wealth[a] -= amt;
     wealth[b] += amt - tax;
-    pool += tax;
-    arcs.push({ from: a, to: b, t0: now });
+    pool += tax;                         // ...and the pool is paid out equally in step()
+    if (tradeCount++ % drawEvery === 0) arcs.push({ from: a, to: b, t0: now });
   }
 
   function step(dt, now) {
@@ -472,7 +474,8 @@
     const n = Math.floor(tradeAcc);
     if (n <= 0) return;
     tradeAcc -= n;
-    for (let i = 0; i < n; i++) trade(now);
+    const drawEvery = Math.max(1, Math.round(params.speed / ARC_RATE));
+    for (let i = 0; i < n; i++) trade(now, drawEvery);
     if (arcs.length > ARC_CAP) arcs.splice(0, arcs.length - ARC_CAP);
 
     const dayFrac = n / TRADES_PER_DAY;
@@ -537,7 +540,7 @@
     $('top10').textContent = fmtPct(top10);
     $('bottom50').textContent = fmtPct(bottom50);
     $('day').textContent = Math.floor(days).toLocaleString();
-    $('income').textContent = incomeRate.toFixed(incomeRate < 10 ? 1 : 0);
+    $('income').textContent = '$' + (incomeRate < 10 ? incomeRate.toFixed(2) : incomeRate < 100 ? incomeRate.toFixed(1) : Math.round(incomeRate).toLocaleString());
   }
 
   function setRunning(v) {
@@ -565,7 +568,9 @@
   function readParams() {
     params.tax = taxIn.value / 100;
     params.dem = demIn.value / 100;
-    params.speed = Math.round(10 * Math.pow(300, +speedIn.value));
+    const raw = 100 * Math.pow(500, +speedIn.value);
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)) - 2);
+    params.speed = Math.round(raw / mag) * mag;  // three significant figures
     $('taxOut').textContent = (+taxIn.value).toFixed(1).replace(/\.0$/, '') + '%';
     $('demOut').textContent = (+demIn.value).toFixed(2).replace(/\.?0+$/, '') + '% / day';
     $('speedOut').textContent = params.speed.toLocaleString() + ' trades / s';
@@ -703,7 +708,7 @@
     }
 
     // trades
-    const life = Math.min(1.5, Math.max(0.35, 120 / params.speed));
+    const life = Math.min(1.5, Math.max(0.4, 120 / Math.min(params.speed, ARC_RATE)));
     const keep = [];
     ctx.lineWidth = 1.1;
     for (const a of arcs) {
@@ -742,7 +747,7 @@
       ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.stroke();
 
       const l1 = `${ordinal(Math.round(((i + 0.5) / N) * 100))} percentile`;
-      const l2 = `${w.toFixed(w < 10 ? 2 : w < 100 ? 1 : 0)} coins  ·  ${(w / mean).toFixed(2)}× average`;
+      const l2 = `$${w < 10 ? w.toFixed(2) : w < 100 ? w.toFixed(1) : Math.round(w).toLocaleString()}  ·  ${(w / mean).toFixed(2)}× average`;
       ctx.font = '500 11.5px Inter, system-ui, sans-serif';
       const bw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 24;
       const bh = 44;

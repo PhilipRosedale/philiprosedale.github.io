@@ -308,7 +308,7 @@
       <div class="stat mid"><span class="label">Middle class</span><span class="value" id="midPct">–</span></div>
       <div class="stat"><span class="label">Richest 10% own</span><span class="value" id="top10">–</span></div>
       <div class="stat"><span class="label">Poorest half own</span><span class="value" id="bottom50">–</span></div>
-      <div class="stat"><span class="label">Day</span><span class="value" id="day">0</span></div>
+      <div class="stat"><span class="label">Year</span><span class="value" id="day">0.0</span></div>
       <div class="histHead"><span>Over time</span><span><i class="dot gini"></i>Gini <i class="dot mid"></i>Middle class</span></div>
       <canvas id="history"></canvas>
     </div>
@@ -325,9 +325,9 @@
         <div class="note">A share of every trade, paid out equally to everyone.</div>
       </div>
       <div class="control">
-        <div class="row"><span>Demurrage</span><output id="demOut">0% / day</output></div>
-        <input type="range" id="dem" min="0" max="2" step="0.05" value="0">
-        <div class="note">A daily tax on wealth held, paid out equally to everyone.</div>
+        <div class="row"><span>Demurrage</span><output id="demOut">0% / year</output></div>
+        <input type="range" id="dem" min="0" max="50" step="0.5" value="0">
+        <div class="note">A yearly tax on wealth held, paid out equally to everyone.</div>
       </div>
       <div class="control">
         <div class="row"><span>Speed</span><output id="speedOut">12,500 trades / s</output></div>
@@ -337,7 +337,7 @@
 
     <div class="income">
       <span>Basic income per person</span>
-      <span><b id="income">$0.00</b> <span style="color:var(--muted)">/ day</span></span>
+      <span><b id="income">$0.00</b> <span style="color:var(--muted)">/ year</span></span>
     </div>
 
     <div class="legend">
@@ -367,7 +367,8 @@
   const START_GINI = 0.5;        // starting inequality (adjustable with the ▲▼ buttons)
   const GINI_STEP = 0.01, GINI_MAX = 0.9;
   const MAX_FRACTION = 0.04;     // a trade moves at most this fraction of the poorer party's wealth
-  const TRADES_PER_DAY = 5 * N;  // one day = every person trades about ten times
+  const TRADES_PER_DAY = N / 2;  // one day = every person trades about once
+  const DAYS_PER_YEAR = 365;
   const ARC_RATE = 300;          // at most this many trades per second are drawn as arcs
   const MID_LO = 0.5, MID_HI = 1.5; // middle class band, as multiples of average wealth
   const SEED = 1337;
@@ -395,7 +396,7 @@
   let arcs = [];
   const ARC_CAP = 400;
   let gini = 0, poorIdx = 0, richIdx = N, top10 = 0, bottom50 = 0;
-  let hist = { gini: [], mid: [], step: 0.1, nextAt: 0 };
+  let hist = { gini: [], mid: [], step: 1, nextAt: 0 };
   let hover = null;
 
   // Seeded RNG for the starting distribution so Reset is exact.
@@ -446,7 +447,7 @@
     for (let i = 0; i < N; i++) wealth[i] = Math.max(0.01, MEAN + k * (wealth[i] - MEAN));
     for (let i = 0; i < N; i++) order[i] = i;
     pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = [];
-    hist = { gini: [], mid: [], step: 0.1, nextAt: 0 };
+    hist = { gini: [], mid: [], step: 1, nextAt: 0 };
     analyze();
     recordHistory(true);
     updateReadouts();
@@ -486,8 +487,8 @@
     // dividend: the whole pool, split equally
     const share = pool / N;
     for (let i = 0; i < N; i++) wealth[i] += share;
-    const rate = share / dayFrac;
-    const alpha = 1 - Math.exp(-dayFrac * 2);
+    const rate = share / dayFrac * DAYS_PER_YEAR;   // dividend per person per year
+    const alpha = 1 - Math.exp(-dayFrac / 30);      // ~30-day smoothing
     incomeRate += (rate - incomeRate) * alpha;
     pool = 0;
     days += dayFrac;
@@ -539,7 +540,8 @@
     $('midPct').textContent = fmtPct((richIdx - poorIdx) / N);
     $('top10').textContent = fmtPct(top10);
     $('bottom50').textContent = fmtPct(bottom50);
-    $('day').textContent = Math.floor(days).toLocaleString();
+    const years = days / DAYS_PER_YEAR;
+    $('day').textContent = years < 100 ? years.toFixed(1) : Math.round(years).toLocaleString();
     $('income').textContent = '$' + (incomeRate < 10 ? incomeRate.toFixed(2) : incomeRate < 100 ? incomeRate.toFixed(1) : Math.round(incomeRate).toLocaleString());
   }
 
@@ -567,12 +569,12 @@
   const taxIn = $('tax'), demIn = $('dem'), speedIn = $('speed');
   function readParams() {
     params.tax = taxIn.value / 100;
-    params.dem = demIn.value / 100;
+    params.dem = demIn.value / 100 / DAYS_PER_YEAR;   // APR -> daily rate
     const raw = 100 * Math.pow(500, +speedIn.value);
     const mag = Math.pow(10, Math.floor(Math.log10(raw)) - 2);
     params.speed = Math.round(raw / mag) * mag;  // three significant figures
     $('taxOut').textContent = (+taxIn.value).toFixed(1).replace(/\.0$/, '') + '%';
-    $('demOut').textContent = (+demIn.value).toFixed(2).replace(/\.?0+$/, '') + '% / day';
+    $('demOut').textContent = (+demIn.value).toFixed(1).replace(/\.0$/, '') + '% / year';
     $('speedOut').textContent = params.speed.toLocaleString() + ' trades / s';
   }
   [taxIn, demIn, speedIn].forEach(el => el.addEventListener('input', readParams));

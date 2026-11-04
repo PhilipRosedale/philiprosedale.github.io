@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inequality — a free market simulation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #07090e;
+    --panel: rgba(13, 17, 25, 0.82);
+    --line: rgba(255,255,255,0.09);
+    --text: rgba(255,255,255,0.88);
+    --muted: rgba(255,255,255,0.5);
+    --faint: rgba(255,255,255,0.3);
+    --poor: #e2574e;
+    --mid: #f3b63c;
+    --rich: #3fcf9a;
+    --accent: #8fc7ff;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background:
+      radial-gradient(1200px 700px at 70% 40%, rgba(60, 90, 140, 0.10), transparent 60%),
+      radial-gradient(800px 500px at 15% 90%, rgba(243,182,60,0.05), transparent 60%),
+      var(--bg);
+    overflow: hidden;
+  }
+  #app {
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    width: 100%; height: 100%;
+  }
+  #panel {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 24px 16px;
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    backdrop-filter: blur(14px);
+    overflow-y: auto;
+  }
+  h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    margin: 2px 0 0;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .desc {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: rgba(255,255,255,0.64);
+    font-weight: 300;
+  }
+  .desc b { font-weight: 500; color: var(--text); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 9px 14px;
+    padding: 12px 16px 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.025);
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat .label {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .stat .value {
+    font-size: 17px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat.gini { grid-column: 1 / -1; }
+  .stat.gini .value { font-size: 40px; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; }
+  .stat.gini .hint { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .stat.mid .value { color: var(--mid); }
+  .histHead {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .histHead .dot {
+    display: inline-block;
+    width: 10px; height: 2px;
+    margin: 0 5px 3px 8px;
+    border-radius: 1px;
+    background: rgba(255,255,255,0.75);
+  }
+  .histHead .dot.mid { background: var(--mid); }
+  #history {
+    display: block;
+    width: 100%;
+    height: 44px;
+    grid-column: 1 / -1;
+  }
+
+  .buttons { display: flex; gap: 8px; }
+  button {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 9px;
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  button:hover { background: rgba(255,255,255,0.11); }
+  button:active { transform: translateY(1px); }
+  button.primary {
+    background: rgba(143,199,255,0.14);
+    border-color: rgba(143,199,255,0.45);
+    color: #cfe6ff;
+  }
+  button.primary:hover { background: rgba(143,199,255,0.22); }
+  button.primary.running {
+    background: rgba(243,182,60,0.14);
+    border-color: rgba(243,182,60,0.5);
+    color: #ffe2a3;
+  }
+
+  .controls { display: flex; flex-direction: column; gap: 14px; }
+  .control { display: flex; flex-direction: column; gap: 6px; }
+  .control .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 12.5px;
+  }
+  .control .row output {
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .control .note { font-size: 11px; color: var(--faint); line-height: 1.4; }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 22px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.16);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 15px; height: 15px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: #e8f2ff;
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 0 1px rgba(143,199,255,0.6), 0 2px 8px rgba(0,0,0,0.5);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 3px; border-radius: 2px; background: rgba(255,255,255,0.16);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #e8f2ff; border: 2px solid var(--bg);
+    box-shadow: 0 0 0 1px rgba(143,199,255,0.6), 0 2px 8px rgba(0,0,0,0.5);
+  }
+
+  .income {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(63,207,154,0.07);
+    border: 1px solid rgba(63,207,154,0.18);
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+  }
+  .income b {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--rich);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .legend div { display: flex; flex-direction: column; gap: 3px; }
+  .legend .swatch {
+    display: inline-block;
+    width: 100%; height: 4px;
+    border-radius: 2px;
+  }
+  .legend .name { color: var(--text); font-weight: 500; font-size: 11.5px; }
+  .legend .range { font-variant-numeric: tabular-nums; }
+
+  .foot {
+    margin-top: auto;
+    padding-top: 10px;
+    font-size: 11px;
+    color: var(--faint);
+    line-height: 1.5;
+  }
+  .foot a { color: var(--muted); text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.15); }
+  .foot a:hover { color: var(--text); }
+  kbd {
+    font: inherit; font-size: 10px;
+    padding: 1px 5px;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    color: var(--muted);
+  }
+
+  #chartWrap { position: relative; min-width: 0; min-height: 0; }
+  #chart { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+  @media (max-width: 820px) {
+    body { overflow: auto; }
+    #app {
+      grid-template-columns: 1fr;
+      grid-template-rows: 62vh auto;
+      height: auto; min-height: 100%;
+    }
+    #chartWrap { order: 0; height: 62vh; }
+    #panel { order: 1; border-right: 0; border-top: 1px solid var(--line); overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <header>
+      <h1>Inequality</h1>
+      <p class="sub">A free market simulation</p>
+    </header>
+    <p class="desc">
+      Two hundred identical people, most of them <b>middle class</b>, trade at random: one pays the other
+      a random amount, never more than a fifth of what the poorer of the two has. Nobody is smarter or
+      luckier, yet wealth drifts to the top. The curve sorts everyone from poorest to richest and shows
+      how much of the total wealth they hold.
+    </p>
+
+    <div class="stats">
+      <div class="stat gini">
+        <span class="label">Gini index</span>
+        <span class="value" id="gini">0.00</span>
+        <span class="hint">0 is perfect equality · 1 is one person owning it all</span>
+      </div>
+      <div class="stat mid"><span class="label">Middle class</span><span class="value" id="midPct">–</span></div>
+      <div class="stat"><span class="label">Richest 10% own</span><span class="value" id="top10">–</span></div>
+      <div class="stat"><span class="label">Poorest half own</span><span class="value" id="bottom50">–</span></div>
+      <div class="stat"><span class="label">Day</span><span class="value" id="day">0</span></div>
+      <div class="histHead"><span>Over time</span><span><i class="dot gini"></i>Gini <i class="dot mid"></i>Middle class</span></div>
+      <canvas id="history"></canvas>
+    </div>
+
+    <div class="buttons">
+      <button id="run" class="primary">Run</button>
+      <button id="reset">Reset</button>
+    </div>
+
+    <div class="controls">
+      <div class="control">
+        <div class="row"><span>Transaction tax</span><output id="taxOut">0%</output></div>
+        <input type="range" id="tax" min="0" max="50" step="0.5" value="0">
+        <div class="note">A share of every trade, paid out equally to everyone.</div>
+      </div>
+      <div class="control">
+        <div class="row"><span>Demurrage</span><output id="demOut">0% / day</output></div>
+        <input type="range" id="dem" min="0" max="5" step="0.05" value="0">
+        <div class="note">A daily tax on wealth held, paid out equally to everyone.</div>
+      </div>
+      <div class="control">
+        <div class="row"><span>Speed</span><output id="speedOut">500 trades / s</output></div>
+        <input type="range" id="speed" min="0" max="1" step="0.001" value="0.686">
+      </div>
+    </div>
+
+    <div class="income">
+      <span>Basic income per person</span>
+      <span><b id="income">0.0</b> <span style="color:var(--muted)">/ day</span></span>
+    </div>
+
+    <div class="legend">
+      <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range">under 50</span></div>
+      <div><span class="swatch" style="background:var(--mid)"></span><span class="name">Middle class</span><span class="range">50 – 150</span></div>
+      <div><span class="swatch" style="background:var(--rich)"></span><span class="name">Rich</span><span class="range">over 150</span></div>
+    </div>
+
+    <div class="foot">
+      Average wealth is always 100. Each arc is one trade, payer to receiver.
+      <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset ·
+      Inspired by <a href="https://fairshare.social" target="_blank" rel="noopener">FairShare</a> ·
+      <a href="index.html">philiprosedale.com</a>
+    </div>
+  </aside>
+
+  <main id="chartWrap">
+    <canvas id="chart"></canvas>
+  </main>
+</div>
+
+<script>
+(() => {
+  // ---------- Model parameters ----------
+  const N = 200;                 // people
+  const MEAN = 100;              // starting average wealth
+  const SD = 30;                 // starting spread (normal distribution)
+  const MAX_FRACTION = 0.2;      // a trade moves at most this fraction of the poorer party's wealth
+  const TRADES_PER_DAY = N / 2;  // one day = every person trades about once
+  const MID_LO = 0.5, MID_HI = 1.5; // middle class band, as multiples of average wealth
+  const SEED = 1337;
+
+  const COL = {
+    poor: [226, 87, 78],
+    mid:  [243, 182, 60],
+    rich: [63, 207, 154],
+    arc:  [143, 199, 255],
+  };
+  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+  // ---------- State ----------
+  const wealth = new Float64Array(N);
+  const order = new Int32Array(N);  // ids sorted poorest -> richest
+  const rank = new Int32Array(N);   // rank[id]
+  const cum = new Float64Array(N + 1);
+  let total = 0, mean = MEAN;
+  let pool = 0;                     // collected tax awaiting dividend
+  let days = 0;
+  let running = false;
+  let tradeAcc = 0;
+  let lastT = 0;
+  let incomeRate = 0;               // EMA of dividend per person per day
+  let arcs = [];
+  const ARC_CAP = 400;
+  let gini = 0, poorIdx = 0, richIdx = N, top10 = 0, bottom50 = 0;
+  let hist = { gini: [], mid: [], step: 0.1, nextAt: 0 };
+  let hover = null;
+
+  // Seeded RNG for the starting distribution so Reset is exact.
+  function mulberry32(a) {
+    return () => {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function init() {
+    const rnd = mulberry32(SEED);
+    for (let i = 0; i < N; i++) {
+      const u = 1 - rnd(), v = rnd();
+      const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+      wealth[i] = Math.max(10, MEAN + SD * z);
+    }
+    // renormalize so the average is exactly MEAN
+    let s = 0; for (let i = 0; i < N; i++) s += wealth[i];
+    for (let i = 0; i < N; i++) wealth[i] *= (MEAN * N) / s;
+    for (let i = 0; i < N; i++) order[i] = i;
+    pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = [];
+    hist = { gini: [], mid: [], step: 0.1, nextAt: 0 };
+    analyze();
+    recordHistory(true);
+    updateReadouts();
+  }
+
+  // ---------- Simulation ----------
+  const params = { tax: 0, dem: 0, speed: 500 };
+
+  function trade(now) {
+    let a = (Math.random() * N) | 0;
+    let b = (Math.random() * N) | 0;
+    while (b === a) b = (Math.random() * N) | 0;
+    if (Math.random() < 0.5) { const t = a; a = b; b = t; }  // a pays b
+    const amt = Math.random() * MAX_FRACTION * Math.min(wealth[a], wealth[b]);
+    const tax = amt * params.tax;
+    wealth[a] -= amt;
+    wealth[b] += amt - tax;
+    pool += tax;
+    arcs.push({ from: a, to: b, t0: now });
+  }
+
+  function step(dt, now) {
+    tradeAcc += params.speed * dt;
+    const n = Math.floor(tradeAcc);
+    if (n <= 0) return;
+    tradeAcc -= n;
+    for (let i = 0; i < n; i++) trade(now);
+    if (arcs.length > ARC_CAP) arcs.splice(0, arcs.length - ARC_CAP);
+
+    const dayFrac = n / TRADES_PER_DAY;
+    if (params.dem > 0) {
+      const f = 1 - Math.pow(1 - params.dem, dayFrac);
+      for (let i = 0; i < N; i++) { const take = wealth[i] * f; wealth[i] -= take; pool += take; }
+    }
+    // dividend: the whole pool, split equally
+    const share = pool / N;
+    for (let i = 0; i < N; i++) wealth[i] += share;
+    const rate = share / dayFrac;
+    const alpha = 1 - Math.exp(-dayFrac * 2);
+    incomeRate += (rate - incomeRate) * alpha;
+    pool = 0;
+    days += dayFrac;
+  }
+
+  function analyze() {
+    // order is nearly sorted from last frame; insertion sort is O(N) here
+    for (let i = 1; i < N; i++) {
+      const id = order[i], w = wealth[id];
+      let j = i - 1;
+      while (j >= 0 && wealth[order[j]] > w) { order[j + 1] = order[j]; j--; }
+      order[j + 1] = id;
+    }
+    cum[0] = 0;
+    for (let i = 0; i < N; i++) { rank[order[i]] = i; cum[i + 1] = cum[i] + wealth[order[i]]; }
+    total = cum[N]; mean = total / N;
+
+    let s = 0;
+    for (let i = 0; i < N; i++) s += cum[i] + cum[i + 1];
+    gini = Math.max(0, 1 - s / (N * total));
+
+    poorIdx = 0; while (poorIdx < N && wealth[order[poorIdx]] < MID_LO * mean) poorIdx++;
+    richIdx = poorIdx; while (richIdx < N && wealth[order[richIdx]] <= MID_HI * mean) richIdx++;
+    top10 = (total - cum[N - Math.round(N / 10)]) / total;
+    bottom50 = cum[N / 2] / total;
+  }
+
+  function recordHistory(force) {
+    if (!force && days < hist.nextAt) return;
+    hist.nextAt = days + hist.step;
+    hist.gini.push(gini);
+    hist.mid.push((richIdx - poorIdx) / N);
+    if (hist.gini.length > 600) {  // decimate to keep the whole run visible
+      hist.gini = hist.gini.filter((_, i) => i % 2 === 0);
+      hist.mid = hist.mid.filter((_, i) => i % 2 === 0);
+      hist.step *= 2;
+    }
+  }
+
+  // ---------- DOM ----------
+  const $ = id => document.getElementById(id);
+  const chart = $('chart'), ctx = chart.getContext('2d');
+  const histCv = $('history'), hctx = histCv.getContext('2d');
+  const runBtn = $('run');
+
+  function fmtPct(x) { return (x * 100).toFixed(x < 0.0995 ? 1 : 0) + '%'; }
+  function updateReadouts() {
+    $('gini').textContent = gini.toFixed(2);
+    $('midPct').textContent = fmtPct((richIdx - poorIdx) / N);
+    $('top10').textContent = fmtPct(top10);
+    $('bottom50').textContent = fmtPct(bottom50);
+    $('day').textContent = Math.floor(days).toLocaleString();
+    $('income').textContent = incomeRate.toFixed(incomeRate < 10 ? 1 : 0);
+  }
+
+  function setRunning(v) {
+    running = v;
+    runBtn.textContent = running ? 'Pause' : 'Run';
+    runBtn.classList.toggle('running', running);
+  }
+  runBtn.addEventListener('click', () => setRunning(!running));
+  $('reset').addEventListener('click', init);
+  window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.code === 'Space') { e.preventDefault(); setRunning(!running); }
+    if (e.key === 'r' || e.key === 'R') init();
+  });
+
+  const taxIn = $('tax'), demIn = $('dem'), speedIn = $('speed');
+  function readParams() {
+    params.tax = taxIn.value / 100;
+    params.dem = demIn.value / 100;
+    params.speed = Math.round(10 * Math.pow(300, +speedIn.value));
+    $('taxOut').textContent = (+taxIn.value).toFixed(1).replace(/\.0$/, '') + '%';
+    $('demOut').textContent = (+demIn.value).toFixed(2).replace(/\.?0+$/, '') + '% / day';
+    $('speedOut').textContent = params.speed.toLocaleString() + ' trades / s';
+  }
+  [taxIn, demIn, speedIn].forEach(el => el.addEventListener('input', readParams));
+  readParams();
+
+  // ---------- Layout / sizing ----------
+  let dpr = 1, W = 0, H = 0;
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = chart.clientWidth; H = chart.clientHeight;
+    chart.width = Math.round(W * dpr); chart.height = Math.round(H * dpr);
+    const hw = histCv.clientWidth, hh = histCv.clientHeight;
+    histCv.width = Math.round(hw * dpr); histCv.height = Math.round(hh * dpr);
+  }
+  new ResizeObserver(resize).observe(chart);
+  new ResizeObserver(resize).observe(histCv);
+  resize();
+
+  chart.addEventListener('mousemove', e => {
+    const r = chart.getBoundingClientRect();
+    hover = { x: e.clientX - r.left, y: e.clientY - r.top };
+  });
+  chart.addEventListener('mouseleave', () => { hover = null; });
+
+  // ---------- Drawing ----------
+  let plot = { l: 0, t: 0, w: 0, h: 0 };
+  const X = i => plot.l + (i / N) * plot.w;
+  const Y = c => plot.t + plot.h - (c / total) * plot.h;
+  function pointOf(id) {
+    const i = rank[id];
+    return { x: X(i + 0.5), y: Y(cum[i] + wealth[id] / 2) };
+  }
+
+  function drawChart(now) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const padL = 64, padR = 30, padT = 34, padB = 72;
+    plot = { l: padL, t: padT, w: Math.max(10, W - padL - padR), h: Math.max(10, H - padT - padB) };
+    const y0 = plot.t + plot.h;
+
+    // grid
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.font = '500 10.5px Inter, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.38)';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let k = 0; k <= 4; k++) {
+      const f = k / 4;
+      const y = plot.t + plot.h * (1 - f), x = plot.l + plot.w * f;
+      ctx.beginPath(); ctx.moveTo(plot.l, y); ctx.lineTo(plot.l + plot.w, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, plot.t); ctx.lineTo(x, y0); ctx.stroke();
+      ctx.fillText(Math.round(f * 100) + '%', plot.l - 10, y);
+    }
+    // axis titles
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '600 10px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.translate(16, plot.t + plot.h / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText('SHARE OF TOTAL WEALTH', 0, 0);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '600 10px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('P E O P L E   ·   P O O R E S T  →  R I C H E S T', plot.l + plot.w / 2, y0 + 52);
+
+    // line of perfect equality
+    ctx.save();
+    ctx.setLineDash([4, 6]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(N), Y(total)); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '400 10px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.save();
+    ctx.translate(X(N) - 8, Y(total) + 12);
+    ctx.rotate(-Math.atan2(plot.h, plot.w));
+    ctx.fillText('perfect equality', 0, 0);
+    ctx.restore();
+
+    // class segments: fill + glowing stroke
+    const segs = [
+      [0, poorIdx, COL.poor, 'Poor'],
+      [poorIdx, richIdx, COL.mid, 'Middle class'],
+      [richIdx, N, COL.rich, 'Rich'],
+    ];
+    for (const [i0, i1, c] of segs) {
+      if (i1 <= i0) continue;
+      const g = ctx.createLinearGradient(0, plot.t, 0, y0);
+      g.addColorStop(0, rgba(c, 0.62));
+      g.addColorStop(1, rgba(c, 0.22));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(X(i0), y0);
+      for (let i = i0; i <= i1; i++) ctx.lineTo(X(i), Y(cum[i]));
+      ctx.lineTo(X(i1), y0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    for (const [i0, i1, c] of segs) {
+      if (i1 <= i0) continue;
+      ctx.save();
+      ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = 14;
+      ctx.strokeStyle = rgba(c, 1); ctx.lineWidth = 2.2;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = i0; i <= i1; i++) { const x = X(i), y = Y(cum[i]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // class ribbon + labels under the axis
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.moveTo(plot.l, y0 + 0.5); ctx.lineTo(plot.l + plot.w, y0 + 0.5); ctx.stroke();
+    ctx.textBaseline = 'alphabetic';
+    for (const [i0, i1, c, name] of segs) {
+      if (i1 <= i0) continue;
+      const xa = X(i0), xb = X(i1);
+      ctx.fillStyle = rgba(c, 0.95);
+      ctx.fillRect(xa + 0.5, y0 + 6, Math.max(1, xb - xa - 1), 4);
+      const share = (i1 - i0) / N;
+      const label = `${name}  ${fmtPct(share)}`;
+      ctx.font = '600 11px Inter, system-ui, sans-serif';
+      const tw = ctx.measureText(label).width;
+      if (xb - xa > tw + 8) {
+        ctx.textAlign = 'center';
+        ctx.fillText(label, (xa + xb) / 2, y0 + 28);
+      } else if (xb - xa > 10 && (name === 'Rich' || name === 'Poor')) {
+        ctx.textAlign = name === 'Rich' ? 'right' : 'left';
+        ctx.fillText(fmtPct(share), name === 'Rich' ? xb : xa, y0 + 28);
+      }
+    }
+
+    // trades
+    const life = Math.min(1.5, Math.max(0.35, 120 / params.speed));
+    const keep = [];
+    ctx.lineWidth = 1.1;
+    for (const a of arcs) {
+      const age = (now - a.t0) / 1000;
+      if (age > life) continue;
+      keep.push(a);
+      const k = 1 - age / life;
+      const p = pointOf(a.from), q = pointOf(a.to);
+      const dx = q.x - p.x;
+      const cx = (p.x + q.x) / 2;
+      const cy = Math.max(plot.t - 24, Math.min(p.y, q.y) - Math.abs(dx) * 0.28 - 10);
+      ctx.strokeStyle = rgba(COL.arc, 0.55 * k * k);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.quadraticCurveTo(cx, cy, q.x, q.y); ctx.stroke();
+      // money moving from payer to receiver
+      const u0 = Math.min(1, age / (life * 0.6));
+      const u = 1 - (1 - u0) * (1 - u0);
+      const mx = (1 - u) * (1 - u) * p.x + 2 * (1 - u) * u * cx + u * u * q.x;
+      const my = (1 - u) * (1 - u) * p.y + 2 * (1 - u) * u * cy + u * u * q.y;
+      ctx.fillStyle = rgba([220, 238, 255], 0.9 * k);
+      ctx.beginPath(); ctx.arc(mx, my, 2, 0, Math.PI * 2); ctx.fill();
+    }
+    arcs = keep;
+
+    // hover inspection
+    if (hover && hover.x >= plot.l && hover.x <= plot.l + plot.w) {
+      const i = Math.min(N - 1, Math.max(0, Math.floor(((hover.x - plot.l) / plot.w) * N)));
+      const id = order[i];
+      const w = wealth[id];
+      const px = X(i + 0.5), py = Y(cum[i] + w / 2);
+      const c = i < poorIdx ? COL.poor : i < richIdx ? COL.mid : COL.rich;
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.beginPath(); ctx.moveTo(px, plot.t); ctx.lineTo(px, y0); ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = rgba(c, 1); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.stroke();
+
+      const l1 = `${ordinal(Math.round(((i + 0.5) / N) * 100))} percentile`;
+      const l2 = `${w.toFixed(w < 10 ? 2 : w < 100 ? 1 : 0)} coins  ·  ${(w / mean).toFixed(2)}× average`;
+      ctx.font = '500 11.5px Inter, system-ui, sans-serif';
+      const bw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 24;
+      const bh = 44;
+      let bx = px + 14, by = py - bh - 10;
+      if (bx + bw > plot.l + plot.w) bx = px - bw - 14;
+      if (by < plot.t) by = py + 14;
+      ctx.fillStyle = 'rgba(10,14,22,0.92)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1;
+      roundRect(ctx, bx, by, bw, bh, 8); ctx.fill(); ctx.stroke();
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillText(l1, bx + 12, by + 17);
+      ctx.fillStyle = rgba(c, 1);
+      ctx.fillText(l2, bx + 12, by + 34);
+    }
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  }
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  function drawHistory() {
+    const w = histCv.clientWidth, h = histCv.clientHeight;
+    hctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    hctx.clearRect(0, 0, w, h);
+    const n = hist.gini.length;
+    const padT = 4, padB = 4, hh = h - padT - padB;
+    hctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    hctx.beginPath(); hctx.moveTo(0, h - padB + 0.5); hctx.lineTo(w, h - padB + 0.5); hctx.stroke();
+    const line = (arr, color, width) => {
+      hctx.strokeStyle = color; hctx.lineWidth = width; hctx.lineJoin = 'round';
+      hctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = n > 1 ? (i / (n - 1)) * (w - 2) + 1 : 1;
+        const y = padT + hh * (1 - arr[i]);
+        i ? hctx.lineTo(x, y) : hctx.moveTo(x, y);
+      }
+      hctx.stroke();
+    };
+    if (n > 1) {
+      line(hist.mid, rgba(COL.mid, 0.85), 1.5);
+      line(hist.gini, 'rgba(255,255,255,0.85)', 1.5);
+    }
+  }
+
+  // ---------- Main loop ----------
+  let frame = 0;
+  function loop(now) {
+    const dt = Math.min(0.1, (now - lastT) / 1000 || 0);
+    lastT = now;
+    if (running) step(dt, now);
+    analyze();
+    if (running) recordHistory(false);
+    drawChart(now);
+    if ((frame++ & 3) === 0) { updateReadouts(); drawHistory(); }
+    requestAnimationFrame(loop);
+  }
+
+  init();
+  drawHistory();
+  requestAnimationFrame(t => { lastT = t; loop(t); });
+})();
+</script>
+</body>
+</html>

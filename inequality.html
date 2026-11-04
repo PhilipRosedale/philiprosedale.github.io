@@ -100,6 +100,18 @@
   .stat.gini { grid-column: 1 / -1; }
   .stat.gini .value { font-size: 40px; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; }
   .stat.gini .hint { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .giniRow { display: flex; align-items: center; gap: 12px; }
+  .stepper { display: flex; flex-direction: column; gap: 3px; }
+  .stepper button {
+    flex: none;
+    width: 28px; height: 20px;
+    padding: 0;
+    border-radius: 5px;
+    font-size: 8px;
+    line-height: 1;
+    color: var(--muted);
+  }
+  .stepper button:hover { color: var(--text); }
   .stat.mid .value { color: var(--mid); }
   .histHead {
     grid-column: 1 / -1;
@@ -275,17 +287,23 @@
       <p class="sub">A free market simulation</p>
     </header>
     <p class="desc">
-      Two hundred identical people, most of them <b>middle class</b>, trade at random: one pays the other
-      a random amount, never more than a fifth of what the poorer of the two has. Nobody is smarter or
-      luckier, yet wealth drifts to the top. The curve sorts everyone from poorest to richest and shows
-      how much of the total wealth they hold.
+      Two hundred identical people trade at random: one pays the other a random amount, never more than
+      a fifth of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top
+      and the <b>middle class</b> shrinks. The curve sorts everyone from poorest to richest and shows how
+      much of the total wealth they hold.
     </p>
 
     <div class="stats">
       <div class="stat gini">
         <span class="label">Gini index</span>
-        <span class="value" id="gini">0.00</span>
-        <span class="hint">0 is perfect equality · 1 is one person owning it all</span>
+        <div class="giniRow">
+          <span class="value" id="gini">0.00</span>
+          <div class="stepper">
+            <button id="giniUp" title="Start with more inequality (+0.01)" aria-label="Increase starting Gini">▲</button>
+            <button id="giniDown" title="Start with less inequality (−0.01)" aria-label="Decrease starting Gini">▼</button>
+          </div>
+        </div>
+        <span class="hint">▲▼ set the starting point · 0 is equality, 1 is one person owning it all</span>
       </div>
       <div class="stat mid"><span class="label">Middle class</span><span class="value" id="midPct">–</span></div>
       <div class="stat"><span class="label">Richest 10% own</span><span class="value" id="top10">–</span></div>
@@ -330,7 +348,7 @@
 
     <div class="foot">
       Average wealth is always 100. Each arc is one trade, payer to receiver.
-      <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset ·
+      <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset · <kbd>↑</kbd><kbd>↓</kbd> starting Gini ·
       Inspired by <a href="https://fairshare.social" target="_blank" rel="noopener">FairShare</a> ·
       <a href="index.html">philiprosedale.com</a>
     </div>
@@ -346,7 +364,8 @@
   // ---------- Model parameters ----------
   const N = 200;                 // people
   const MEAN = 100;              // starting average wealth
-  const SD = 30;                 // starting spread (normal distribution)
+  const START_GINI = 0.5;        // starting inequality (adjustable with the ▲▼ buttons)
+  const GINI_STEP = 0.01, GINI_MAX = 0.9;
   const MAX_FRACTION = 0.2;      // a trade moves at most this fraction of the poorer party's wealth
   const TRADES_PER_DAY = N / 2;  // one day = every person trades about once
   const MID_LO = 0.5, MID_HI = 1.5; // middle class band, as multiples of average wealth
@@ -388,16 +407,42 @@
     };
   }
 
-  function init() {
+  // One fixed set of standard-normal draws; the starting distribution is
+  // lognormal in these, with its spread chosen to hit the requested Gini.
+  const Z = new Float64Array(N);
+  {
     const rnd = mulberry32(SEED);
     for (let i = 0; i < N; i++) {
       const u = 1 - rnd(), v = rnd();
-      const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-      wealth[i] = Math.max(10, MEAN + SD * z);
+      Z[i] = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
     }
-    // renormalize so the average is exactly MEAN
-    let s = 0; for (let i = 0; i < N; i++) s += wealth[i];
-    for (let i = 0; i < N; i++) wealth[i] *= (MEAN * N) / s;
+  }
+  let startGini = START_GINI;
+
+  function giniOf(arr) {
+    const s = Float64Array.from(arr).sort();
+    let tot = 0, acc = 0;
+    for (let i = 0; i < N; i++) { tot += s[i]; acc += (2 * i + 1) * s[i]; }
+    return tot > 0 ? acc / (N * tot) - 1 : 0;
+  }
+
+  function init() {
+    // bisect the lognormal spread so the sample Gini matches the target
+    const tmp = new Float64Array(N);
+    const fill = sig => { for (let i = 0; i < N; i++) tmp[i] = Math.exp(sig * Z[i]); };
+    let lo = 0, hi = 6;
+    for (let it = 0; it < 40; it++) {
+      const mid = (lo + hi) / 2;
+      fill(mid);
+      if (giniOf(tmp) < startGini) lo = mid; else hi = mid;
+    }
+    fill((lo + hi) / 2);
+    let s = 0; for (let i = 0; i < N; i++) s += tmp[i];
+    for (let i = 0; i < N; i++) wealth[i] = tmp[i] * (MEAN * N) / s;
+    // Gini is linear in the spread around a fixed mean, so a final nudge makes it exact
+    const g0 = giniOf(wealth);
+    const k = g0 > 1e-9 ? startGini / g0 : 0;
+    for (let i = 0; i < N; i++) wealth[i] = Math.max(0.01, MEAN + k * (wealth[i] - MEAN));
     for (let i = 0; i < N; i++) order[i] = i;
     pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = [];
     hist = { gini: [], mid: [], step: 0.1, nextAt: 0 };
@@ -502,10 +547,18 @@
   }
   runBtn.addEventListener('click', () => setRunning(!running));
   $('reset').addEventListener('click', init);
+  function nudgeStartGini(dir) {
+    startGini = Math.min(GINI_MAX, Math.max(0, Math.round((startGini + dir * GINI_STEP) * 100) / 100));
+    init();
+  }
+  $('giniUp').addEventListener('click', () => nudgeStartGini(+1));
+  $('giniDown').addEventListener('click', () => nudgeStartGini(-1));
   window.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     if (e.code === 'Space') { e.preventDefault(); setRunning(!running); }
     if (e.key === 'r' || e.key === 'R') init();
+    if (e.key === 'ArrowUp') { e.preventDefault(); nudgeStartGini(+1); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); nudgeStartGini(-1); }
   });
 
   const taxIn = $('tax'), demIn = $('dem'), speedIn = $('speed');

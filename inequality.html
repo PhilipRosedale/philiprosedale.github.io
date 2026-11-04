@@ -287,10 +287,11 @@
       <p class="sub">A free market simulation</p>
     </header>
     <p class="desc">
-      Two hundred identical people trade at random: one pays the other a small random amount, at most
-      4% of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top
-      and the <b>middle class</b> shrinks. The curve sorts everyone from poorest to richest and shows how
-      much of the total wealth they hold.
+      Two hundred identical people, starting from the US median bank balance of <b>$8,200</b>, trade at
+      random as often as Americans do (47 payments a month). Each payment is a random amount, at most 4%
+      of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top and
+      the <b>middle class</b> shrinks. The curve sorts everyone from poorest to richest and shows how much
+      of the total wealth they hold.
     </p>
 
     <div class="stats">
@@ -309,6 +310,8 @@
       <div class="stat"><span class="label">Richest 10% own</span><span class="value" id="top10">–</span></div>
       <div class="stat"><span class="label">Poorest half own</span><span class="value" id="bottom50">–</span></div>
       <div class="stat"><span class="label">Year</span><span class="value" id="day">0.0</span></div>
+      <div class="stat"><span class="label">Median balance</span><span class="value" id="median">–</span></div>
+      <div class="stat"><span class="label">Average payment</span><span class="value" id="avgPay">–</span></div>
       <div class="histHead"><span>Over time</span><span><i class="dot gini"></i>Gini <i class="dot mid"></i>Middle class</span></div>
       <canvas id="history"></canvas>
     </div>
@@ -330,8 +333,8 @@
         <div class="note">A yearly tax on wealth held, paid out equally to everyone.</div>
       </div>
       <div class="control">
-        <div class="row"><span>Speed</span><output id="speedOut">12,500 trades / s</output></div>
-        <input type="range" id="speed" min="0" max="1" step="0.001" value="0.777">
+        <div class="row"><span>Speed</span><output id="speedOut">25,000 trades / s</output></div>
+        <input type="range" id="speed" min="0" max="1" step="0.0005" value="0.8885">
       </div>
     </div>
 
@@ -341,14 +344,16 @@
     </div>
 
     <div class="legend">
-      <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range">under $50</span></div>
-      <div><span class="swatch" style="background:var(--mid)"></span><span class="name">Middle class</span><span class="range">$50 – $150</span></div>
-      <div><span class="swatch" style="background:var(--rich)"></span><span class="name">Rich</span><span class="range">over $150</span></div>
+      <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range" id="poorRange">–</span></div>
+      <div><span class="swatch" style="background:var(--mid)"></span><span class="name">Middle class</span><span class="range" id="midRange">–</span></div>
+      <div><span class="swatch" style="background:var(--rich)"></span><span class="name">Rich</span><span class="range" id="richRange">–</span></div>
     </div>
 
     <div class="foot">
-      Average wealth is always $100. Arcs are trades, payer to receiver (a sample of them at high speed).
-      <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset · <kbd>↑</kbd><kbd>↓</kbd> starting Gini ·
+      Arcs are trades, payer to receiver (a sample of them at high speed). Total wealth is conserved.
+      <kbd>Space</kbd> run / pause · <kbd>R</kbd> reset · <kbd>↑</kbd><kbd>↓</kbd> starting Gini<br>
+      Sources: Fed <a href="https://www.federalreserve.gov/econres/scf/dataviz/scf/table/" target="_blank" rel="noopener">Survey of Consumer Finances</a> 2025,
+      Fed <a href="https://www.atlantafed.org/research-and-data/surveys/survey-and-diary-of-consumer-payment-choice" target="_blank" rel="noopener">Diary of Consumer Payment Choice</a> 2025 ·
       Inspired by <a href="https://fairshare.social" target="_blank" rel="noopener">FairShare</a> ·
       <a href="index.html">philiprosedale.com</a>
     </div>
@@ -363,12 +368,13 @@
 (() => {
   // ---------- Model parameters ----------
   const N = 200;                 // people
-  const MEAN = 100;              // starting average wealth
+  const MEDIAN_START = 8200;     // US median transaction-account balance (Fed Survey of Consumer Finances, 2025)
+  const PAYMENTS_PER_MONTH = 47; // payments per US consumer per month (Fed Diary of Consumer Payment Choice, 2025)
   const START_GINI = 0.5;        // starting inequality (adjustable with the ▲▼ buttons)
   const GINI_STEP = 0.01, GINI_MAX = 0.9;
-  const MAX_FRACTION = 0.04;     // a trade moves at most this fraction of the poorer party's wealth
-  const TRADES_PER_DAY = N / 2;  // one day = every person trades about once
+  const MAX_FRACTION = 0.04;     // a trade moves at most this fraction of the poorer party's wealth (avg ≈ $140; Fed: $141)
   const DAYS_PER_YEAR = 365;
+  const TRADES_PER_DAY = N * PAYMENTS_PER_MONTH / (DAYS_PER_YEAR / 12); // every trade has exactly one payer
   const ARC_RATE = 300;          // at most this many trades per second are drawn as arcs
   const MID_LO = 0.5, MID_HI = 1.5; // middle class band, as multiples of average wealth
   const SEED = 1337;
@@ -386,13 +392,15 @@
   const order = new Int32Array(N);  // ids sorted poorest -> richest
   const rank = new Int32Array(N);   // rank[id]
   const cum = new Float64Array(N + 1);
-  let total = 0, mean = MEAN;
+  let total = 0, mean = MEDIAN_START, median = MEDIAN_START;
   let pool = 0;                     // collected tax awaiting dividend
   let days = 0;
   let running = false;
   let tradeAcc = 0;
   let lastT = 0;
-  let incomeRate = 0;               // EMA of dividend per person per day
+  let incomeRate = 0;               // EMA of dividend per person per year
+  let avgPayment = 0;               // EMA of trade size
+  let amtSum = 0, amtN = 0;
   let arcs = [];
   const ARC_CAP = 400;
   let gini = 0, poorIdx = 0, richIdx = N, top10 = 0, bottom50 = 0;
@@ -439,22 +447,30 @@
       if (giniOf(tmp) < startGini) lo = mid; else hi = mid;
     }
     fill((lo + hi) / 2);
+    // Gini is linear in the spread around a fixed mean, so a nudge makes it exact
     let s = 0; for (let i = 0; i < N; i++) s += tmp[i];
-    for (let i = 0; i < N; i++) wealth[i] = tmp[i] * (MEAN * N) / s;
-    // Gini is linear in the spread around a fixed mean, so a final nudge makes it exact
-    const g0 = giniOf(wealth);
+    const m0 = s / N;
+    const g0 = giniOf(tmp);
     const k = g0 > 1e-9 ? startGini / g0 : 0;
-    for (let i = 0; i < N; i++) wealth[i] = Math.max(0.01, MEAN + k * (wealth[i] - MEAN));
+    for (let i = 0; i < N; i++) wealth[i] = Math.max(1e-6, m0 + k * (tmp[i] - m0));
+    // scale (which preserves Gini) so the median balance is the US median
+    const sorted = Float64Array.from(wealth).sort();
+    const med = (sorted[N / 2 - 1] + sorted[N / 2]) / 2;
+    for (let i = 0; i < N; i++) wealth[i] *= MEDIAN_START / med;
     for (let i = 0; i < N; i++) order[i] = i;
-    pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = [];
+    pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = []; amtSum = 0; amtN = 0;
     hist = { gini: [], mid: [], step: 1, nextAt: 0 };
     analyze();
+    // expected trade size before any trades happen: half the max fraction of a random pair's poorer balance
+    let em = 0;
+    for (let i = 0; i < 4000; i++) em += Math.min(wealth[(Math.random() * N) | 0], wealth[(Math.random() * N) | 0]);
+    avgPayment = 0.5 * MAX_FRACTION * em / 4000;
     recordHistory(true);
     updateReadouts();
   }
 
   // ---------- Simulation ----------
-  const params = { tax: 0, dem: 0, speed: 12500 };
+  const params = { tax: 0, dem: 0, speed: 25000 };
   let tradeCount = 0;
 
   function trade(now, drawEvery) {
@@ -467,6 +483,7 @@
     wealth[a] -= amt;
     wealth[b] += amt - tax;
     pool += tax;                         // ...and the pool is paid out equally in step()
+    amtSum += amt; amtN++;
     if (tradeCount++ % drawEvery === 0) arcs.push({ from: a, to: b, t0: now });
   }
 
@@ -490,6 +507,8 @@
     const rate = share / dayFrac * DAYS_PER_YEAR;   // dividend per person per year
     const alpha = 1 - Math.exp(-dayFrac / 30);      // ~30-day smoothing
     incomeRate += (rate - incomeRate) * alpha;
+    avgPayment += (amtSum / amtN - avgPayment) * alpha;
+    amtSum = 0; amtN = 0;
     pool = 0;
     days += dayFrac;
   }
@@ -505,6 +524,7 @@
     cum[0] = 0;
     for (let i = 0; i < N; i++) { rank[order[i]] = i; cum[i + 1] = cum[i] + wealth[order[i]]; }
     total = cum[N]; mean = total / N;
+    median = (wealth[order[N / 2 - 1]] + wealth[order[N / 2]]) / 2;
 
     let s = 0;
     for (let i = 0; i < N; i++) s += cum[i] + cum[i + 1];
@@ -535,14 +555,25 @@
   const runBtn = $('run');
 
   function fmtPct(x) { return (x * 100).toFixed(x < 0.0995 ? 1 : 0) + '%'; }
+  function fmtMoney(x) {
+    return '$' + (x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x).toLocaleString());
+  }
+  function fmtK(x) {
+    return x >= 10000 ? '$' + Math.round(x / 1000) + 'k' : x >= 1000 ? '$' + (x / 1000).toFixed(1) + 'k' : fmtMoney(x);
+  }
   function updateReadouts() {
     $('gini').textContent = gini.toFixed(2);
     $('midPct').textContent = fmtPct((richIdx - poorIdx) / N);
     $('top10').textContent = fmtPct(top10);
     $('bottom50').textContent = fmtPct(bottom50);
+    $('median').textContent = fmtMoney(median);
+    $('avgPay').textContent = fmtMoney(avgPayment);
     const years = days / DAYS_PER_YEAR;
     $('day').textContent = years < 100 ? years.toFixed(1) : Math.round(years).toLocaleString();
-    $('income').textContent = '$' + (incomeRate < 10 ? incomeRate.toFixed(2) : incomeRate < 100 ? incomeRate.toFixed(1) : Math.round(incomeRate).toLocaleString());
+    $('income').textContent = fmtMoney(incomeRate);
+    $('poorRange').textContent = 'under ' + fmtK(MID_LO * mean);
+    $('midRange').textContent = fmtK(MID_LO * mean) + ' – ' + fmtK(MID_HI * mean);
+    $('richRange').textContent = 'over ' + fmtK(MID_HI * mean);
   }
 
   function setRunning(v) {
@@ -749,7 +780,7 @@
       ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.stroke();
 
       const l1 = `${ordinal(Math.round(((i + 0.5) / N) * 100))} percentile`;
-      const l2 = `$${w < 10 ? w.toFixed(2) : w < 100 ? w.toFixed(1) : Math.round(w).toLocaleString()}  ·  ${(w / mean).toFixed(2)}× average`;
+      const l2 = `${fmtMoney(w)}  ·  ${(w / mean).toFixed(2)}× average`;
       ctx.font = '500 11.5px Inter, system-ui, sans-serif';
       const bw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 24;
       const bh = 44;

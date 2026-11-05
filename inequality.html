@@ -422,8 +422,9 @@
     <p>
       Alice and Bob start with the same <b>$8,200</b>. On each trade a fair coin decides who pays whom, and the
       amount is a random share of what the <b>poorer</b> of the two has, because nobody can pay more than they
-      have. (Trades here are up to 20% of the poorer balance, larger than in the main simulation, so you can
-      watch it in seconds.)
+      have. (Trades here are up to 10% of the poorer balance, a little larger than in the main simulation,
+      so you can watch it in seconds.) Payments from Alice to Bob arc over the top; payments from Bob to
+      Alice pass underneath.
     </p>
     <p>
       The coin is fair, so on average neither of them gains. But the <b>stakes are set by the poorer person</b>:
@@ -918,9 +919,9 @@
   }
 
   // ---------- "Why it happens": Alice and Bob ----------
-  const DEMO_F = 0.2;            // a demo trade moves up to this share of the poorer balance
-  const DEMO_INTERVAL = 450;     // ms between trades
-  const DEMO_LIFE = 0.6;         // arc lifetime, s
+  const DEMO_F = 0.1;            // a demo trade moves up to this share of the poorer balance
+  const DEMO_INTERVAL = 90;      // ms between trades
+  const DEMO_LIFE = 0.45;        // arc lifetime, s
   const demo = { open: false, wa: 0, wb: 0, trades: 0, arcs: [], nextAt: 0 };
   const demoCv = $('demoCanvas'), dctx = demoCv.getContext('2d');
   const overlay = $('overlay');
@@ -964,8 +965,9 @@
     const padL = 28, padR = 28;
     const totalW = demo.wa + demo.wb;
     const X = v => padL + (v / totalW) * (w - padL - padR);
-    const lane = { a: 66, b: 150 };
     const yAxis = h - 34;
+    const yLine = Math.round(yAxis / 2) + 8;   // Alice and Bob share this line
+    const lane = { a: yLine, b: yLine };
 
     // axis
     dctx.strokeStyle = 'rgba(255,255,255,0.14)'; dctx.lineWidth = 1;
@@ -1010,16 +1012,18 @@
       dctx.restore();
       dctx.fillStyle = '#0d1119';
       dctx.beginPath(); dctx.arc(q.x, q.y, 3, 0, Math.PI * 2); dctx.fill();
+      // Alice is labelled above the line, Bob below, so the labels never collide
+      const up = id === 'a';
       dctx.textAlign = 'center';
       dctx.font = '600 12px Inter, system-ui, sans-serif';
       dctx.fillStyle = rgba(p.color, 1);
-      dctx.fillText(p.name, q.x, q.y - 16);
+      dctx.fillText(p.name, q.x, up ? q.y - 20 : q.y + 28);
       dctx.font = '500 11px Inter, system-ui, sans-serif';
       dctx.fillStyle = 'rgba(255,255,255,0.75)';
-      dctx.fillText(fmtMoney(val), q.x, q.y + 26);
+      dctx.fillText(fmtMoney(val), q.x, up ? q.y - 36 : q.y + 44);
     }
 
-    // trades as arcs, payer to receiver (same style as the main chart)
+    // trades as arcs, payer to receiver: Alice -> Bob over the top, Bob -> Alice underneath
     const keep = [];
     dctx.lineWidth = 1.4;
     for (const a of demo.arcs) {
@@ -1028,13 +1032,17 @@
       keep.push(a);
       const k = 1 - age / DEMO_LIFE;
       const p = pos[a.from], q = pos[a.to];
-      const cx = (p.x + q.x) / 2 + 46, cy = (p.y + q.y) / 2;
+      const dx = q.x - p.x, sgn = dx < 0 ? -1 : 1;
+      const side = a.from === 'a' ? -1 : 1;
+      const bulge = Math.min(58, 30 + Math.abs(dx) * 0.12);
+      const yc = yLine + side * bulge;
+      const c1x = p.x + dx * 0.3 - sgn * 18, c2x = p.x + dx * 0.7 + sgn * 18;
       dctx.strokeStyle = rgba(COL.arc, 0.7 * k * k);
-      dctx.beginPath(); dctx.moveTo(p.x, p.y); dctx.quadraticCurveTo(cx, cy, q.x, q.y); dctx.stroke();
+      dctx.beginPath(); dctx.moveTo(p.x, p.y); dctx.bezierCurveTo(c1x, yc, c2x, yc, q.x, q.y); dctx.stroke();
       const u0 = Math.min(1, age / (DEMO_LIFE * 0.6));
-      const u = 1 - (1 - u0) * (1 - u0);
-      const mx = (1 - u) * (1 - u) * p.x + 2 * (1 - u) * u * cx + u * u * q.x;
-      const my = (1 - u) * (1 - u) * p.y + 2 * (1 - u) * u * cy + u * u * q.y;
+      const u = 1 - (1 - u0) * (1 - u0), v = 1 - u;
+      const mx = v * v * v * p.x + 3 * v * v * u * c1x + 3 * v * u * u * c2x + u * u * u * q.x;
+      const my = v * v * v * p.y + 3 * v * v * u * yc + 3 * v * u * u * yc + u * u * u * q.y;
       dctx.fillStyle = rgba([220, 238, 255], 0.95 * k);
       dctx.beginPath(); dctx.arc(mx, my, 3, 0, Math.PI * 2); dctx.fill();
     }

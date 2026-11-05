@@ -422,8 +422,7 @@
       Alice and Bob start with the same <b>$8,200</b>. On each trade a fair coin decides who pays whom, and the
       amount is a random share of what the <b>poorer</b> of the two has, because nobody can pay more than they
       have. (Trades here are up to 10% of the poorer balance, a little larger than in the main simulation,
-      so you can watch it in seconds.) Payments from Alice to Bob arc over the top; payments from Bob to
-      Alice pass underneath.
+      so you can watch it in seconds.)
     </p>
     <p>
       The coin is fair, so on average neither of them gains. But the <b>stakes are set by the poorer person</b>:
@@ -431,8 +430,8 @@
       sliver of theirs.
     </p>
     <p>
-      Betting a share of what you have is a losing game even at fair odds. Lose 20% and then win 20% and you are
-      left with <b>96%</b>, not 100%. The poorer person is always playing that game with their whole stake, so a
+      <b>Betting a share of what you have is a losing game even at fair odds.</b> Lose 20% and then win 20% and
+      you are left with 96%, not 100%. The poorer person is always playing that game with their whole stake, so a
       lucky streak for either of them hardens into a lasting gap, and the gap feeds on itself as the poorer
       person's stakes shrink with them.
     </p>
@@ -919,9 +918,14 @@
 
   // ---------- "Why it happens": Alice and Bob ----------
   const DEMO_F = 0.1;            // a demo trade moves up to this share of the poorer balance
-  const DEMO_INTERVAL = 90;      // ms between trades
-  const DEMO_LIFE = 0.45;        // arc lifetime, s
-  const demo = { open: false, wa: 0, wb: 0, trades: 0, arcs: [], nextAt: 0 };
+  const DEMO_INTERVAL0 = 1800;   // ms between trades at the start...
+  const DEMO_INTERVAL_MIN = 2.5; // ...shrinking exponentially to this
+  const DEMO_SLOW_FOR = 6000;    // ms to stay at the starting pace before speeding up
+  const DEMO_TAU = 4500;         // ms: time constant of the speed-up
+  const DEMO_HOLD = 8000;        // ms to show the ending before restarting
+  const demo = { open: false, wa: 0, wb: 0, trades: 0, arcs: [], nextAt: 0, t0: 0, interval: DEMO_INTERVAL0, done: 0 };
+  const demoInterval = t => Math.max(DEMO_INTERVAL_MIN, DEMO_INTERVAL0 * Math.exp(-Math.max(0, t - DEMO_SLOW_FOR) / DEMO_TAU));
+  const demoLife = () => Math.min(1.2, Math.max(0.3, demo.interval / 1000 * 1.5));
   const demoCv = $('demoCanvas'), dctx = demoCv.getContext('2d');
   const overlay = $('overlay');
   const PEOPLE = {
@@ -931,8 +935,10 @@
 
   function demoReset() {
     demo.wa = demo.wb = MEDIAN_START;
-    demo.trades = 0; demo.arcs = [];
-    demo.nextAt = performance.now() + 900;
+    demo.trades = 0; demo.arcs = []; demo.done = 0;
+    demo.t0 = performance.now();
+    demo.interval = DEMO_INTERVAL0;
+    demo.nextAt = demo.t0 + 1200;
   }
   function demoResize() {
     if (!demoCv.clientWidth) return;
@@ -949,15 +955,28 @@
   function demoClose() { demo.open = false; overlay.classList.remove('open'); }
 
   function demoTrade(now) {
-    const amt = Math.random() * DEMO_F * Math.min(demo.wa, demo.wb);
+    // whole dollars, at least $1, never more than the poorer party has
+    const poorer = Math.min(demo.wa, demo.wb);
+    const amt = Math.min(poorer, Math.max(1, Math.round(Math.random() * DEMO_F * poorer)));
     const aPays = Math.random() < 0.5;
     if (aPays) { demo.wa -= amt; demo.wb += amt; } else { demo.wb -= amt; demo.wa += amt; }
-    demo.arcs.push({ from: aPays ? 'a' : 'b', to: aPays ? 'b' : 'a', t0: now });
+    demo.arcs.push({ from: aPays ? 'a' : 'b', to: aPays ? 'b' : 'a', t0: now, amt, life: demoLife() });
     demo.trades++;
+    if (demo.wa === 0 || demo.wb === 0) demo.done = now;
   }
 
   function demoFrame(now) {
-    if (now >= demo.nextAt) { demoTrade(now); demo.nextAt = now + DEMO_INTERVAL; }
+    if (demo.done) {
+      if (now - demo.done > DEMO_HOLD) demoReset();
+    } else {
+      demo.interval = demoInterval(now - demo.t0);
+      let guard = 0;
+      while (now >= demo.nextAt && !demo.done && guard++ < 50) { demoTrade(now); demo.nextAt += demo.interval; }
+      if (demo.nextAt < now - 100) demo.nextAt = now;  // resync after a stalled tab
+      if (demo.arcs.length > 240) demo.arcs.splice(0, demo.arcs.length - 240);
+    }
+    // amounts ride with the dots while trades are slow, and fade out as they speed up
+    const amtAlpha = Math.min(1, Math.max(0, (demo.interval - 250) / 450));
     const w = demoCv.clientWidth, h = demoCv.clientHeight;
     dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     dctx.clearRect(0, 0, w, h);
@@ -992,10 +1011,12 @@
     dctx.fillStyle = 'rgba(255,255,255,0.4)'; dctx.textAlign = 'center'; dctx.textBaseline = 'alphabetic';
     dctx.fillText('both start at ' + fmtMoney(MEDIAN_START), xs, 20);
 
-    // trade counter
+    // trade counter and current pace
     dctx.textAlign = 'left';
     dctx.fillStyle = 'rgba(255,255,255,0.45)';
-    dctx.fillText(`after ${demo.trades} trade${demo.trades === 1 ? '' : 's'}`, padL, 20);
+    const rate = 1000 / demo.interval;
+    const pace = demo.done ? '' : rate < 10 ? `  ·  ${rate.toFixed(1)} per second` : `  ·  ${Math.round(rate)} per second`;
+    dctx.fillText(`after ${demo.trades.toLocaleString()} trade${demo.trades === 1 ? '' : 's'}${pace}`, padL, 20);
 
     // drift bars, dots, labels
     const pos = { a: { x: X(demo.wa), y: lane.a }, b: { x: X(demo.wb), y: lane.b } };
@@ -1011,15 +1032,20 @@
       dctx.restore();
       dctx.fillStyle = '#0d1119';
       dctx.beginPath(); dctx.arc(q.x, q.y, 3, 0, Math.PI * 2); dctx.fill();
-      // Alice is labelled above the line, Bob below, so the labels never collide
-      const up = id === 'a';
-      dctx.textAlign = 'center';
+      // name and balance sit beside the dot on the outer side, leaving room above and below for the arcs
+      const other = pos[id === 'a' ? 'b' : 'a'];
+      let left = q.x < other.x || (q.x === other.x && id === 'a');
       dctx.font = '600 12px Inter, system-ui, sans-serif';
+      const tw = Math.max(dctx.measureText(p.name).width, dctx.measureText('$' + val.toLocaleString()).width);
+      if (left && q.x - 16 - tw < 4) left = false;
+      if (!left && q.x + 16 + tw > w - 4) left = true;
+      const lx = left ? q.x - 16 : q.x + 16;
+      dctx.textAlign = left ? 'right' : 'left'; dctx.textBaseline = 'alphabetic';
       dctx.fillStyle = rgba(p.color, 1);
-      dctx.fillText(p.name, q.x, up ? q.y - 20 : q.y + 28);
+      dctx.fillText(p.name, lx, q.y - 2);
       dctx.font = '500 11px Inter, system-ui, sans-serif';
       dctx.fillStyle = 'rgba(255,255,255,0.75)';
-      dctx.fillText(fmtMoney(val), q.x, up ? q.y - 36 : q.y + 44);
+      dctx.fillText('$' + val.toLocaleString(), lx, q.y + 13);
     }
 
     // trades as arcs, payer to receiver: Alice -> Bob over the top, Bob -> Alice underneath
@@ -1027,25 +1053,45 @@
     dctx.lineWidth = 1.4;
     for (const a of demo.arcs) {
       const age = (now - a.t0) / 1000;
-      if (age > DEMO_LIFE) continue;
+      if (age > a.life) continue;
       keep.push(a);
-      const k = 1 - age / DEMO_LIFE;
+      const k = 1 - age / a.life;
       const p = pos[a.from], q = pos[a.to];
       const dx = q.x - p.x, sgn = dx < 0 ? -1 : 1;
       const side = a.from === 'a' ? -1 : 1;
-      const bulge = Math.min(58, 30 + Math.abs(dx) * 0.12);
+      const bulge = Math.min(64, 44 + Math.abs(dx) * 0.1);
       const yc = yLine + side * bulge;
       const c1x = p.x + dx * 0.3 - sgn * 18, c2x = p.x + dx * 0.7 + sgn * 18;
-      dctx.strokeStyle = rgba(COL.arc, 0.7 * k * k);
+      dctx.strokeStyle = rgba(COL.arc, 0.75 * k);
       dctx.beginPath(); dctx.moveTo(p.x, p.y); dctx.bezierCurveTo(c1x, yc, c2x, yc, q.x, q.y); dctx.stroke();
-      const u0 = Math.min(1, age / (DEMO_LIFE * 0.6));
+      const u0 = Math.min(1, age / (a.life * 0.6));
       const u = 1 - (1 - u0) * (1 - u0), v = 1 - u;
       const mx = v * v * v * p.x + 3 * v * v * u * c1x + 3 * v * u * u * c2x + u * u * u * q.x;
       const my = v * v * v * p.y + 3 * v * v * u * yc + 3 * v * u * u * yc + u * u * u * q.y;
       dctx.fillStyle = rgba([220, 238, 255], 0.95 * k);
       dctx.beginPath(); dctx.arc(mx, my, 3, 0, Math.PI * 2); dctx.fill();
+      const labelAlpha = amtAlpha * Math.min(1, (1 - u) * 2.5);   // fades as it reaches the receiver
+      if (labelAlpha > 0.02) {
+        dctx.font = '600 11px Inter, system-ui, sans-serif';
+        dctx.textAlign = 'center'; dctx.textBaseline = side < 0 ? 'alphabetic' : 'top';
+        dctx.fillStyle = rgba([220, 238, 255], labelAlpha);
+        dctx.fillText('$' + a.amt.toLocaleString(), mx, my + side * 10);
+      }
     }
     demo.arcs = keep;
+
+    // the ending
+    if (demo.done) {
+      const broke = demo.wa === 0 ? PEOPLE.a : PEOPLE.b;
+      dctx.font = '600 13px Inter, system-ui, sans-serif';
+      dctx.textAlign = 'center'; dctx.textBaseline = 'alphabetic';
+      dctx.fillStyle = rgba(broke.color, 1);
+      dctx.fillText(`${broke.name} is out of money after ${demo.trades.toLocaleString()} trades.`, w / 2, yAxis - 52);
+      dctx.font = '400 10.5px Inter, system-ui, sans-serif';
+      dctx.fillStyle = 'rgba(255,255,255,0.4)';
+      const left = Math.max(0, Math.ceil((DEMO_HOLD - (now - demo.done)) / 1000));
+      dctx.fillText(`Fair coin, same start. Restarting in ${left}…`, w / 2, yAxis - 36);
+    }
   }
 
   $('why').addEventListener('click', demoOpen);

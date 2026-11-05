@@ -264,6 +264,53 @@
     color: var(--muted);
   }
 
+  button.link {
+    display: inline-block;
+    flex: none;
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  button.link:hover { background: none; text-decoration: underline; }
+
+  #overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 20px;
+    background: rgba(4, 6, 10, 0.72);
+    backdrop-filter: blur(6px);
+  }
+  #overlay.open { display: flex; }
+  .modal {
+    width: min(640px, 100%);
+    max-height: 100%;
+    overflow-y: auto;
+    padding: 20px 24px 20px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    background: #0d1119;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .modal header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .modal h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .modal .x { flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 12px; }
+  #demoCanvas {
+    display: block;
+    width: 100%; height: 230px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .modal p { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: rgba(255,255,255,0.72); font-weight: 300; }
+  .modal p b { font-weight: 500; color: var(--text); }
+  .modal .actions { display: flex; gap: 8px; margin-top: 16px; }
+  .modal .actions button { flex: none; padding: 8px 14px; font-size: 12.5px; }
+
   #chartWrap { position: relative; min-width: 0; min-height: 0; }
   #chart { display: block; width: 100%; height: 100%; cursor: crosshair; }
 
@@ -292,6 +339,7 @@
       of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top and
       the <b>middle class</b> shrinks. The curve sorts everyone from poorest to richest and shows how much
       of the total wealth they hold.
+      <button class="link" id="why">Why it happens →</button>
     </p>
 
     <div class="stats">
@@ -362,6 +410,42 @@
   <main id="chartWrap">
     <canvas id="chart"></canvas>
   </main>
+</div>
+
+<div id="overlay" role="dialog" aria-modal="true" aria-labelledby="whyTitle">
+  <div class="modal">
+    <header>
+      <h2 id="whyTitle">Why it happens</h2>
+      <button class="x" id="whyClose" aria-label="Close">✕</button>
+    </header>
+    <canvas id="demoCanvas"></canvas>
+    <p>
+      Alice and Bob start with the same <b>$8,200</b>. On each trade a fair coin decides who pays whom, and the
+      amount is a random share of what the <b>poorer</b> of the two has, because nobody can pay more than they
+      have. (Trades here are up to 20% of the poorer balance, larger than in the main simulation, so you can
+      watch it in seconds.)
+    </p>
+    <p>
+      The coin is fair, so on average neither of them gains. But the <b>stakes are set by the poorer person</b>:
+      whoever is behind risks a large share of what they have on every flip, while the richer one risks only a
+      sliver of theirs.
+    </p>
+    <p>
+      Betting a share of what you have is a losing game even at fair odds. Lose 20% and then win 20% and you are
+      left with <b>96%</b>, not 100%. The poorer person is always playing that game with their whole stake, so a
+      lucky streak for either of them hardens into a lasting gap, and the gap feeds on itself as the poorer
+      person's stakes shrink with them.
+    </p>
+    <p>
+      With two hundred people the same arithmetic plays out between every pair. That is why wealth collects at
+      the top without anyone cheating, and why a dividend funded by a small tax on every trade is enough to hold
+      it in check.
+    </p>
+    <div class="actions">
+      <button id="whyRestart">Restart</button>
+      <button id="whyDone">Back to the simulation</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -559,7 +643,7 @@
     return '$' + (x < 10 ? x.toFixed(2) : x < 100 ? x.toFixed(1) : Math.round(x).toLocaleString());
   }
   function fmtK(x) {
-    return x >= 10000 ? '$' + Math.round(x / 1000) + 'k' : x >= 1000 ? '$' + (x / 1000).toFixed(1) + 'k' : fmtMoney(x);
+    return x === 0 ? '$0' : x >= 10000 ? '$' + Math.round(x / 1000) + 'k' : x >= 1000 ? '$' + (x / 1000).toFixed(1) + 'k' : fmtMoney(x);
   }
   function updateReadouts() {
     $('gini').textContent = gini.toFixed(2);
@@ -591,6 +675,7 @@
   $('giniDown').addEventListener('click', () => nudgeStartGini(-1));
   window.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
+    if (overlay.classList.contains('open')) { if (e.key === 'Escape') demoClose(); return; }
     if (e.code === 'Space') { e.preventDefault(); setRunning(!running); }
     if (e.key === 'r' || e.key === 'R') init();
     if (e.key === 'ArrowUp') { e.preventDefault(); nudgeStartGini(+1); }
@@ -832,6 +917,136 @@
     }
   }
 
+  // ---------- "Why it happens": Alice and Bob ----------
+  const DEMO_F = 0.2;            // a demo trade moves up to this share of the poorer balance
+  const DEMO_INTERVAL = 450;     // ms between trades
+  const DEMO_LIFE = 0.6;         // arc lifetime, s
+  const demo = { open: false, wa: 0, wb: 0, trades: 0, arcs: [], nextAt: 0 };
+  const demoCv = $('demoCanvas'), dctx = demoCv.getContext('2d');
+  const overlay = $('overlay');
+  const PEOPLE = {
+    a: { name: 'Alice', color: [255, 160, 180] },
+    b: { name: 'Bob',   color: [143, 199, 255] },
+  };
+
+  function demoReset() {
+    demo.wa = demo.wb = MEDIAN_START;
+    demo.trades = 0; demo.arcs = [];
+    demo.nextAt = performance.now() + 900;
+  }
+  function demoResize() {
+    if (!demoCv.clientWidth) return;
+    demoCv.width = Math.round(demoCv.clientWidth * dpr);
+    demoCv.height = Math.round(demoCv.clientHeight * dpr);
+  }
+  new ResizeObserver(demoResize).observe(demoCv);
+  function demoOpen() {
+    demo.open = true;
+    overlay.classList.add('open');
+    demoResize();
+    demoReset();
+  }
+  function demoClose() { demo.open = false; overlay.classList.remove('open'); }
+
+  function demoTrade(now) {
+    const amt = Math.random() * DEMO_F * Math.min(demo.wa, demo.wb);
+    const aPays = Math.random() < 0.5;
+    if (aPays) { demo.wa -= amt; demo.wb += amt; } else { demo.wb -= amt; demo.wa += amt; }
+    demo.arcs.push({ from: aPays ? 'a' : 'b', to: aPays ? 'b' : 'a', t0: now });
+    demo.trades++;
+  }
+
+  function demoFrame(now) {
+    if (now >= demo.nextAt) { demoTrade(now); demo.nextAt = now + DEMO_INTERVAL; }
+    const w = demoCv.clientWidth, h = demoCv.clientHeight;
+    dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    dctx.clearRect(0, 0, w, h);
+    const padL = 28, padR = 28;
+    const totalW = demo.wa + demo.wb;
+    const X = v => padL + (v / totalW) * (w - padL - padR);
+    const lane = { a: 66, b: 150 };
+    const yAxis = h - 34;
+
+    // axis
+    dctx.strokeStyle = 'rgba(255,255,255,0.14)'; dctx.lineWidth = 1;
+    dctx.beginPath(); dctx.moveTo(padL, yAxis + 0.5); dctx.lineTo(w - padR, yAxis + 0.5); dctx.stroke();
+    dctx.font = '500 10px Inter, system-ui, sans-serif';
+    dctx.fillStyle = 'rgba(255,255,255,0.4)'; dctx.textAlign = 'center'; dctx.textBaseline = 'top';
+    for (let k = 0; k <= 4; k++) {
+      const v = (totalW * k) / 4, x = X(v);
+      dctx.fillRect(x - 0.5, yAxis - 3, 1, 6);
+      dctx.fillText(fmtK(v), x, yAxis + 8);
+    }
+    dctx.font = '600 9.5px Inter, system-ui, sans-serif';
+    dctx.fillStyle = 'rgba(255,255,255,0.35)'; dctx.textAlign = 'right';
+    dctx.fillText('W E A L T H  →', w - padR, yAxis + 21);
+
+    // common starting point
+    const xs = X(MEDIAN_START);
+    dctx.save();
+    dctx.setLineDash([3, 5]); dctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    dctx.beginPath(); dctx.moveTo(xs, 28); dctx.lineTo(xs, yAxis); dctx.stroke();
+    dctx.restore();
+    dctx.font = '500 10px Inter, system-ui, sans-serif';
+    dctx.fillStyle = 'rgba(255,255,255,0.4)'; dctx.textAlign = 'center'; dctx.textBaseline = 'alphabetic';
+    dctx.fillText('both start at ' + fmtMoney(MEDIAN_START), xs, 20);
+
+    // trade counter
+    dctx.textAlign = 'left';
+    dctx.fillStyle = 'rgba(255,255,255,0.45)';
+    dctx.fillText(`after ${demo.trades} trade${demo.trades === 1 ? '' : 's'}`, padL, 20);
+
+    // drift bars, dots, labels
+    const pos = { a: { x: X(demo.wa), y: lane.a }, b: { x: X(demo.wb), y: lane.b } };
+    for (const id of ['a', 'b']) {
+      const p = PEOPLE[id], q = pos[id], val = id === 'a' ? demo.wa : demo.wb;
+      dctx.fillStyle = rgba(p.color, 0.3);
+      const x0 = Math.min(xs, q.x), x1 = Math.max(xs, q.x);
+      dctx.fillRect(x0, q.y - 1.5, Math.max(0, x1 - x0), 3);
+      dctx.save();
+      dctx.shadowColor = rgba(p.color, 0.9); dctx.shadowBlur = 16;
+      dctx.fillStyle = rgba(p.color, 1);
+      dctx.beginPath(); dctx.arc(q.x, q.y, 8, 0, Math.PI * 2); dctx.fill();
+      dctx.restore();
+      dctx.fillStyle = '#0d1119';
+      dctx.beginPath(); dctx.arc(q.x, q.y, 3, 0, Math.PI * 2); dctx.fill();
+      dctx.textAlign = 'center';
+      dctx.font = '600 12px Inter, system-ui, sans-serif';
+      dctx.fillStyle = rgba(p.color, 1);
+      dctx.fillText(p.name, q.x, q.y - 16);
+      dctx.font = '500 11px Inter, system-ui, sans-serif';
+      dctx.fillStyle = 'rgba(255,255,255,0.75)';
+      dctx.fillText(fmtMoney(val), q.x, q.y + 26);
+    }
+
+    // trades as arcs, payer to receiver (same style as the main chart)
+    const keep = [];
+    dctx.lineWidth = 1.4;
+    for (const a of demo.arcs) {
+      const age = (now - a.t0) / 1000;
+      if (age > DEMO_LIFE) continue;
+      keep.push(a);
+      const k = 1 - age / DEMO_LIFE;
+      const p = pos[a.from], q = pos[a.to];
+      const cx = (p.x + q.x) / 2 + 46, cy = (p.y + q.y) / 2;
+      dctx.strokeStyle = rgba(COL.arc, 0.7 * k * k);
+      dctx.beginPath(); dctx.moveTo(p.x, p.y); dctx.quadraticCurveTo(cx, cy, q.x, q.y); dctx.stroke();
+      const u0 = Math.min(1, age / (DEMO_LIFE * 0.6));
+      const u = 1 - (1 - u0) * (1 - u0);
+      const mx = (1 - u) * (1 - u) * p.x + 2 * (1 - u) * u * cx + u * u * q.x;
+      const my = (1 - u) * (1 - u) * p.y + 2 * (1 - u) * u * cy + u * u * q.y;
+      dctx.fillStyle = rgba([220, 238, 255], 0.95 * k);
+      dctx.beginPath(); dctx.arc(mx, my, 3, 0, Math.PI * 2); dctx.fill();
+    }
+    demo.arcs = keep;
+  }
+
+  $('why').addEventListener('click', demoOpen);
+  $('whyClose').addEventListener('click', demoClose);
+  $('whyDone').addEventListener('click', demoClose);
+  $('whyRestart').addEventListener('click', demoReset);
+  overlay.addEventListener('click', e => { if (e.target === overlay) demoClose(); });
+
   // ---------- Main loop ----------
   let frame = 0;
   function loop(now) {
@@ -842,6 +1057,7 @@
     if (running) recordHistory(false);
     drawChart(now);
     if ((frame++ & 3) === 0) { updateReadouts(); drawHistory(); }
+    if (demo.open) demoFrame(now);
     requestAnimationFrame(loop);
   }
 

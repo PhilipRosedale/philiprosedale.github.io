@@ -357,8 +357,6 @@
       <div class="stat"><span class="label">Richest 10% own</span><span class="value" id="top10">–</span></div>
       <div class="stat"><span class="label">Poorest half own</span><span class="value" id="bottom50">–</span></div>
       <div class="stat"><span class="label">Year</span><span class="value" id="day">0.0</span></div>
-      <div class="stat"><span class="label">Median balance</span><span class="value" id="median">–</span></div>
-      <div class="stat"><span class="label">Average payment</span><span class="value" id="avgPay">–</span></div>
       <div class="histHead"><span>Over time</span><span><i class="dot gini"></i>Gini <i class="dot mid"></i>Middle class</span></div>
       <canvas id="history"></canvas>
     </div>
@@ -381,7 +379,7 @@
       </div>
       <div class="control">
         <div class="row"><span>Speed</span><output id="speedOut">25,000 trades / s</output></div>
-        <input type="range" id="speed" min="0" max="1" step="0.0005" value="0.8885">
+        <input type="range" id="speed" min="0" max="1" step="0.0005" value="0.936">
       </div>
     </div>
 
@@ -475,15 +473,13 @@
   const order = new Int32Array(N);  // ids sorted poorest -> richest
   const rank = new Int32Array(N);   // rank[id]
   const cum = new Float64Array(N + 1);
-  let total = 0, mean = MEDIAN_START, median = MEDIAN_START;
+  let total = 0, mean = MEDIAN_START;
   let pool = 0;                     // collected tax awaiting dividend
   let days = 0;
   let running = false;
   let tradeAcc = 0;
   let lastT = 0;
   let incomeRate = 0;               // EMA of dividend per person per year
-  let avgPayment = 0;               // EMA of trade size
-  let amtSum = 0, amtN = 0;
   let arcs = [];
   const ARC_CAP = 400;
   let gini = 0, poorIdx = 0, richIdx = N, top10 = 0, bottom50 = 0;
@@ -541,13 +537,9 @@
     const med = (sorted[N / 2 - 1] + sorted[N / 2]) / 2;
     for (let i = 0; i < N; i++) wealth[i] *= MEDIAN_START / med;
     for (let i = 0; i < N; i++) order[i] = i;
-    pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = []; amtSum = 0; amtN = 0;
+    pool = 0; days = 0; tradeAcc = 0; incomeRate = 0; arcs = [];
     hist = { gini: [], mid: [], step: 1, nextAt: 0 };
     analyze();
-    // expected trade size before any trades happen: half the max fraction of a random pair's poorer balance
-    let em = 0;
-    for (let i = 0; i < 4000; i++) em += Math.min(wealth[(Math.random() * N) | 0], wealth[(Math.random() * N) | 0]);
-    avgPayment = 0.5 * MAX_FRACTION * em / 4000;
     recordHistory(true);
     updateReadouts();
   }
@@ -566,7 +558,6 @@
     wealth[a] -= amt;
     wealth[b] += amt - tax;
     pool += tax;                         // ...and the pool is paid out equally in step()
-    amtSum += amt; amtN++;
     if (tradeCount++ % drawEvery === 0) arcs.push({ from: a, to: b, t0: now });
   }
 
@@ -590,8 +581,6 @@
     const rate = share / dayFrac * DAYS_PER_YEAR;   // dividend per person per year
     const alpha = 1 - Math.exp(-dayFrac / 30);      // ~30-day smoothing
     incomeRate += (rate - incomeRate) * alpha;
-    avgPayment += (amtSum / amtN - avgPayment) * alpha;
-    amtSum = 0; amtN = 0;
     pool = 0;
     days += dayFrac;
   }
@@ -607,7 +596,6 @@
     cum[0] = 0;
     for (let i = 0; i < N; i++) { rank[order[i]] = i; cum[i + 1] = cum[i] + wealth[order[i]]; }
     total = cum[N]; mean = total / N;
-    median = (wealth[order[N / 2 - 1]] + wealth[order[N / 2]]) / 2;
 
     let s = 0;
     for (let i = 0; i < N; i++) s += cum[i] + cum[i + 1];
@@ -649,8 +637,6 @@
     $('midPct').textContent = fmtPct((richIdx - poorIdx) / N);
     $('top10').textContent = fmtPct(top10);
     $('bottom50').textContent = fmtPct(bottom50);
-    $('median').textContent = fmtMoney(median);
-    $('avgPay').textContent = fmtMoney(avgPayment);
     const years = days / DAYS_PER_YEAR;
     $('day').textContent = years < 100 ? years.toFixed(1) : Math.round(years).toLocaleString();
     $('income').textContent = fmtMoney(incomeRate);
@@ -685,12 +671,12 @@
   function readParams() {
     params.tax = taxIn.value / 100;
     params.dem = demIn.value / 100 / DAYS_PER_YEAR;   // APR -> daily rate
-    const raw = 100 * Math.pow(500, +speedIn.value);
+    const raw = Math.pow(50000, +speedIn.value);   // 1 .. 50,000 trades per second
     const mag = Math.pow(10, Math.floor(Math.log10(raw)) - 2);
     params.speed = Math.round(raw / mag) * mag;  // three significant figures
     $('taxOut').textContent = (+taxIn.value).toFixed(1).replace(/\.0$/, '') + '%';
     $('demOut').textContent = (+demIn.value).toFixed(1).replace(/\.0$/, '') + '% / year';
-    $('speedOut').textContent = params.speed.toLocaleString() + ' trades / s';
+    $('speedOut').textContent = params.speed.toLocaleString() + (params.speed === 1 ? ' trade / s' : ' trades / s');
   }
   [taxIn, demIn, speedIn].forEach(el => el.addEventListener('input', readParams));
   readParams();
@@ -716,6 +702,7 @@
 
   // ---------- Drawing ----------
   let plot = { l: 0, t: 0, w: 0, h: 0 };
+  const segLabel = {};   // sticky positions for the Poor / Middle class / Rich axis labels
   const X = i => plot.l + (i / N) * plot.w;
   const Y = c => plot.t + plot.h - (c / total) * plot.h;
   function pointOf(id) {
@@ -811,16 +798,23 @@
       const xa = X(i0), xb = X(i1);
       ctx.fillStyle = rgba(c, 0.95);
       ctx.fillRect(xa + 0.5, y0 + 6, Math.max(1, xb - xa - 1), 4);
+      // Labels are sticky: the shown share is smoothed, and the position only moves when the
+      // segment's centre has shifted by more than a few pixels or the label no longer fits.
       const share = (i1 - i0) / N;
-      const label = `${name}  ${fmtPct(share)}`;
+      const st = segLabel[name] || (segLabel[name] = { x: (xa + xb) / 2, pct: share, full: false });
+      st.pct += (share - st.pct) * 0.06;
+      const label = `${name}  ${fmtPct(st.pct)}`;
       ctx.font = '600 11px Inter, system-ui, sans-serif';
       const tw = ctx.measureText(label).width;
-      if (xb - xa > tw + 8) {
+      const width = xb - xa, center = (xa + xb) / 2;
+      if (st.full ? width < tw + 4 : width > tw + 20) st.full = !st.full;
+      if (Math.abs(center - st.x) > 12 || st.x - tw / 2 < xa || st.x + tw / 2 > xb) st.x = center;
+      if (st.full) {
         ctx.textAlign = 'center';
-        ctx.fillText(label, (xa + xb) / 2, y0 + 28);
-      } else if (xb - xa > 10 && (name === 'Rich' || name === 'Poor')) {
+        ctx.fillText(label, st.x, y0 + 28);
+      } else if (width > 10 && (name === 'Rich' || name === 'Poor')) {
         ctx.textAlign = name === 'Rich' ? 'right' : 'left';
-        ctx.fillText(fmtPct(share), name === 'Rich' ? xb : xa, y0 + 28);
+        ctx.fillText(fmtPct(st.pct), name === 'Rich' ? xb : xa, y0 + 28);
       }
     }
 

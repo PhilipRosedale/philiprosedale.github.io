@@ -1,0 +1,1746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU Neurons</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    color: #d5e0ee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  body { display: flex; }
+  #panel {
+    width: 220px;
+    flex: 0 0 220px;
+    height: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+    padding: 14px 14px 20px;
+    background: #141922;
+    border-right: 1px solid #232c38;
+    user-select: none;
+  }
+  #stage { flex: 1; min-width: 0; position: relative; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #panel h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
+  #panel .sub { margin: 3px 0 0; }
+  #panel .sub a { color: #6d8eb0; font-size: 11px; text-decoration: none; }
+  #panel .sub a:hover { color: #9ec0de; }
+  #panel .hint { color: #6d7c8f; font-size: 11px; line-height: 1.45; margin: 10px 0 0; }
+  .group {
+    margin: 16px 0 8px;
+    font-size: 10.5px;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    color: #5f94c9;
+    border-bottom: 1px solid #232c38;
+    padding-bottom: 4px;
+  }
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .buttons button:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  button {
+    background: #212b38;
+    border: 1px solid #2f3c4d;
+    color: #d5e0ee;
+    border-radius: 5px;
+    padding: 6px 8px;
+    font: 12px/1.2 inherit;
+    cursor: pointer;
+  }
+  button:hover { background: #2a374a; }
+  button.on { background: #1f5c96; border-color: #2d76ba; color: #fff; }
+  .row { margin: 10px 0; }
+  .row .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .row label { color: #9fb0c4; font-size: 12px; }
+  .row .val { color: #e8eef6; font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row .note { color: #5f6d80; font-size: 10.5px; margin-top: 2px; }
+  input[type="range"] {
+    width: 100%;
+    margin: 5px 0 0;
+    accent-color: #4d9be6;
+    background: transparent;
+  }
+  .stat {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 4px 0;
+    color: #9fb0c4;
+    font-size: 12px;
+  }
+  .stat b { color: #e8eef6; font-weight: 450; font-variant-numeric: tabular-nums; }
+  #status { margin-top: 10px; color: #ff9a9a; font-size: 11px; line-height: 1.35; word-break: break-word; }
+</style>
+</head>
+<body>
+<aside id="panel">
+  <h1>GPU Neurons</h1>
+  <p class="sub"><a href="interactiveNeurons.html">CPU version</a></p>
+  <p class="hint">Scroll to zoom, drag to pan, click a neuron to fire it. Hover to charge it. Green axons excite, red inhibit, white just changed weight.</p>
+  <div class="group">Run</div>
+  <div class="buttons">
+    <button type="button" id="run" class="on">Stop</button>
+    <button type="button" id="learn" class="on">Learning</button>
+    <button type="button" id="inhibit">Inhibit</button>
+    <button type="button" id="excite">Excite</button>
+    <button type="button" id="sleep">Sleep</button>
+    <button type="button" id="reset">Reset</button>
+    <button type="button" id="fit">Fit</button>
+  </div>
+  <div class="group">Network</div>
+  <div class="row">
+    <div class="top"><label for="neurons">Neurons</label><span class="val" id="neurons-label">4,000</span></div>
+    <input id="neurons" type="range" min="0" max="1000" step="1" value="400">
+    <div class="note" id="neurons-note"></div>
+  </div>
+  <div class="row">
+    <div class="top"><label for="neighbors">Neighbors</label><span class="val" id="neighbors-label">8</span></div>
+    <input id="neighbors" type="range" min="1" max="16" step="1" value="8">
+  </div>
+  <div class="row">
+    <div class="top"><label for="speed">Speed</label><span class="val" id="speed-label">200 px/s</span></div>
+    <input id="speed" type="range" min="50" max="800" step="10" value="200">
+    <div class="note" id="speed-note">refractory 0.75s</div>
+  </div>
+  <div class="group">Readout</div>
+  <div class="stat"><span>Fps</span><b id="stat-fps">—</b></div>
+  <div class="stat"><span>Synapses</span><b id="stat-synapses">—</b></div>
+  <div class="stat"><span>Zoom</span><b id="stat-zoom">—</b></div>
+  <div class="stat"><span>Learning</span><b id="stat-learning">—</b></div>
+  <div class="stat"><span>Firing</span><b id="stat-firing">—</b></div>
+  <div class="stat"><span>Time</span><b id="stat-time">—</b></div>
+  <div id="status"></div>
+</aside>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<script type="module">
+// GPU Neurons
+//
+// The same network as interactiveNeurons.html, moved onto WebGPU so the
+// canvas can hold thousands of cells instead of a couple of hundred:
+//
+//   * leaky integrate-and-fire (charge leaks; a cell fires at threshold)
+//   * absolute refractory period, scaled inversely with conduction speed
+//   * one pulse in flight per axon, moving at a fixed speed in pixels/sec
+//   * STDP: a spike that arrives just before the postsynaptic cell fires
+//     strengthens the synapse (LTP); one that arrives just after weakens it (LTD)
+//
+// Each cell connects to its k nearest neighbors. Cells sit on concentric rings,
+// matching the CPU page. The compute step is one dispatch over cells and one
+// over synapses; drawing is instanced quads read straight from those buffers.
+
+const THRESHOLD = 0.9;
+const LEAKAGE = 0.1;                 // charge per second
+const REFRACTORY_CONSTANT = 0.75 * 200; // refractory * velocity, in pixels
+const STDP_WINDOW = 0.050;
+const TAU_PLUS = 0.020;
+const TAU_MINUS = 0.020;
+const A_PLUS = 0.15;
+const A_MINUS = 0.10;
+const MAX_STIM = 64;
+const PARAMS_BYTES = 112;
+const NEURON_MIN = 100;
+// One compute dimension covers 65535 workgroups of 64 threads.
+const DISPATCH_SPAN = 65535 * 64;
+
+const canvas = document.getElementById('c');
+const statusEl = document.getElementById('status');
+const statFps = document.getElementById('stat-fps');
+const statSynapses = document.getElementById('stat-synapses');
+const statZoom = document.getElementById('stat-zoom');
+const statLearning = document.getElementById('stat-learning');
+const statFiring = document.getElementById('stat-firing');
+const statTime = document.getElementById('stat-time');
+const neuronSlider = document.getElementById('neurons');
+const neighborSlider = document.getElementById('neighbors');
+const speedSlider = document.getElementById('speed');
+const runButton = document.getElementById('run');
+const learnButton = document.getElementById('learn');
+
+let device, context, format;
+let computeBindGroup, renderBindGroup;
+let pipelines = {};
+let paramsBuffer, neuronBuffer, synapseBuffer, pulseBuffer, incomingBuffer, stimBuffer, statsBuffer, stagingBuffer;
+let edgeIdBuffer, pulseIdBuffer, neuronIdBuffer, counterBuffer, indirectBuffer;
+const paramsCPU = new ArrayBuffer(PARAMS_BYTES);
+const paramsView = new DataView(paramsCPU);
+const stimCPU = new ArrayBuffer(MAX_STIM * 16);
+const stimU32 = new Uint32Array(stimCPU);
+const stimF32 = new Float32Array(stimCPU);
+
+let nNeurons = 0;
+let nSynapses = 0;
+let radius = 8;
+let simTime = 0;
+let running = true;
+let learning = true;
+let weightDelta = 0;
+let sleepRequested = false;
+let rebuildRequested = false;
+let ready = false;
+let lastFrame = performance.now();
+let fpsFrame = 0;
+let fpsStamp = performance.now();
+let fps = 0;
+
+let cpuX = null;
+let cpuY = null;
+let pick = null;
+let maxSynapses = 4194304;
+const view = { panX: 0, panY: 0, zoom: 1 };
+let viewChoices = { cullMask: 0, edgeStride: 6, quads: true, showNeurons: true, zoomedIn: false, cullPulses: false };
+const pointer = { x: 0, y: 0, inside: false, down: false, dragging: false, moved: 0, click: false };
+let rebuildPainted = false;
+
+let statsPending = false;
+let statsSnapshot = { fires: 0, strengthen: 0, weaken: 0, t: performance.now() };
+let measured = { fires: 0, strengthen: 0, weaken: 0 };
+
+const COMPUTE = /* wgsl */`
+struct Params {
+  // Uniform buffers require the struct alignment to be 16.
+  @align(16) dt: f32,
+  time: f32,
+  threshold: f32,
+  leakage: f32,
+  velocity: f32,
+  refractory: f32,
+  stdpWindow: f32,
+  tauPlus: f32,
+  tauMinus: f32,
+  aPlus: f32,
+  aMinus: f32,
+  learning: f32,
+  radius: f32,
+  weightDelta: f32,
+  stimCount: u32,
+  nNeurons: u32,
+  nSynapses: u32,
+  edgeStride: u32,
+  oldRes: vec2<f32>,
+  res: vec2<f32>,
+  zoom: f32,
+  padZ: f32,
+  pan: vec2<f32>,
+  cullMask: u32,
+  padEnd: u32,
+}
+struct Neuron {
+  pos: vec2<f32>,
+  charge: f32,
+  recovering: f32,
+  lastFired: f32,
+  inStart: u32,
+  inCount: u32,
+  outStart: u32,
+  outCount: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+}
+struct Synapse {
+  src: u32,
+  to: u32,
+  weight: f32,
+  lateral: f32,
+  lastArrival: f32,
+  learned: f32,
+  delivered: f32,
+  pad: f32,
+}
+struct Pulse { pos: f32, amp: f32, pad0: f32, pad1: f32 }
+struct Stim { index: u32, amount: f32, pad0: u32, pad1: u32 }
+struct Stats {
+  fires: atomic<u32>,
+  strengthen: atomic<u32>,
+  weaken: atomic<u32>,
+  pad: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read_write> neurons: array<Neuron>;
+@group(0) @binding(2) var<storage, read_write> synapses: array<Synapse>;
+@group(0) @binding(3) var<storage, read_write> pulses: array<Pulse>;
+@group(0) @binding(4) var<storage, read> incoming: array<u32>;
+@group(0) @binding(5) var<storage, read> stims: array<Stim>;
+@group(0) @binding(6) var<storage, read_write> stats: Stats;
+struct Counters {
+  edges: atomic<u32>,
+  pulses: atomic<u32>,
+  neurons: atomic<u32>,
+  pad: atomic<u32>,
+}
+@group(0) @binding(7) var<storage, read_write> counters: Counters;
+@group(0) @binding(8) var<storage, read_write> edgeIds: array<u32>;
+@group(0) @binding(9) var<storage, read_write> pulseIds: array<u32>;
+@group(0) @binding(10) var<storage, read_write> neuronIds: array<u32>;
+@group(0) @binding(11) var<storage, read_write> indirect: array<u32>;
+
+const DISPATCH_SPAN: u32 = 4194240u;
+fn linearId(gid: vec3<u32>) -> u32 {
+  return gid.x + gid.y * DISPATCH_SPAN;
+}
+
+fn bumpWeight(s: u32, delta: f32, strengthen: bool) {
+  var syn = synapses[s];
+  let oldW = syn.weight;
+  let w = clamp(oldW + delta, -1.0, 1.0);
+  if (w != oldW) {
+    syn.weight = w;
+    syn.learned = 0.15;
+    synapses[s] = syn;
+    if (strengthen) { atomicAdd(&stats.strengthen, 1u); }
+    else { atomicAdd(&stats.weaken, 1u); }
+  }
+}
+
+@compute @workgroup_size(64)
+fn applyStim(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.stimCount) { return; }
+  let stim = stims[i];
+  if (stim.index >= params.nNeurons) { return; }
+  var n = neurons[stim.index];
+  n.charge = min(n.charge + stim.amount, 1.0);
+  neurons[stim.index] = n;
+}
+
+@compute @workgroup_size(64)
+fn updateNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nNeurons) { return; }
+  var n = neurons[i];
+
+  var c = n.charge;
+  for (var k = 0u; k < n.inCount; k = k + 1u) {
+    let s = incoming[n.inStart + k];
+    c = c + synapses[s].delivered;
+    synapses[s].delivered = 0.0;
+  }
+  // Synaptic current is clipped into [0, threshold], matching the CPU model.
+  c = clamp(c, 0.0, params.threshold);
+
+  n.recovering = max(n.recovering - params.dt, 0.0);
+  if (n.recovering <= 0.0 && c >= params.threshold) {
+    if (params.learning > 0.5) {
+      for (var k = 0u; k < n.inCount; k = k + 1u) {
+        let s = incoming[n.inStart + k];
+        let arrived = synapses[s].lastArrival;
+        if (arrived < 0.0) { continue; }
+        let dt = params.time - arrived;
+        // Arrival was recorded on an earlier step, so dt > 0 means pre-before-post.
+        if (dt > 0.0 && dt < params.stdpWindow) {
+          bumpWeight(s, params.aPlus * exp(-dt / params.tauPlus), true);
+        }
+      }
+    }
+    let amp = c;
+    let end = n.outStart + n.outCount;
+    for (var s = n.outStart; s < end; s = s + 1u) {
+      pulses[s].pos = 0.0;
+      pulses[s].amp = amp;
+    }
+    n.lastFired = params.time;
+    n.recovering = params.refractory;
+    n.charge = 0.0;
+    atomicAdd(&stats.fires, 1u);
+  } else {
+    n.charge = clamp(c - params.leakage * params.dt, 0.0, 1.0);
+  }
+  neurons[i] = n;
+}
+
+@compute @workgroup_size(64)
+fn advanceSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nSynapses) { return; }
+  var syn = synapses[i];
+  syn.learned = max(syn.learned - params.dt, 0.0);
+
+  var p = pulses[i];
+  if (p.amp > 0.0) {
+    let a = neurons[syn.src].pos;
+    let b = neurons[syn.to].pos;
+    let len = max(length(b - a), 0.001);
+    p.pos = p.pos + params.velocity * params.dt / len;
+    if (p.pos >= 1.0) {
+      syn.delivered = syn.weight * p.amp;
+      syn.lastArrival = params.time;
+      let postFired = neurons[syn.to].lastFired;
+      if (params.learning > 0.5 && postFired >= 0.0) {
+        let dt = params.time - postFired;
+        // updateNeurons already ran this step, so dt == 0 means the postsynaptic
+        // cell fired earlier in this same step: the spike is arriving just after.
+        if (dt >= 0.0 && dt < params.stdpWindow) {
+          synapses[i] = syn;
+          bumpWeight(i, -params.aMinus * exp(-dt / params.tauMinus), false);
+          syn = synapses[i];
+        }
+      }
+      p.amp = 0.0;
+      p.pos = 0.0;
+    }
+    pulses[i] = p;
+  }
+  synapses[i] = syn;
+}
+
+@compute @workgroup_size(64)
+fn adjustWeights(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nSynapses) { return; }
+  var syn = synapses[i];
+  syn.weight = clamp(syn.weight + params.weightDelta, -1.0, 1.0);
+  synapses[i] = syn;
+}
+
+@compute @workgroup_size(64)
+fn sleepNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nNeurons) { return; }
+  var n = neurons[i];
+  n.charge = 0.0;
+  n.recovering = 0.0;
+  n.lastFired = -1.0;
+  neurons[i] = n;
+}
+
+@compute @workgroup_size(64)
+fn sleepSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nSynapses) { return; }
+  var syn = synapses[i];
+  syn.delivered = 0.0;
+  syn.lastArrival = -1.0;
+  syn.learned = 0.0;
+  synapses[i] = syn;
+  pulses[i].pos = 0.0;
+  pulses[i].amp = 0.0;
+}
+
+@compute @workgroup_size(64)
+fn scalePositions(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nNeurons) { return; }
+  let oldR = max(params.oldRes, vec2<f32>(1.0));
+  let scale = params.res / oldR;
+  var n = neurons[i];
+  n.pos = n.pos * scale;
+  neurons[i] = n;
+}
+
+fn worldToScreen(p: vec2<f32>) -> vec2<f32> {
+  return (p - params.pan) * params.zoom + params.res * 0.5;
+}
+
+@compute @workgroup_size(64)
+fn cullSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nSynapses) { return; }
+  let syn = synapses[i];
+  let a = neurons[syn.src].pos;
+  let b = neurons[syn.to].pos;
+  let mask = params.cullMask;
+  if ((mask & 1u) != 0u) {
+    let sa = worldToScreen(a);
+    let sb = worldToScreen(b);
+    let margin = max(params.radius * params.zoom, 8.0) + 12.0;
+    let minX = min(sa.x, sb.x);
+    let maxX = max(sa.x, sb.x);
+    let minY = min(sa.y, sb.y);
+    let maxY = max(sa.y, sb.y);
+    if (maxX >= -margin && minX <= params.res.x + margin && maxY >= -margin && minY <= params.res.y + margin) {
+      let slot = atomicAdd(&counters.edges, 1u);
+      edgeIds[slot] = i;
+    }
+  }
+  if ((mask & 4u) != 0u && pulses[i].amp > 0.0) {
+    let s = worldToScreen(mix(a, b, clamp(pulses[i].pos, 0.0, 1.0)));
+    if (s.x >= -16.0 && s.y >= -16.0 && s.x <= params.res.x + 16.0 && s.y <= params.res.y + 16.0) {
+      let slot = atomicAdd(&counters.pulses, 1u);
+      pulseIds[slot] = i;
+    }
+  }
+}
+
+@compute @workgroup_size(64)
+fn cullNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = linearId(gid);
+  if (i >= params.nNeurons) { return; }
+  let s = worldToScreen(neurons[i].pos);
+  let margin = params.radius * params.zoom + 4.0;
+  if (s.x >= -margin && s.y >= -margin && s.x <= params.res.x + margin && s.y <= params.res.y + margin) {
+    let slot = atomicAdd(&counters.neurons, 1u);
+    neuronIds[slot] = i;
+  }
+}
+
+@compute @workgroup_size(1)
+fn finalizeIndirect(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (gid.x != 0u) { return; }
+  indirect[0] = atomicLoad(&counters.edges) * params.edgeStride;
+  indirect[1] = 1u;
+  indirect[2] = 0u;
+  indirect[3] = 0u;
+  indirect[4] = atomicLoad(&counters.pulses) * 6u;
+  indirect[5] = 1u;
+  indirect[6] = 0u;
+  indirect[7] = 0u;
+  indirect[8] = atomicLoad(&counters.neurons) * 6u;
+  indirect[9] = 1u;
+  indirect[10] = 0u;
+  indirect[11] = 0u;
+}
+`;
+
+const RENDER = /* wgsl */`
+struct Params {
+  // Uniform buffers require the struct alignment to be 16.
+  @align(16) dt: f32,
+  time: f32,
+  threshold: f32,
+  leakage: f32,
+  velocity: f32,
+  refractory: f32,
+  stdpWindow: f32,
+  tauPlus: f32,
+  tauMinus: f32,
+  aPlus: f32,
+  aMinus: f32,
+  learning: f32,
+  radius: f32,
+  weightDelta: f32,
+  stimCount: u32,
+  nNeurons: u32,
+  nSynapses: u32,
+  edgeStride: u32,
+  oldRes: vec2<f32>,
+  res: vec2<f32>,
+  zoom: f32,
+  padZ: f32,
+  pan: vec2<f32>,
+  cullMask: u32,
+  padEnd: u32,
+}
+struct Neuron {
+  pos: vec2<f32>,
+  charge: f32,
+  recovering: f32,
+  lastFired: f32,
+  inStart: u32,
+  inCount: u32,
+  outStart: u32,
+  outCount: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+}
+struct Synapse {
+  src: u32,
+  to: u32,
+  weight: f32,
+  lateral: f32,
+  lastArrival: f32,
+  learned: f32,
+  delivered: f32,
+  pad: f32,
+}
+struct Pulse { pos: f32, amp: f32, pad0: f32, pad1: f32 }
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> neurons: array<Neuron>;
+@group(0) @binding(2) var<storage, read> synapses: array<Synapse>;
+@group(0) @binding(3) var<storage, read> pulses: array<Pulse>;
+@group(0) @binding(4) var<storage, read> edgeIds: array<u32>;
+@group(0) @binding(5) var<storage, read> pulseIds: array<u32>;
+@group(0) @binding(6) var<storage, read> neuronIds: array<u32>;
+
+struct EdgeOut {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) color: vec4<f32>,
+}
+struct DiscOut {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) color: vec4<f32>,
+  @location(1) uv: vec2<f32>,
+  @location(2) charge: f32,
+  @location(3) recover: f32,
+}
+
+fn worldToScreen(p: vec2<f32>) -> vec2<f32> {
+  return (p - params.pan) * params.zoom + params.res * 0.5;
+}
+
+fn toClip(px: vec2<f32>) -> vec4<f32> {
+  let x = (px.x / params.res.x) * 2.0 - 1.0;
+  let y = 1.0 - (px.y / params.res.y) * 2.0;
+  return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+fn discUV(corner: u32) -> vec2<f32> {
+  var uv = vec2<f32>(-1.0, -1.0);
+  if (corner == 1u || corner == 4u) { uv = vec2<f32>(1.0, -1.0); }
+  else if (corner == 2u || corner == 3u) { uv = vec2<f32>(-1.0, 1.0); }
+  else if (corner == 5u) { uv = vec2<f32>(1.0, 1.0); }
+  return uv;
+}
+
+fn emitEdge(synIndex: u32, corner: u32) -> EdgeOut {
+  var out: EdgeOut;
+  let syn = synapses[synIndex];
+  let z = max(params.zoom, 0.05);
+  let rad = params.radius * z;
+  let a = worldToScreen(neurons[syn.src].pos);
+  let b = worldToScreen(neurons[syn.to].pos);
+  let delta = b - a;
+  let len = length(delta);
+  if (len <= rad * 2.35) {
+    out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0);
+    return out;
+  }
+  let dir = delta / len;
+  let nrm = vec2<f32>(-dir.y, dir.x);
+  let lateral = syn.lateral * z;
+  // Thickness is a fraction of the cell, so a zoomed-in million-cell net
+  // matches a few hundred cells drawn at zoom 1.
+  let halfW = max(0.35, rad * mix(0.08, 0.22, abs(syn.weight)));
+  let start = a + dir * rad + nrm * lateral;
+  let endp = b - dir * (rad * 1.15) + nrm * lateral;
+  var along = 0.0;
+  var side = -1.0;
+  if (corner == 1u || corner == 4u || corner == 5u) { along = 1.0; }
+  if (corner == 2u || corner == 3u || corner == 5u) { side = 1.0; }
+  out.clip = toClip(mix(start, endp, along) + nrm * halfW * side);
+  var rgb = vec3<f32>(0.85, 0.0, 0.0);
+  if (syn.learned > 0.0) { rgb = vec3<f32>(1.0); }
+  else if (syn.weight >= 0.0) { rgb = vec3<f32>(0.0, 0.50, 0.0); }
+  out.color = vec4<f32>(rgb, mix(0.22, 0.78, abs(syn.weight)));
+  return out;
+}
+
+@vertex
+fn vsEdge(@builtin(vertex_index) vi: u32) -> EdgeOut {
+  return emitEdge(vi / 6u, vi % 6u);
+}
+
+@vertex
+fn vsEdgeCulled(@builtin(vertex_index) vi: u32) -> EdgeOut {
+  return emitEdge(edgeIds[vi / 6u], vi % 6u);
+}
+
+@fragment
+fn fsEdge(in: EdgeOut) -> @location(0) vec4<f32> {
+  return in.color;
+}
+
+fn emitLine(synIndex: u32, end: u32) -> EdgeOut {
+  var out: EdgeOut;
+  let syn = synapses[synIndex];
+  let z = max(params.zoom, 0.05);
+  let rad = params.radius * z;
+  let a = worldToScreen(neurons[syn.src].pos);
+  let b = worldToScreen(neurons[syn.to].pos);
+  let delta = b - a;
+  let len = length(delta);
+  if (len <= rad * 2.35) {
+    out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0);
+    return out;
+  }
+  let dir = delta / len;
+  let nrm = vec2<f32>(-dir.y, dir.x);
+  let inset = select(a + dir * rad, b - dir * (rad * 1.15), end == 1u);
+  out.clip = toClip(inset + nrm * syn.lateral * z);
+  var rgb = vec3<f32>(0.90, 0.05, 0.05);
+  if (syn.learned > 0.0) { rgb = vec3<f32>(1.0); }
+  else if (syn.weight >= 0.0) { rgb = vec3<f32>(0.0, 0.55, 0.05); }
+  out.color = vec4<f32>(rgb, mix(0.35, 0.95, abs(syn.weight)));
+  return out;
+}
+
+@vertex
+fn vsLine(@builtin(vertex_index) vi: u32) -> EdgeOut {
+  return emitLine(vi / 2u, vi % 2u);
+}
+
+@vertex
+fn vsLineCulled(@builtin(vertex_index) vi: u32) -> EdgeOut {
+  return emitLine(edgeIds[vi / 2u], vi % 2u);
+}
+
+fn emitPulse(synIndex: u32, corner: u32) -> DiscOut {
+  var out: DiscOut;
+  let syn = synapses[synIndex];
+  let pulse = pulses[synIndex];
+  let uv = discUV(corner);
+  let a = neurons[syn.src].pos;
+  let b = neurons[syn.to].pos;
+  let delta = b - a;
+  let len = max(length(delta), 0.001);
+  if (pulse.amp <= 0.0 || pulse.pos >= 1.0) {
+    out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0);
+    out.uv = vec2<f32>(0.0);
+    out.charge = 0.0;
+    out.recover = 0.0;
+    return out;
+  }
+  let dir = delta / len;
+  let nrm = vec2<f32>(-dir.y, dir.x);
+  let center = worldToScreen(mix(a, b, clamp(pulse.pos, 0.0, 1.0)) + nrm * syn.lateral);
+  let cell = params.radius * max(params.zoom, 0.05);
+  let pr = cell * mix(0.45, 0.75, abs(syn.weight));
+  out.clip = toClip(center + uv * pr);
+  out.uv = uv;
+  var rgb = vec3<f32>(1.0, 0.72, 0.72);
+  if (syn.weight >= 0.0) { rgb = vec3<f32>(0.78, 1.0, 0.78); }
+  out.color = vec4<f32>(rgb, 1.0);
+  out.charge = 0.0;
+  out.recover = 0.0;
+  return out;
+}
+
+@vertex
+fn vsPulse(@builtin(vertex_index) vi: u32) -> DiscOut {
+  return emitPulse(vi / 6u, vi % 6u);
+}
+
+@vertex
+fn vsPulseCulled(@builtin(vertex_index) vi: u32) -> DiscOut {
+  return emitPulse(pulseIds[vi / 6u], vi % 6u);
+}
+
+fn emitNeuron(index: u32, corner: u32) -> DiscOut {
+  var out: DiscOut;
+  let uv = discUV(corner);
+  let n = neurons[index];
+  let rad = params.radius * max(params.zoom, 0.05);
+  out.clip = toClip(worldToScreen(n.pos) + uv * rad);
+  out.uv = uv;
+  out.color = vec4<f32>(0.0);
+  out.charge = n.charge / max(params.threshold, 0.001);
+  out.recover = 0.0;
+  if (params.refractory > 0.0) { out.recover = n.recovering / params.refractory; }
+  return out;
+}
+
+@vertex
+fn vsNeuron(@builtin(vertex_index) vi: u32) -> DiscOut {
+  return emitNeuron(vi / 6u, vi % 6u);
+}
+
+@vertex
+fn vsNeuronCulled(@builtin(vertex_index) vi: u32) -> DiscOut {
+  return emitNeuron(neuronIds[vi / 6u], vi % 6u);
+}
+
+@fragment
+fn fsDisc(in: DiscOut) -> @location(0) vec4<f32> {
+  let d = length(in.uv);
+  let aa = max(fwidth(d), 0.004);
+  let alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+  if (alpha < 0.01) { discard; }
+
+  // Pulses arrive with a solid color and zero charge/recover.
+  if (in.color.a > 0.5 && in.recover <= 0.0 && in.charge <= 0.0) {
+    let core = 1.0 - smoothstep(0.0, 0.45, d);
+    let rgb = mix(in.color.rgb, vec3<f32>(1.0), core * 0.85);
+    return vec4<f32>(rgb, alpha);
+  }
+
+  let rim = smoothstep(0.74, 0.90, d);
+  var fill = vec3<f32>(0.22, 0.22, 0.22);
+  if (in.recover > 0.001) {
+    fill = vec3<f32>(in.recover);
+  } else {
+    let chargeR = clamp(in.charge, 0.0, 1.0) * 0.74;
+    let blob = 1.0 - smoothstep(chargeR - aa, chargeR + aa, d);
+    fill = mix(fill, vec3<f32>(0.0, 0.50, 0.0), blob);
+  }
+  let rgb = mix(fill, vec3<f32>(0.0, 0.0, 0.0), rim);
+  return vec4<f32>(rgb, alpha);
+}
+`;
+
+function ringNeuronCounts(numNeurons) {
+  if (numNeurons <= 1) return [];
+  const remaining = numNeurons - 1;
+  let rings = Math.max(1, Math.round(Math.sqrt(remaining / Math.PI)));
+  rings = Math.min(rings, remaining);
+  while (rings > 1 && (rings * (rings + 1)) / 2 > remaining) rings--;
+  const weightSum = (rings * (rings + 1)) / 2;
+  const counts = [];
+  const fractions = [];
+  let allocated = 0;
+  for (let k = 1; k <= rings; k++) {
+    const exact = (remaining * k) / weightSum;
+    const base = Math.floor(exact);
+    counts.push(base);
+    fractions.push({ index: k - 1, frac: exact - base });
+    allocated += base;
+  }
+  fractions.sort((a, b) => (b.frac - a.frac) || (b.index - a.index));
+  const leftover = remaining - allocated;
+  for (let n = 0; n < leftover; n++) counts[fractions[n % rings].index]++;
+  return counts;
+}
+
+// Cell radius over the tighter of the ring gap and the along-ring gap.
+// Held fixed so the picture has the same proportions at any count.
+const RADIUS_PER_GAP = 0.18;
+
+function layoutScale(n, w, h) {
+  const counts = ringNeuronCounts(n);
+  const rings = Math.max(1, counts.length);
+  const margin = 16;
+  const maxR = Math.max(Math.min(w, h) / 2 - margin, 32);
+  const radial = maxR / rings;
+  const outerCount = counts.length ? counts[counts.length - 1] : Math.max(n - 1, 1);
+  const arc = (2 * Math.PI * maxR) / Math.max(outerCount, 1);
+  return { counts, maxR, radial, gap: Math.min(radial, arc) };
+}
+
+function computeRadius(n, w, h) {
+  return layoutScale(n, w, h).gap * RADIUS_PER_GAP;
+}
+
+function layoutNeurons(n, w, h, rad) {
+  const xs = new Float32Array(n);
+  const ys = new Float32Array(n);
+  const cx = w / 2;
+  const cy = h / 2;
+  xs[0] = cx;
+  ys[0] = cy;
+  const scaled = layoutScale(n, w, h);
+  const counts = scaled.counts;
+  if (counts.length) {
+    const radial = scaled.radial;
+    let idx = 1;
+    for (let ring = 0; ring < counts.length; ring++) {
+      const count = counts[ring];
+      const rr = radial * (ring + 1);
+      const angleOffset = (ring % 2) * (Math.PI / Math.max(count, 1));
+      for (let i = 0; i < count; i++) {
+        const angle = angleOffset + (Math.PI * 2 * i) / count;
+        xs[idx] = cx + Math.cos(angle) * rr;
+        ys[idx] = cy + Math.sin(angle) * rr;
+        idx++;
+      }
+    }
+  }
+  return { xs, ys };
+}
+
+// k nearest neighbors via a uniform grid. The search stops once the kth
+// neighbor is closer than every cell that has not been visited yet.
+function connectNearest(xs, ys, k) {
+  const n = xs.length;
+  const kUse = Math.max(0, Math.min(k, n - 1));
+  const neighbors = new Int32Array(Math.max(1, n * kUse));
+  const counts = new Uint16Array(n);
+  if (kUse === 0 || n < 2) return { neighbors, counts, kUse };
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], y = ys[i];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const span = Math.max(maxX - minX, maxY - minY, 1);
+  const cell = Math.max(4, span / Math.sqrt(n));
+  const cols = Math.ceil((maxX - minX) / cell) + 1;
+  const rows = Math.ceil((maxY - minY) / cell) + 1;
+  const nCells = cols * rows;
+  const cellCounts = new Uint32Array(nCells);
+  const ixOf = new Uint32Array(n);
+  const iyOf = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    let ix = Math.floor((xs[i] - minX) / cell);
+    let iy = Math.floor((ys[i] - minY) / cell);
+    if (ix < 0) ix = 0;
+    if (iy < 0) iy = 0;
+    if (ix >= cols) ix = cols - 1;
+    if (iy >= rows) iy = rows - 1;
+    ixOf[i] = ix;
+    iyOf[i] = iy;
+    cellCounts[iy * cols + ix]++;
+  }
+  const cellStart = new Uint32Array(nCells + 1);
+  for (let c = 0; c < nCells; c++) cellStart[c + 1] = cellStart[c] + cellCounts[c];
+  const cursor = cellStart.slice();
+  const items = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const id = iyOf[i] * cols + ixOf[i];
+    items[cursor[id]++] = i;
+  }
+
+  const bestJ = new Int32Array(kUse);
+  const bestD = new Float32Array(kUse);
+  for (let i = 0; i < n; i++) {
+    const px = xs[i], py = ys[i];
+    const ix = ixOf[i], iy = iyOf[i];
+    let filled = 0;
+    let worst = Infinity;
+    const consider = (j) => {
+      if (j === i) return;
+      const dx = xs[j] - px;
+      const dy = ys[j] - py;
+      const d2 = dx * dx + dy * dy;
+      if (filled < kUse) {
+        bestJ[filled] = j;
+        bestD[filled] = d2;
+        filled++;
+        if (filled === kUse) {
+          worst = bestD[0];
+          for (let t = 1; t < kUse; t++) if (bestD[t] > worst) worst = bestD[t];
+        }
+      } else if (d2 < worst) {
+        let w = 0;
+        for (let t = 1; t < kUse; t++) if (bestD[t] > bestD[w]) w = t;
+        bestJ[w] = j;
+        bestD[w] = d2;
+        worst = bestD[0];
+        for (let t = 1; t < kUse; t++) if (bestD[t] > worst) worst = bestD[t];
+      }
+    };
+
+    let rad = 0;
+    let done = false;
+    while (!done && rad < 64) {
+      const y0 = Math.max(0, iy - rad);
+      const y1 = Math.min(rows - 1, iy + rad);
+      const x0 = Math.max(0, ix - rad);
+      const x1 = Math.min(cols - 1, ix + rad);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (rad > 0 && y > y0 && y < y1 && x > x0 && x < x1) continue;
+          const a = cellStart[y * cols + x];
+          const b = cellStart[y * cols + x + 1];
+          for (let t = a; t < b; t++) consider(items[t]);
+        }
+      }
+      const bound = rad * cell;
+      if (filled >= kUse && worst <= bound * bound) done = true;
+      rad++;
+    }
+    // Sort by index so a reverse edge can be found with a binary search.
+    for (let a = 1; a < filled; a++) {
+      const j = bestJ[a];
+      let b = a;
+      while (b > 0 && bestJ[b - 1] > j) {
+        bestJ[b] = bestJ[b - 1];
+        b--;
+      }
+      bestJ[b] = j;
+    }
+    const base = i * kUse;
+    for (let t = 0; t < filled; t++) neighbors[base + t] = bestJ[t];
+    counts[i] = filled;
+  }
+  return { neighbors, counts, kUse };
+}
+
+function listsNeighbor(neighbors, counts, kUse, neuron, target) {
+  let lo = 0;
+  let hi = counts[neuron];
+  const base = neuron * kUse;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const v = neighbors[base + mid];
+    if (v < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < counts[neuron] && neighbors[base + lo] === target;
+}
+
+function buildPick(xs, ys, rad) {
+  const n = xs.length;
+  const cell = Math.max(12, rad * 6);
+  const colsGuess = new Uint32Array(n);
+  const rowsGuess = new Uint32Array(n);
+  let maxC = 1, maxR = 1;
+  for (let i = 0; i < n; i++) {
+    const ix = Math.max(0, Math.floor(xs[i] / cell));
+    const iy = Math.max(0, Math.floor(ys[i] / cell));
+    colsGuess[i] = ix;
+    rowsGuess[i] = iy;
+    if (ix + 1 > maxC) maxC = ix + 1;
+    if (iy + 1 > maxR) maxR = iy + 1;
+  }
+  const cols = maxC;
+  const nCells = cols * maxR;
+  const cellCounts = new Uint32Array(nCells);
+  for (let i = 0; i < n; i++) cellCounts[rowsGuess[i] * cols + colsGuess[i]]++;
+  const cellStart = new Uint32Array(nCells + 1);
+  for (let c = 0; c < nCells; c++) cellStart[c + 1] = cellStart[c] + cellCounts[c];
+  const cursor = cellStart.slice();
+  const items = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    const id = rowsGuess[i] * cols + colsGuess[i];
+    items[cursor[id]++] = i;
+  }
+  return {
+    cell,
+    cols,
+    cellStart,
+    items,
+    xs,
+    ys,
+    nearest(x, y, maxDist) {
+      const maxD2 = maxDist * maxDist;
+      const cx = Math.floor(x / cell);
+      const cy = Math.floor(y / cell);
+      const reach = Math.max(1, Math.ceil(maxDist / cell));
+      let best = -1;
+      let bestD2 = maxD2;
+      const y0 = Math.max(0, cy - reach);
+      const y1 = cy + reach;
+      const x0 = Math.max(0, cx - reach);
+      const x1 = cx + reach;
+      for (let yb = y0; yb <= y1; yb++) {
+        const row = yb * cols;
+        if (row >= cellStart.length - 1) break;
+        for (let xb = x0; xb <= x1; xb++) {
+          const id = row + xb;
+          if (id < 0 || id + 1 >= cellStart.length) continue;
+          const a = cellStart[id];
+          const b = cellStart[id + 1];
+          for (let t = a; t < b; t++) {
+            const i = items[t];
+            const dx = xs[i] - x;
+            const dy = ys[i] - y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= bestD2) { bestD2 = d2; best = i; }
+          }
+        }
+      }
+      return best;
+    }
+  };
+}
+
+function alignBytes(n) {
+  return Math.max(16, Math.ceil(n / 16) * 16);
+}
+
+function destroyLater(buffers) {
+  const trash = buffers.filter(Boolean);
+  if (!trash.length || !device) return;
+  device.queue.onSubmittedWorkDone().then(() => {
+    for (const buffer of trash) buffer.destroy();
+  }).catch(() => {});
+}
+
+function makeStorage(size, mapped) {
+  return device.createBuffer({
+    size: alignBytes(Math.max(16, size)),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: mapped
+  });
+}
+
+function uploadNetwork(xs, ys, k) {
+  const n = xs.length;
+  console.time('wire network');
+  const linked = connectNearest(xs, ys, k);
+  const { neighbors, counts, kUse } = linked;
+  const outStart = new Uint32Array(n);
+  const outCount = new Uint32Array(n);
+  const inCount = new Uint32Array(n);
+  let nSyn = 0;
+  for (let i = 0; i < n; i++) {
+    outStart[i] = nSyn;
+    outCount[i] = counts[i];
+    nSyn += counts[i];
+  }
+  let s = 0;
+  for (let i = 0; i < n; i++) {
+    const base = i * kUse;
+    for (let t = 0; t < counts[i]; t++) inCount[neighbors[base + t]]++;
+  }
+  const inStart = new Uint32Array(n);
+  for (let i = 1; i < n; i++) inStart[i] = inStart[i - 1] + inCount[i - 1];
+  const inCursor = inStart.slice();
+
+  const old = [neuronBuffer, synapseBuffer, pulseBuffer, incomingBuffer, edgeIdBuffer, pulseIdBuffer, neuronIdBuffer];
+  neuronBuffer = makeStorage(n * 48, true);
+  synapseBuffer = makeStorage(Math.max(1, nSyn) * 32, true);
+  pulseBuffer = makeStorage(Math.max(1, nSyn) * 16, true);
+  incomingBuffer = makeStorage(Math.max(1, nSyn) * 4, true);
+  edgeIdBuffer = makeStorage(Math.max(1, nSyn) * 4, false);
+  pulseIdBuffer = makeStorage(Math.max(1, nSyn) * 4, false);
+  neuronIdBuffer = makeStorage(n * 4, false);
+
+  const neuronMap = neuronBuffer.getMappedRange();
+  const nF = new Float32Array(neuronMap);
+  const nU = new Uint32Array(neuronMap);
+  const synMap = synapseBuffer.getMappedRange();
+  const sF = new Float32Array(synMap);
+  const sU = new Uint32Array(synMap);
+  const pulseMap = pulseBuffer.getMappedRange();
+  const pF = new Float32Array(pulseMap);
+  const incoming = new Uint32Array(incomingBuffer.getMappedRange());
+
+  const lateralPx = radius * 0.35;
+  s = 0;
+  for (let i = 0; i < n; i++) {
+    const o = i * 12;
+    nF[o + 0] = xs[i];
+    nF[o + 1] = ys[i];
+    nF[o + 2] = Math.random() * 0.99;
+    nF[o + 3] = 0;
+    nF[o + 4] = -1;
+    nU[o + 5] = inStart[i];
+    nU[o + 6] = inCount[i];
+    nU[o + 7] = outStart[i];
+    nU[o + 8] = outCount[i];
+    const base = i * kUse;
+    for (let t = 0; t < counts[i]; t++) {
+      const to = neighbors[base + t];
+      const so = s * 8;
+      sU[so + 0] = i;
+      sU[so + 1] = to;
+      const excitatory = Math.random() < 0.8;
+      sF[so + 2] = excitatory ? Math.random() : -Math.random();
+      const reverse = listsNeighbor(neighbors, counts, kUse, to, i);
+      sF[so + 3] = reverse ? (i < to ? 1 : -1) * lateralPx : 0;
+      sF[so + 4] = -1;
+      const po = s * 4;
+      pF[po + 0] = Math.random();
+      pF[po + 1] = Math.random();
+      incoming[inCursor[to]++] = s;
+      s++;
+    }
+  }
+  neuronBuffer.unmap();
+  synapseBuffer.unmap();
+  pulseBuffer.unmap();
+  incomingBuffer.unmap();
+
+  destroyLater(old);
+  nNeurons = n;
+  nSynapses = nSyn;
+  cpuX = xs;
+  cpuY = ys;
+  pick = buildPick(xs, ys, radius);
+  simTime = 0;
+  fitView();
+  console.timeEnd('wire network');
+  console.log('network: ' + nNeurons.toLocaleString() + ' neurons, ' + nSynapses.toLocaleString() + ' synapses');
+}
+
+function writeParams(stepDt) {
+  const velocity = Number(speedSlider.value);
+  const refractory = REFRACTORY_CONSTANT / velocity;
+  paramsView.setFloat32(0, stepDt, true);
+  paramsView.setFloat32(4, simTime, true);
+  paramsView.setFloat32(8, THRESHOLD, true);
+  paramsView.setFloat32(12, LEAKAGE, true);
+  paramsView.setFloat32(16, velocity, true);
+  paramsView.setFloat32(20, refractory, true);
+  paramsView.setFloat32(24, STDP_WINDOW, true);
+  paramsView.setFloat32(28, TAU_PLUS, true);
+  paramsView.setFloat32(32, TAU_MINUS, true);
+  paramsView.setFloat32(36, A_PLUS, true);
+  paramsView.setFloat32(40, A_MINUS, true);
+  paramsView.setFloat32(44, learning ? 1 : 0, true);
+  paramsView.setFloat32(48, radius, true);
+  paramsView.setFloat32(52, weightDelta, true);
+  paramsView.setUint32(56, 0, true); // stimCount, patched below
+  paramsView.setUint32(60, nNeurons, true);
+  paramsView.setUint32(64, nSynapses, true);
+  paramsView.setUint32(68, viewChoices.edgeStride, true);
+  paramsView.setFloat32(72, canvas.width, true);  // oldRes, overwritten for a scale
+  paramsView.setFloat32(76, canvas.height, true);
+  paramsView.setFloat32(80, canvas.width, true);
+  paramsView.setFloat32(84, canvas.height, true);
+  paramsView.setFloat32(88, view.zoom, true);
+  paramsView.setFloat32(92, 0, true);
+  paramsView.setFloat32(96, view.panX, true);
+  paramsView.setFloat32(100, view.panY, true);
+  paramsView.setUint32(104, viewChoices.cullMask, true);
+  paramsView.setUint32(108, 0, true);
+  speedSlider.dataset.refractory = refractory.toFixed(2);
+  document.getElementById('speed-label').textContent = `${velocity} px/s`;
+  document.getElementById('speed-note').textContent = `refractory ${refractory.toFixed(2)}s`;
+}
+
+function neuronCap() {
+  const k = Math.max(1, Number(neighborSlider.value) || 1);
+  return Math.max(NEURON_MIN, Math.floor(maxSynapses / k));
+}
+
+function sliderToNeurons(t) {
+  const cap = neuronCap();
+  const u = Math.max(0, Math.min(1, Number(t) / 1000));
+  const n = Math.round(NEURON_MIN * Math.pow(cap / NEURON_MIN, u));
+  return Math.max(NEURON_MIN, Math.min(cap, n));
+}
+
+function neuronsToSlider(n) {
+  const cap = neuronCap();
+  if (n <= NEURON_MIN || cap <= NEURON_MIN) return 0;
+  const u = Math.log(n / NEURON_MIN) / Math.log(cap / NEURON_MIN);
+  return Math.max(0, Math.min(1000, Math.round(u * 1000)));
+}
+
+function updateNeuronLabel() {
+  const n = sliderToNeurons(neuronSlider.value);
+  document.getElementById('neurons-label').textContent = n.toLocaleString();
+  document.getElementById('neurons-note').textContent = `max ${neuronCap().toLocaleString()}`;
+}
+
+function fitView() {
+  view.panX = canvas.width / 2;
+  view.panY = canvas.height / 2;
+  view.zoom = 1;
+}
+
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - canvas.width * 0.5) / view.zoom + view.panX,
+    y: (sy - canvas.height * 0.5) / view.zoom + view.panY
+  };
+}
+
+function chooseView() {
+  const z = view.zoom;
+  const screenRadius = radius * z;
+  const viewSpan = Math.max(canvas.width, canvas.height) / Math.max(z, 0.001);
+  const netSpan = Math.min(canvas.width, canvas.height);
+  const zoomedIn = nSynapses > 64000 && viewSpan < netSpan * 0.6;
+  const cullPulses = nSynapses > 64000;
+  const quads = nSynapses <= 64000 || screenRadius >= 4;
+  const showNeurons = nNeurons <= 20000 || screenRadius >= 2;
+  let cullMask = 0;
+  if (zoomedIn) cullMask |= 1;
+  if (showNeurons && zoomedIn) cullMask |= 2;
+  if (cullPulses) cullMask |= 4;
+  viewChoices = { zoomedIn, cullPulses, quads, showNeurons, cullMask, edgeStride: quads ? 6 : 2 };
+}
+
+function bindGroups() {
+  computeBindGroup = device.createBindGroup({
+    layout: pipelines.computeLayout,
+    entries: [
+      { binding: 0, resource: { buffer: paramsBuffer } },
+      { binding: 1, resource: { buffer: neuronBuffer } },
+      { binding: 2, resource: { buffer: synapseBuffer } },
+      { binding: 3, resource: { buffer: pulseBuffer } },
+      { binding: 4, resource: { buffer: incomingBuffer } },
+      { binding: 5, resource: { buffer: stimBuffer } },
+      { binding: 6, resource: { buffer: statsBuffer } },
+      { binding: 7, resource: { buffer: counterBuffer } },
+      { binding: 8, resource: { buffer: edgeIdBuffer } },
+      { binding: 9, resource: { buffer: pulseIdBuffer } },
+      { binding: 10, resource: { buffer: neuronIdBuffer } },
+      { binding: 11, resource: { buffer: indirectBuffer } }
+    ]
+  });
+  renderBindGroup = device.createBindGroup({
+    layout: pipelines.renderLayout,
+    entries: [
+      { binding: 0, resource: { buffer: paramsBuffer } },
+      { binding: 1, resource: { buffer: neuronBuffer } },
+      { binding: 2, resource: { buffer: synapseBuffer } },
+      { binding: 3, resource: { buffer: pulseBuffer } },
+      { binding: 4, resource: { buffer: edgeIdBuffer } },
+      { binding: 5, resource: { buffer: pulseIdBuffer } },
+      { binding: 6, resource: { buffer: neuronIdBuffer } }
+    ]
+  });
+}
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+  const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+  if (canvas.width === w && canvas.height === h) return { scaled: false, oldW: w, oldH: h };
+  const oldW = canvas.width || w;
+  const oldH = canvas.height || h;
+  const hadSize = canvas.width > 0 && canvas.height > 0;
+  canvas.width = w;
+  canvas.height = h;
+  if (context && device) context.configure({ device, format, alphaMode: 'opaque' });
+  return { scaled: hadSize && ready, oldW, oldH };
+}
+
+function rebuildNetwork() {
+  const w = canvas.width;
+  const h = canvas.height;
+  const n = sliderToNeurons(neuronSlider.value);
+  const k = Number(neighborSlider.value);
+  radius = computeRadius(n, w, h);
+  const laid = layoutNeurons(n, w, h, radius);
+  uploadNetwork(laid.xs, laid.ys, k);
+  bindGroups();
+  updateNeuronLabel();
+  document.getElementById('neighbors-label').textContent = String(k);
+}
+
+function gatherStim(stepDt) {
+  const click = pointer.click;
+  pointer.click = false;
+  if (!running || !pick || pointer.dragging || !pointer.inside) return 0;
+  const world = screenToWorld(pointer.x, pointer.y);
+  const maxDist = Math.max(radius * 2.4, 16 / view.zoom);
+  const index = pick.nearest(world.x, world.y, maxDist);
+  if (index < 0) return 0;
+  stimU32[0] = index;
+  // A click or a held pointer fills the cell so it fires. Hovering drips in
+  // charge, about one threshold per second, same idea as the CPU page.
+  stimF32[1] = (click || pointer.down) ? 1 : 0.9 * stepDt;
+  device.queue.writeBuffer(stimBuffer, 0, stimCPU, 0, 16);
+  return 1;
+}
+
+function dispatch(pass, pipeline, count) {
+  if (count <= 0) return;
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, computeBindGroup);
+  if (count <= DISPATCH_SPAN) {
+    pass.dispatchWorkgroups(Math.ceil(count / 64));
+  } else {
+    pass.dispatchWorkgroups(65535, Math.ceil(count / DISPATCH_SPAN));
+  }
+}
+
+function render(encoder) {
+  const view = context.getCurrentTexture().createView();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view,
+      clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      loadOp: 'clear',
+      storeOp: 'store'
+    }]
+  });
+  pass.setBindGroup(0, renderBindGroup);
+  const choice = viewChoices;
+  if (nSynapses > 0) {
+    // Thick quads match the CPU page. Past this size they cover the disc and
+    // the fill rate collapses, so the axons become 1px lines until zoom makes
+    // a cell a few pixels wide. Zoomed-in views draw only what is on screen.
+    if (choice.zoomedIn) {
+      pass.setPipeline(choice.quads ? pipelines.edgeCulled : pipelines.lineCulled);
+      pass.drawIndirect(indirectBuffer, 0);
+    } else if (choice.quads) {
+      pass.setPipeline(pipelines.edge);
+      pass.draw(nSynapses * 6);
+    } else {
+      pass.setPipeline(pipelines.line);
+      pass.draw(nSynapses * 2);
+    }
+    if (choice.cullPulses) {
+      pass.setPipeline(pipelines.pulseCulled);
+      pass.drawIndirect(indirectBuffer, 16);
+    } else {
+      pass.setPipeline(pipelines.pulse);
+      pass.draw(nSynapses * 6);
+    }
+  }
+  if (choice.showNeurons) {
+    if (choice.zoomedIn) {
+      pass.setPipeline(pipelines.neuronCulled);
+      pass.drawIndirect(indirectBuffer, 32);
+    } else {
+      pass.setPipeline(pipelines.neuron);
+      pass.draw(nNeurons * 6);
+    }
+  }
+  pass.end();
+}
+
+function maybeReadStats(now) {
+  if (statsPending || now - statsSnapshot.t < 1000) return;
+  statsPending = true;
+  const encoder = device.createCommandEncoder();
+  encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, 16);
+  device.queue.submit([encoder.finish()]);
+  stagingBuffer.mapAsync(GPUMapMode.READ).then(() => {
+    const raw = new Uint32Array(stagingBuffer.getMappedRange().slice(0));
+    stagingBuffer.unmap();
+    const t = performance.now();
+    const dt = Math.max(0.001, (t - statsSnapshot.t) / 1000);
+    const delta = (next, prev) => {
+      const d = next >= prev ? next - prev : (next + 2 ** 32) - prev;
+      return d / dt;
+    };
+    measured.fires = delta(raw[0], statsSnapshot.fires);
+    measured.strengthen = delta(raw[1], statsSnapshot.strengthen);
+    measured.weaken = delta(raw[2], statsSnapshot.weaken);
+    statsSnapshot = { fires: raw[0], strengthen: raw[1], weaken: raw[2], t };
+    statsPending = false;
+  }).catch((error) => {
+    statsPending = false;
+    console.warn(error);
+  });
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!ready || !device) return;
+  try {
+  frameBody(now);
+  } catch (error) {
+    ready = false;
+    statusEl.textContent = error.stack || error.message;
+    console.error(error);
+  }
+}
+
+function frameBody(now) {
+  const frameDt = Math.min(0.05, Math.max(0, (now - lastFrame) / 1000));
+  lastFrame = now;
+  fpsFrame++;
+  if (now - fpsStamp >= 1000) {
+    fps = Math.round((fpsFrame * 1000) / (now - fpsStamp));
+    fpsFrame = 0;
+    fpsStamp = now;
+  }
+
+  if (rebuildRequested) {
+    if (!rebuildPainted) {
+      rebuildPainted = true;
+      statusEl.textContent = `Wiring ${sliderToNeurons(neuronSlider.value).toLocaleString()} neurons…`;
+      return;
+    }
+    rebuildRequested = false;
+    rebuildPainted = false;
+    try {
+      rebuildNetwork();
+      statusEl.textContent = '';
+    } catch (error) {
+      statusEl.textContent = error.message;
+      console.error(error);
+      return;
+    }
+  }
+
+  const resize = resizeCanvas();
+  if (resize.scaled && cpuX) {
+    const sx = canvas.width / resize.oldW;
+    const sy = canvas.height / resize.oldH;
+    radius *= Math.sqrt(Math.abs(sx * sy));
+    for (let i = 0; i < cpuX.length; i++) {
+      cpuX[i] *= sx;
+      cpuY[i] *= sy;
+    }
+    view.panX *= sx;
+    view.panY *= sy;
+    pick = buildPick(cpuX, cpuY, radius);
+  }
+  const doStep = running && frameDt > 0;
+  if (doStep) simTime += frameDt;
+
+  let stimCount = 0;
+  if (doStep) stimCount = gatherStim(frameDt);
+
+  chooseView();
+  writeParams(doStep ? frameDt : 0);
+  paramsView.setUint32(56, stimCount, true);
+  if (resize.scaled) {
+    paramsView.setFloat32(72, resize.oldW, true);
+    paramsView.setFloat32(76, resize.oldH, true);
+    paramsView.setFloat32(48, radius, true);
+    paramsView.setFloat32(96, view.panX, true);
+    paramsView.setFloat32(100, view.panY, true);
+  }
+  device.queue.writeBuffer(paramsBuffer, 0, paramsCPU);
+  if (viewChoices.cullMask) device.queue.writeBuffer(counterBuffer, 0, new Uint32Array(4));
+
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  if (resize.scaled) dispatch(pass, pipelines.scale, nNeurons);
+  if (sleepRequested) {
+    dispatch(pass, pipelines.sleepNeurons, nNeurons);
+    dispatch(pass, pipelines.sleepSynapses, nSynapses);
+    sleepRequested = false;
+  }
+  if (weightDelta !== 0) {
+    dispatch(pass, pipelines.adjust, nSynapses);
+    weightDelta = 0;
+  }
+  if (doStep) {
+    dispatch(pass, pipelines.stim, stimCount);
+    dispatch(pass, pipelines.update, nNeurons);
+    dispatch(pass, pipelines.advance, nSynapses);
+  }
+  if (viewChoices.cullMask & 5) dispatch(pass, pipelines.cullSynapses, nSynapses);
+  if (viewChoices.cullMask & 2) dispatch(pass, pipelines.cullNeurons, nNeurons);
+  if (viewChoices.cullMask) dispatch(pass, pipelines.finalizeIndirect, 1);
+  pass.end();
+  render(encoder);
+  device.queue.submit([encoder.finish()]);
+
+  const perNeuron = nNeurons > 0 ? measured.fires / nNeurons : 0;
+  statFps.textContent = String(fps);
+  statSynapses.textContent = nSynapses.toLocaleString();
+  statZoom.textContent = `${view.zoom.toFixed(2)}×`;
+  statLearning.textContent = `${Math.round(measured.strengthen).toLocaleString()} / ${Math.round(measured.weaken).toLocaleString()}`;
+  statFiring.textContent = `${Math.round(measured.fires).toLocaleString()}/s`;
+  statTime.textContent = `${simTime.toFixed(1)}s`;
+  statFiring.title = `${perNeuron.toFixed(3)} per neuron`;
+
+  maybeReadStats(now);
+}
+
+function shaderErrorText(info) {
+  return info.messages
+    .filter((m) => m.type === 'error')
+    .map((m) => `line ${m.lineNum}: ${m.message}`)
+    .join('\n');
+}
+
+function makeRenderPipeline(module, vs, fs, topology = 'triangle-list') {
+  return device.createRenderPipeline({
+    layout: pipelines.renderPipeLayout,
+    vertex: { module, entryPoint: vs, buffers: [] },
+    fragment: {
+      module,
+      entryPoint: fs,
+      targets: [{
+        format,
+        blend: {
+          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+        }
+      }]
+    },
+    primitive: { topology, cullMode: 'none' }
+  });
+}
+
+async function init() {
+  if (!navigator.gpu) throw new Error('WebGPU is not available in this browser.');
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) throw new Error('No WebGPU adapter found.');
+  const requiredLimits = {
+    maxBufferSize: adapter.limits.maxBufferSize,
+    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    maxComputeWorkgroupsPerDimension: adapter.limits.maxComputeWorkgroupsPerDimension,
+    maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage
+  };
+  device = await adapter.requestDevice({ requiredLimits });
+  maxSynapses = Math.floor(Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize) / 32);
+  neuronSlider.value = String(neuronsToSlider(4000));
+  updateNeuronLabel();
+  device.addEventListener('uncapturederror', (event) => {
+    console.error(event.error);
+    statusEl.textContent = event.error.message;
+  });
+  context = canvas.getContext('webgpu');
+  format = navigator.gpu.getPreferredCanvasFormat();
+  resizeCanvas();
+  context.configure({ device, format, alphaMode: 'opaque' });
+
+  const computeModule = device.createShaderModule({ label: 'neurons-compute', code: COMPUTE });
+  const renderModule = device.createShaderModule({ label: 'neurons-render', code: RENDER });
+  const computeInfo = await computeModule.getCompilationInfo();
+  const renderInfo = await renderModule.getCompilationInfo();
+  const compileErrors = shaderErrorText(computeInfo) || shaderErrorText(renderInfo);
+  if (compileErrors) throw new Error(compileErrors);
+  device.pushErrorScope('validation');
+
+  pipelines.computeLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+    ]
+  });
+  pipelines.renderLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+      { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+      { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }
+    ]
+  });
+  const computePipeLayout = device.createPipelineLayout({ bindGroupLayouts: [pipelines.computeLayout] });
+  pipelines.renderPipeLayout = device.createPipelineLayout({ bindGroupLayouts: [pipelines.renderLayout] });
+
+  const computeEntry = (name) => device.createComputePipeline({
+    layout: computePipeLayout,
+    compute: { module: computeModule, entryPoint: name }
+  });
+  pipelines.stim = computeEntry('applyStim');
+  pipelines.update = computeEntry('updateNeurons');
+  pipelines.advance = computeEntry('advanceSynapses');
+  pipelines.adjust = computeEntry('adjustWeights');
+  pipelines.sleepNeurons = computeEntry('sleepNeurons');
+  pipelines.sleepSynapses = computeEntry('sleepSynapses');
+  pipelines.scale = computeEntry('scalePositions');
+  pipelines.cullSynapses = computeEntry('cullSynapses');
+  pipelines.cullNeurons = computeEntry('cullNeurons');
+  pipelines.finalizeIndirect = computeEntry('finalizeIndirect');
+  pipelines.edge = makeRenderPipeline(renderModule, 'vsEdge', 'fsEdge');
+  pipelines.edgeCulled = makeRenderPipeline(renderModule, 'vsEdgeCulled', 'fsEdge');
+  pipelines.line = makeRenderPipeline(renderModule, 'vsLine', 'fsEdge', 'line-list');
+  pipelines.lineCulled = makeRenderPipeline(renderModule, 'vsLineCulled', 'fsEdge', 'line-list');
+  pipelines.pulse = makeRenderPipeline(renderModule, 'vsPulse', 'fsDisc');
+  pipelines.pulseCulled = makeRenderPipeline(renderModule, 'vsPulseCulled', 'fsDisc');
+  pipelines.neuron = makeRenderPipeline(renderModule, 'vsNeuron', 'fsDisc');
+  pipelines.neuronCulled = makeRenderPipeline(renderModule, 'vsNeuronCulled', 'fsDisc');
+
+  const pipelineError = await device.popErrorScope();
+  if (pipelineError) throw pipelineError;
+
+  paramsBuffer = device.createBuffer({
+    size: PARAMS_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
+  stimBuffer = device.createBuffer({
+    size: MAX_STIM * 16,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  statsBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+  });
+  device.queue.writeBuffer(statsBuffer, 0, new Uint32Array(4));
+  stagingBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+  });
+  counterBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  indirectBuffer = device.createBuffer({
+    size: 48,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST
+  });
+  device.queue.writeBuffer(counterBuffer, 0, new Uint32Array(4));
+
+  rebuildNetwork();
+  ready = true;
+  statusEl.textContent = '';
+  requestAnimationFrame((t) => {
+    lastFrame = t;
+    fpsStamp = t;
+    statsSnapshot.t = t;
+    frame(t);
+  });
+}
+
+function pointerPos(event) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+  if (pointer.down) {
+    const dx = x - pointer.x;
+    const dy = y - pointer.y;
+    pointer.moved += Math.hypot(dx, dy);
+    if (pointer.moved > 5) {
+      pointer.dragging = true;
+      view.panX -= dx / view.zoom;
+      view.panY -= dy / view.zoom;
+      canvas.style.cursor = 'grabbing';
+    }
+  }
+  pointer.x = x;
+  pointer.y = y;
+  pointer.inside = x >= 0 && y >= 0 && x < canvas.width && y < canvas.height;
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  pointerPos(event);
+  pointer.down = true;
+  pointer.dragging = false;
+  pointer.moved = 0;
+  try { canvas.setPointerCapture(event.pointerId); } catch (error) {}
+});
+canvas.addEventListener('pointermove', pointerPos);
+canvas.addEventListener('pointerup', (event) => {
+  pointerPos(event);
+  if (pointer.down && !pointer.dragging) pointer.click = true;
+  pointer.down = false;
+  pointer.dragging = false;
+  canvas.style.cursor = 'crosshair';
+});
+canvas.addEventListener('pointerleave', () => {
+  pointer.inside = false;
+  pointer.down = false;
+  pointer.dragging = false;
+  canvas.style.cursor = 'crosshair';
+});
+canvas.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const sx = (event.clientX - rect.left) * (canvas.width / rect.width);
+  const sy = (event.clientY - rect.top) * (canvas.height / rect.height);
+  const before = screenToWorld(sx, sy);
+  const dy = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+  const factor = Math.exp(-dy * 0.0011);
+  view.zoom = Math.max(0.15, Math.min(400, view.zoom * factor));
+  view.panX = before.x - (sx - canvas.width * 0.5) / view.zoom;
+  view.panY = before.y - (sy - canvas.height * 0.5) / view.zoom;
+}, { passive: false });
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+runButton.addEventListener('click', () => {
+  running = !running;
+  runButton.textContent = running ? 'Stop' : 'Start';
+  runButton.classList.toggle('on', running);
+});
+learnButton.addEventListener('click', () => {
+  learning = !learning;
+  learnButton.classList.toggle('on', learning);
+});
+document.getElementById('inhibit').addEventListener('click', () => { weightDelta = -0.1; });
+document.getElementById('excite').addEventListener('click', () => { weightDelta = 0.1; });
+document.getElementById('sleep').addEventListener('click', () => { sleepRequested = true; });
+document.getElementById('reset').addEventListener('click', () => { rebuildRequested = true; });
+document.getElementById('fit').addEventListener('click', () => fitView());
+
+neuronSlider.addEventListener('input', updateNeuronLabel);
+neighborSlider.addEventListener('input', () => {
+  document.getElementById('neighbors-label').textContent = neighborSlider.value;
+  updateNeuronLabel();
+});
+neuronSlider.addEventListener('change', () => { rebuildRequested = true; });
+neighborSlider.addEventListener('change', () => { rebuildRequested = true; });
+window.addEventListener('resize', () => {});
+
+window.__gpuNeurons = {
+  get neurons() { return nNeurons; },
+  get synapses() { return nSynapses; },
+  get firing() { return nNeurons ? measured.fires / nNeurons : 0; },
+  get learning() { return measured; },
+  get fps() { return fps; },
+  get time() { return simTime; },
+  get radius() { return radius; },
+  get zoom() { return view.zoom; },
+  get pan() { return [view.panX, view.panY]; },
+  get maxSynapses() { return maxSynapses; }
+};
+
+init().catch((error) => {
+  console.error(error);
+  statusEl.textContent = error.message;
+});
+</script>
+</body>
+</html>

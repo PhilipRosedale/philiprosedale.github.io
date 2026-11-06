@@ -640,64 +640,63 @@ function SimulationLoop() {
   if(simulationRunning) setTimeout(SimulationLoop, dt * 1000);  // Convert from s to ms
 }
 
+// Split every neuron after the center across concentric rings. Ring k is given a
+// share proportional to its circumference, so outer rings hold more neurons, and
+// each ring's count is a whole number that still sums to the slider total.
+function ringNeuronCounts(numNeurons) {
+  if (numNeurons <= 1) return [];
+  const remaining = numNeurons - 1;
+
+  let rings = max(1, round(sqrt(remaining / PI)));
+  rings = min(rings, remaining);
+  while (rings > 1 && (rings * (rings + 1)) / 2 > remaining) rings--;
+
+  const weightSum = (rings * (rings + 1)) / 2;
+  const counts = [];
+  const fractions = [];
+  let allocated = 0;
+  for (let k = 1; k <= rings; k++) {
+    const exact = (remaining * k) / weightSum;
+    const base = floor(exact);
+    counts.push(base);
+    fractions.push({ index: k - 1, frac: exact - base });
+    allocated += base;
+  }
+
+  // Largest fractional shares get the leftover neurons. Equal fractions prefer
+  // the outer ring, which keeps the outside the fullest.
+  fractions.sort((a, b) => (b.frac - a.frac) || (b.index - a.index));
+  const leftover = remaining - allocated;
+  for (let n = 0; n < leftover; n++) {
+    counts[fractions[n % rings].index]++;
+  }
+  return counts;
+}
+
 function initializeNeurons(numNeurons) {
   neurons = [];
-  
-  // Place first neuron in the center
-  neurons.push(new Neuron(width / 2, height / 2, neuronRadius, random(0.99)));
-  
-  // Minimum distance between neurons (2x diameter = 4x radius)
-  const minDistance = 5 * neuronRadius;
-  // Distance range to place new from existing neuron 
-  const minDistanceFromExisting = minDistance; 
-  const maxDistanceFromExisting = minDistance * 3;  
-  
-  // Try to place remaining neurons
-  let attempts = 0;
-  const maxAttempts = numNeurons * 1000; // Limit attempts to avoid infinite loops
-  
-  while (neurons.length < numNeurons && attempts < maxAttempts) {
-    attempts++;
-    
-    // Pick a random existing neuron to place near
-    let referenceNeuron = neurons[floor(random(neurons.length))];
-    
-    // Try to find a valid position
-    let validPosition = false;
-    let newX, newY;
-    let placementAttempts = 0;
-    const maxPlacementAttempts = 100;
-    
-    while (!validPosition && placementAttempts < maxPlacementAttempts) {
-      placementAttempts++;
-      
-      // Generate random angle and distance from reference neuron
-      let angle = random(TWO_PI);
-      let distance = random(minDistanceFromExisting, maxDistanceFromExisting);
-      
-      newX = referenceNeuron.x + cos(angle) * distance;
-      newY = referenceNeuron.y + sin(angle) * distance;
-      
-      // Check if position is within canvas bounds
-      if (newX < neuronRadius || newX > width - neuronRadius ||
-          newY < neuronRadius || newY > height - neuronRadius) {
-        continue; // Try again
+
+  const cx = width / 2;
+  const cy = height / 2;
+  neurons.push(new Neuron(cx, cy, neuronRadius, random(0.99)));
+
+  const counts = ringNeuronCounts(numNeurons);
+  if (counts.length > 0) {
+    const margin = neuronRadius * 2;
+    const maxRadius = max(min(width, height) / 2 - margin, neuronRadius * 4);
+    const radialSpacing = maxRadius / counts.length;
+
+    for (let ring = 0; ring < counts.length; ring++) {
+      const count = counts[ring];
+      const radius = radialSpacing * (ring + 1);
+      // Offset alternate rings by half a step so neurons sit in the gaps of the ring inside.
+      const angleOffset = (ring % 2) * (PI / count);
+      for (let i = 0; i < count; i++) {
+        const angle = angleOffset + (TWO_PI * i) / count;
+        const x = cx + cos(angle) * radius;
+        const y = cy + sin(angle) * radius;
+        neurons.push(new Neuron(x, y, neuronRadius, random(0.99)));
       }
-      
-      // Check if this position is far enough from all existing neurons
-      validPosition = true;
-      for (let existingNeuron of neurons) {
-        let d = dist(newX, newY, existingNeuron.x, existingNeuron.y);
-        if (d < minDistance) {
-          validPosition = false;
-          break;
-        }
-      }
-    }
-    
-    // If we found a valid position, add the neuron
-    if (validPosition) {
-      neurons.push(new Neuron(newX, newY, neuronRadius, random(0.99)));
     }
   }
   

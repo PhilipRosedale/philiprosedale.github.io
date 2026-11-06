@@ -166,7 +166,6 @@
     color: #ffe2a3;
   }
 
-  .controls { display: flex; flex-direction: column; gap: 14px; }
   .control { display: flex; flex-direction: column; gap: 6px; }
   .control .row {
     display: flex;
@@ -212,14 +211,31 @@
     box-shadow: 0 0 0 1px rgba(143,199,255,0.6), 0 2px 8px rgba(0,0,0,0.5);
   }
 
+  .dividend {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 11px 16px 12px;
+    border: 1px solid rgba(63,207,154,0.22);
+    border-radius: 12px;
+    background: rgba(63,207,154,0.035);
+  }
+  .dividend .head { display: flex; flex-direction: column; gap: 2px; }
+  .dividend .head .label {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--rich);
+  }
+  .dividend .head .hint { font-size: 11px; color: var(--muted); }
+  .dividend .control .row output { color: var(--rich); }
+
   .income {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: rgba(63,207,154,0.07);
-    border: 1px solid rgba(63,207,154,0.18);
+    padding-top: 10px;
+    border-top: 1px solid rgba(63,207,154,0.16);
     font-size: 12px;
     color: rgba(255,255,255,0.7);
   }
@@ -334,11 +350,9 @@
       <p class="sub">A free market simulation</p>
     </header>
     <p class="desc">
-      Two hundred identical people, starting from the US median bank balance of <b>$8,200</b>, trade at
-      random as often as Americans do (47 payments a month). Each payment is a random amount, at most 4%
-      of what the poorer of the two has. Nobody is smarter or luckier, yet wealth drifts to the top and
-      the <b>middle class</b> shrinks.
-      <button class="link" id="why">Why it happens →</button>
+      Over time, in a free market, wealth drifts to the top and the <b>middle class</b> shrinks even though
+      no one is smarter or luckier. <button class="link" id="why">Why it happens →</button>
+      Watch the simulation, then adjust the <b>dividend sliders</b> below to repair the economy.
     </p>
 
     <div class="stats">
@@ -366,27 +380,31 @@
       <button id="reset">Reset</button>
     </div>
 
-    <div class="controls">
-      <div class="control">
-        <div class="row"><span>Transaction tax</span><output id="taxOut">0%</output></div>
-        <input type="range" id="tax" min="0" max="50" step="0.5" value="0">
-        <div class="note">A share of every trade, paid out equally to everyone.</div>
-      </div>
-      <div class="control">
-        <div class="row"><span>Demurrage</span><output id="demOut">0% / year</output></div>
-        <input type="range" id="dem" min="0" max="50" step="0.5" value="0">
-        <div class="note">A yearly tax on wealth held, paid out equally to everyone.</div>
-      </div>
-      <div class="control">
-        <div class="row"><span>Speed</span><output id="speedOut">25,000 trades / s</output></div>
-        <input type="range" id="speed" min="0" max="1" step="0.0005" value="0.936">
-      </div>
+    <div class="control">
+      <div class="row"><span>Speed</span><output id="speedOut">25,000 trades / s</output></div>
+      <input type="range" id="speed" min="0" max="1" step="0.0005" value="0.936">
     </div>
 
-    <div class="income">
-      <span>Basic income per person</span>
-      <span><b id="income">$0.00</b> <span style="color:var(--muted)">/ year</span></span>
-    </div>
+    <section class="dividend">
+      <div class="head">
+        <span class="label">Dividend</span>
+        <span class="hint">Share the gains to hold inequality steady</span>
+      </div>
+      <div class="control">
+        <div class="row"><span>Transaction dividend</span><output id="taxOut">0%</output></div>
+        <input type="range" id="tax" min="0" max="50" step="0.5" value="0">
+        <div class="note">A share of every transaction is paid out equally to everyone.</div>
+      </div>
+      <div class="control">
+        <div class="row"><span>Demurrage Dividend</span><output id="demOut">0% / year</output></div>
+        <input type="range" id="dem" min="0" max="50" step="0.5" value="0">
+        <div class="note">Annual wealth tax, paid equally to everyone</div>
+      </div>
+      <div class="income">
+        <span>Dividend per person</span>
+        <span><b id="income">$0.00</b> <span style="color:var(--muted)">/ year</span></span>
+      </div>
+    </section>
 
     <div class="legend">
       <div><span class="swatch" style="background:var(--poor)"></span><span class="name">Poor</span><span class="range" id="poorRange">–</span></div>

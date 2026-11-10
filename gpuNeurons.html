@@ -32,6 +32,10 @@
   #panel .sub a { color: #6d8eb0; font-size: 11px; text-decoration: none; }
   #panel .sub a:hover { color: #9ec0de; }
   #panel .hint { color: #6d7c8f; font-size: 11px; line-height: 1.45; margin: 10px 0 0; }
+  /* The words carry the colors the network is drawn in. */
+  #panel .hint .excite { color: #2cc4b9; }
+  #panel .hint .inhibit { color: #a57cf5; }
+  #panel .hint .fire { color: #f0bf52; }
   .group {
     margin: 16px 0 8px;
     font-size: 10.5px;
@@ -59,6 +63,16 @@
   .row label { color: #9fb0c4; font-size: 12px; }
   .row .val { color: #e8eef6; font-variant-numeric: tabular-nums; font-size: 12px; }
   .row .note { color: #5f6d80; font-size: 10.5px; margin-top: 2px; }
+  label.check {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #9fb0c4;
+    font-size: 12px;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  label.check input { accent-color: #4d9be6; margin: 0; flex: 0 0 auto; }
   input[type="range"] {
     width: 100%;
     margin: 5px 0 0;
@@ -74,6 +88,24 @@
     font-size: 12px;
   }
   .stat b { color: #e8eef6; font-weight: 450; font-variant-numeric: tabular-nums; }
+  #firing-graph {
+    height: 48px;
+    margin: 6px 0 3px;
+    box-sizing: border-box;
+    background: #0e1219;
+    border: 1px solid #232c38;
+    border-radius: 4px;
+    cursor: default;
+    touch-action: auto;
+  }
+  #firing-scale {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 0 8px;
+    color: #5f6d80;
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+  }
   #status { margin-top: 10px; color: #ff9a9a; font-size: 11px; line-height: 1.35; word-break: break-word; }
 </style>
 </head>
@@ -81,7 +113,7 @@
 <aside id="panel">
   <h1>GPU Neurons</h1>
   <p class="sub"><a href="interactiveNeurons.html">CPU version</a></p>
-  <p class="hint">Scroll to zoom, drag to pan, click a neuron to fire it. Hover to charge it. Green axons excite, red inhibit, white just changed weight.</p>
+  <p class="hint">Scroll to zoom, drag to pan, click a neuron to fire it. Hover to charge it. Right-click stimulates every cell in a small patch, and each fires again as soon as it recovers. <span class="excite">Teal</span> axons excite, <span class="inhibit">violet</span> inhibit, white just changed weight. A cell flashes <span class="fire">gold</span> when it fires.</p>
   <div class="group">Run</div>
   <div class="buttons">
     <button type="button" id="run" class="on">Stop</button>
@@ -99,11 +131,15 @@
     <div class="note" id="neurons-note"></div>
   </div>
   <div class="row">
-    <div class="top"><label for="neighbors">Neighbors</label><span class="val" id="neighbors-label">8</span></div>
+    <div class="top"><label for="neighbors">Dendrites</label><span class="val" id="neighbors-label">8</span></div>
     <input id="neighbors" type="range" min="1" max="16" step="1" value="8">
   </div>
   <div class="row">
-    <div class="top"><label for="speed">Speed</label><span class="val" id="speed-label">200 px/s</span></div>
+    <label class="check" for="scale-invariant"><input type="checkbox" id="scale-invariant">Scale invariant</label>
+    <div class="note" id="wiring-note">Nearest neighbors</div>
+  </div>
+  <div class="row">
+    <div class="top"><label for="speed">Conduction speed</label><span class="val" id="speed-label">200 px/s</span></div>
     <input id="speed" type="range" min="50" max="800" step="10" value="200">
     <div class="note" id="speed-note">refractory 0.75s</div>
   </div>
@@ -113,6 +149,8 @@
   <div class="stat"><span>Zoom</span><b id="stat-zoom">—</b></div>
   <div class="stat"><span>Learning</span><b id="stat-learning">—</b></div>
   <div class="stat"><span>Firing</span><b id="stat-firing">—</b></div>
+  <canvas id="firing-graph" role="img" aria-label="Firing rate over the last 10 seconds"></canvas>
+  <div id="firing-scale"><span>last 10s</span><span id="firing-range"></span></div>
   <div class="stat"><span>Time</span><b id="stat-time">—</b></div>
   <div id="status"></div>
 </aside>
@@ -130,9 +168,11 @@
 //   * STDP: a spike that arrives just before the postsynaptic cell fires
 //     strengthens the synapse (LTP); one that arrives just after weakens it (LTD)
 //
-// Each cell connects to its k nearest neighbors. Cells sit on concentric rings,
-// matching the CPU page. The compute step is one dispatch over cells and one
-// over synapses; drawing is instanced quads read straight from those buffers.
+// Each cell connects to its k nearest neighbors or, with scale-invariant
+// wiring, to k partners drawn at random with probability 1/d^2. Cells sit on
+// concentric rings, matching the CPU page. The compute step is one dispatch
+// over cells and one over synapses; drawing is instanced quads read straight
+// from those buffers.
 
 const THRESHOLD = 0.9;
 const LEAKAGE = 0.1;                 // charge per second
@@ -142,9 +182,17 @@ const TAU_PLUS = 0.020;
 const TAU_MINUS = 0.020;
 const A_PLUS = 0.15;
 const A_MINUS = 0.10;
-const MAX_STIM = 64;
+// One frame can name this many cells. A brush that holds more is covered
+// over successive frames, well within one refractory period.
+const MAX_STIM = 8192;
+// Right-click stimulates every cell inside this fraction of the canvas width.
+const STIM_RADIUS = 0.01;
 const PARAMS_BYTES = 112;
 const NEURON_MIN = 100;
+// Long axons seen from far out stack hundreds deep on every pixel, and with
+// their opacity only the top few can show. Past this many layers a sample of
+// the axons is drawn instead of all of them.
+const MAX_AXON_DEPTH = 48;
 // One compute dimension covers 65535 workgroups of 64 threads.
 const DISPATCH_SPAN = 65535 * 64;
 
@@ -156,11 +204,16 @@ const statZoom = document.getElementById('stat-zoom');
 const statLearning = document.getElementById('stat-learning');
 const statFiring = document.getElementById('stat-firing');
 const statTime = document.getElementById('stat-time');
+const graphCanvas = document.getElementById('firing-graph');
+const graphCtx = graphCanvas.getContext('2d');
+const graphRange = document.getElementById('firing-range');
 const neuronSlider = document.getElementById('neurons');
 const neighborSlider = document.getElementById('neighbors');
 const speedSlider = document.getElementById('speed');
 const runButton = document.getElementById('run');
 const learnButton = document.getElementById('learn');
+const scaleBox = document.getElementById('scale-invariant');
+const wiringNote = document.getElementById('wiring-note');
 
 let device, context, format;
 let computeBindGroup, renderBindGroup;
@@ -172,6 +225,8 @@ const paramsView = new DataView(paramsCPU);
 const stimCPU = new ArrayBuffer(MAX_STIM * 16);
 const stimU32 = new Uint32Array(stimCPU);
 const stimF32 = new Float32Array(stimCPU);
+const stimList = [];
+let stimCursor = 0;
 
 let nNeurons = 0;
 let nSynapses = 0;
@@ -179,6 +234,7 @@ let radius = 8;
 let simTime = 0;
 let running = true;
 let learning = true;
+let scaleInvariant = false;
 let weightDelta = 0;
 let sleepRequested = false;
 let rebuildRequested = false;
@@ -193,13 +249,30 @@ let cpuY = null;
 let pick = null;
 let maxSynapses = 4194304;
 const view = { panX: 0, panY: 0, zoom: 1 };
-let viewChoices = { cullMask: 0, edgeStride: 6, quads: true, showNeurons: true, zoomedIn: false, cullPulses: false };
-const pointer = { x: 0, y: 0, inside: false, down: false, dragging: false, moved: 0, click: false };
+let viewChoices = { cullMask: 0, edgeStride: 6, edgeSkip: 1, quads: true, showNeurons: true, zoomedIn: false, cullPulses: false };
+// Axon length per unit area, in pixels of axon per square pixel at zoom 1.
+// Only the scale-invariant wiring sets it; nearest neighbors never stack up.
+let axonDensity = 0;
+const pointer = { x: 0, y: 0, inside: false, down: false, dragging: false, stimulating: false, moved: 0, click: false };
 let rebuildPainted = false;
 
 let statsPending = false;
 let statsSnapshot = { fires: 0, strengthen: 0, weaken: 0, t: performance.now() };
 let measured = { fires: 0, strengthen: 0, weaken: 0 };
+
+// The firing graph counts fires into fixed bins of simulation time, short
+// enough to show the network pulsing where the once-a-second number cannot.
+const GRAPH_SECONDS = 10;
+const GRAPH_BINS_PER_SECOND = 20;
+const GRAPH_BINS = GRAPH_SECONDS * GRAPH_BINS_PER_SECOND;
+// A ring indexed by bin number. The spare slot is the bin still filling.
+const graphBins = new Float32Array(GRAPH_BINS + 1);
+// The finished bins, oldest first, in fires per second.
+const graphRates = new Float32Array(GRAPH_BINS);
+const graphSize = { w: 190, h: 46 };
+let graphFires = 0;
+let graphTime = -1;
+let graphStart = 0;
 
 const COMPUTE = /* wgsl */`
 struct Params {
@@ -228,7 +301,7 @@ struct Params {
   padZ: f32,
   pan: vec2<f32>,
   cullMask: u32,
-  padEnd: u32,
+  edgeSkip: u32,
 }
 struct Neuron {
   pos: vec2<f32>,
@@ -284,6 +357,12 @@ struct Counters {
 const DISPATCH_SPAN: u32 = 4194240u;
 fn linearId(gid: vec3<u32>) -> u32 {
   return gid.x + gid.y * DISPATCH_SPAN;
+}
+
+// When axons are sampled, one is drawn from each run of edgeSkip synapses.
+// The pick is hashed so it does not always land on the same slot of a cell.
+fn sampledEdge(run: u32) -> u32 {
+  return run * params.edgeSkip + ((run * 2654435761u) >> 8u) % params.edgeSkip;
 }
 
 fn bumpWeight(s: u32, delta: f32, strengthen: bool) {
@@ -446,7 +525,7 @@ fn cullSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
   let a = neurons[syn.src].pos;
   let b = neurons[syn.to].pos;
   let mask = params.cullMask;
-  if ((mask & 1u) != 0u) {
+  if ((mask & 1u) != 0u && (params.edgeSkip <= 1u || i == sampledEdge(i / params.edgeSkip))) {
     let sa = worldToScreen(a);
     let sb = worldToScreen(b);
     let margin = max(params.radius * params.zoom, 8.0) + 12.0;
@@ -525,7 +604,7 @@ struct Params {
   padZ: f32,
   pan: vec2<f32>,
   cullMask: u32,
-  padEnd: u32,
+  edgeSkip: u32,
 }
 struct Neuron {
   pos: vec2<f32>,
@@ -559,6 +638,15 @@ struct Pulse { pos: f32, amp: f32, pad0: f32, pad1: f32 }
 @group(0) @binding(4) var<storage, read> edgeIds: array<u32>;
 @group(0) @binding(5) var<storage, read> pulseIds: array<u32>;
 @group(0) @binding(6) var<storage, read> neuronIds: array<u32>;
+
+// Axons and the pulses on them are cool colors: teal excites, violet
+// inhibits. A cell that fires flashes gold, which nothing on an axon uses, so
+// a firing cell cannot be mistaken for a pulse passing by.
+const EXCITE = vec3<f32>(0.05, 0.58, 0.55);
+const INHIBIT = vec3<f32>(0.56, 0.30, 0.92);
+const PULSE_EXCITE = vec3<f32>(0.50, 1.0, 0.92);
+const PULSE_INHIBIT = vec3<f32>(0.80, 0.66, 1.0);
+const FIRE = vec3<f32>(1.0, 0.78, 0.30);
 
 struct EdgeOut {
   @builtin(position) clip: vec4<f32>,
@@ -617,9 +705,9 @@ fn emitEdge(synIndex: u32, corner: u32) -> EdgeOut {
   if (corner == 1u || corner == 4u || corner == 5u) { along = 1.0; }
   if (corner == 2u || corner == 3u || corner == 5u) { side = 1.0; }
   out.clip = toClip(mix(start, endp, along) + nrm * halfW * side);
-  var rgb = vec3<f32>(0.85, 0.0, 0.0);
+  var rgb = INHIBIT;
   if (syn.learned > 0.0) { rgb = vec3<f32>(1.0); }
-  else if (syn.weight >= 0.0) { rgb = vec3<f32>(0.0, 0.50, 0.0); }
+  else if (syn.weight >= 0.0) { rgb = EXCITE; }
   out.color = vec4<f32>(rgb, mix(0.22, 0.78, abs(syn.weight)));
   return out;
 }
@@ -657,9 +745,10 @@ fn emitLine(synIndex: u32, end: u32) -> EdgeOut {
   let nrm = vec2<f32>(-dir.y, dir.x);
   let inset = select(a + dir * rad, b - dir * (rad * 1.15), end == 1u);
   out.clip = toClip(inset + nrm * syn.lateral * z);
-  var rgb = vec3<f32>(0.90, 0.05, 0.05);
+  // A 1px line carries less color than a quad, so it is drawn a little brighter.
+  var rgb = INHIBIT * 1.1;
   if (syn.learned > 0.0) { rgb = vec3<f32>(1.0); }
-  else if (syn.weight >= 0.0) { rgb = vec3<f32>(0.0, 0.55, 0.05); }
+  else if (syn.weight >= 0.0) { rgb = EXCITE * 1.1; }
   out.color = vec4<f32>(rgb, mix(0.35, 0.95, abs(syn.weight)));
   return out;
 }
@@ -672,6 +761,15 @@ fn vsLine(@builtin(vertex_index) vi: u32) -> EdgeOut {
 @vertex
 fn vsLineCulled(@builtin(vertex_index) vi: u32) -> EdgeOut {
   return emitLine(edgeIds[vi / 2u], vi % 2u);
+}
+
+// Matches sampledEdge in the compute shader, so the same axons are drawn
+// whether or not the view is culled.
+@vertex
+fn vsLineSampled(@builtin(vertex_index) vi: u32) -> EdgeOut {
+  let run = vi / 2u;
+  let pick = run * params.edgeSkip + ((run * 2654435761u) >> 8u) % params.edgeSkip;
+  return emitLine(pick, vi % 2u);
 }
 
 fn emitPulse(synIndex: u32, corner: u32) -> DiscOut {
@@ -698,8 +796,8 @@ fn emitPulse(synIndex: u32, corner: u32) -> DiscOut {
   let pr = cell * mix(0.45, 0.75, abs(syn.weight));
   out.clip = toClip(center + uv * pr);
   out.uv = uv;
-  var rgb = vec3<f32>(1.0, 0.72, 0.72);
-  if (syn.weight >= 0.0) { rgb = vec3<f32>(0.78, 1.0, 0.78); }
+  var rgb = PULSE_INHIBIT;
+  if (syn.weight >= 0.0) { rgb = PULSE_EXCITE; }
   out.color = vec4<f32>(rgb, 1.0);
   out.charge = 0.0;
   out.recover = 0.0;
@@ -757,11 +855,14 @@ fn fsDisc(in: DiscOut) -> @location(0) vec4<f32> {
   let rim = smoothstep(0.74, 0.90, d);
   var fill = vec3<f32>(0.22, 0.22, 0.22);
   if (in.recover > 0.001) {
-    fill = vec3<f32>(in.recover);
+    // Gold at the moment of firing, deepening to amber and then dark as the
+    // cell recovers.
+    let r = in.recover;
+    fill = FIRE * vec3<f32>(r, r * (0.55 + 0.45 * r), r * r);
   } else {
     let chargeR = clamp(in.charge, 0.0, 1.0) * 0.74;
     let blob = 1.0 - smoothstep(chargeR - aa, chargeR + aa, d);
-    fill = mix(fill, vec3<f32>(0.0, 0.50, 0.0), blob);
+    fill = mix(fill, EXCITE, blob);
   }
   let rgb = mix(fill, vec3<f32>(0.0, 0.0, 0.0), rim);
   return vec4<f32>(rgb, alpha);
@@ -948,6 +1049,122 @@ function connectNearest(xs, ys, k) {
   return { neighbors, counts, kUse };
 }
 
+// Scale-invariant wiring. Each cell draws k partners with probability
+// proportional to 1/d^2, which in two dimensions puts the same number of
+// connections in every octave of distance: axon lengths are log-uniform from
+// the cell spacing up to the width of the network, with no preferred scale.
+// A partner is drawn by picking a log-uniform distance and a uniform
+// direction, then taking the cell that owns that point, so each connection
+// costs the same however large the network is.
+function connectScaleInvariant(xs, ys, k, spacing) {
+  const n = xs.length;
+  const kUse = Math.max(0, Math.min(k, n - 1));
+  const neighbors = new Int32Array(Math.max(1, n * kUse));
+  const counts = new Uint16Array(n);
+  if (kUse === 0 || n < 2) return { neighbors, counts, kUse };
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], y = ys[i];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const span = Math.max(maxX - minX, maxY - minY, 1);
+  // About one cell per grid square, so the 3x3 block around a point always
+  // holds the cell that owns it.
+  const cell = Math.max(spacing, span / (2 * Math.sqrt(n)));
+  const inv = 1 / cell;
+  const cols = Math.floor((maxX - minX) * inv) + 1;
+  const rows = Math.floor((maxY - minY) * inv) + 1;
+  const nCells = cols * rows;
+  const cellOf = new Uint32Array(n);
+  const cellStart = new Uint32Array(nCells + 1);
+  for (let i = 0; i < n; i++) {
+    const id = Math.floor((ys[i] - minY) * inv) * cols + Math.floor((xs[i] - minX) * inv);
+    cellOf[i] = id;
+    cellStart[id + 1]++;
+  }
+  for (let c = 0; c < nCells; c++) cellStart[c + 1] += cellStart[c];
+  // Positions are copied into grid order: a row of squares is one contiguous
+  // run, so each lookup scans three short runs of memory.
+  const cursor = cellStart.slice(0, nCells);
+  const items = new Uint32Array(n);
+  const gx = new Float32Array(n);
+  const gy = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const slot = cursor[cellOf[i]]++;
+    items[slot] = i;
+    gx[slot] = xs[i];
+    gy[slot] = ys[i];
+  }
+
+  // Closer than half the spacing is the cell itself; farther than the span
+  // is off the network.
+  const rMin = spacing * 0.5;
+  const logRange = Math.log(Math.max(span / rMin, 1));
+  // A point this far from every cell is outside the network.
+  const reach2 = (spacing * 0.75) * (spacing * 0.75);
+  const TAU = Math.PI * 2;
+  const maxTries = 40 * kUse;
+  const picked = new Int32Array(kUse);
+  let axonLength = 0;
+  for (let i = 0; i < n; i++) {
+    const px = xs[i], py = ys[i];
+    let filled = 0;
+    for (let tries = 0; filled < kUse && tries < maxTries; tries++) {
+      const r = rMin * Math.exp(Math.random() * logRange);
+      const angle = Math.random() * TAU;
+      const tx = px + r * Math.cos(angle);
+      const ty = py + r * Math.sin(angle);
+      const cx = Math.floor((tx - minX) * inv);
+      const cy = Math.floor((ty - minY) * inv);
+      if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) continue;
+      const x0 = cx > 0 ? cx - 1 : 0;
+      const x1 = cx < cols - 1 ? cx + 1 : cx;
+      const y0 = cy > 0 ? cy - 1 : 0;
+      const y1 = cy < rows - 1 ? cy + 1 : cy;
+      let best = -1;
+      let bestD = reach2;
+      for (let y = y0; y <= y1; y++) {
+        const row = y * cols;
+        const end = cellStart[row + x1 + 1];
+        for (let t = cellStart[row + x0]; t < end; t++) {
+          const dx = gx[t] - tx;
+          const dy = gy[t] - ty;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD) { bestD = d2; best = t; }
+        }
+      }
+      if (best < 0) continue;
+      const j = items[best];
+      if (j === i) continue;
+      let seen = false;
+      for (let t = 0; t < filled; t++) if (picked[t] === j) { seen = true; break; }
+      if (seen) continue;
+      picked[filled++] = j;
+      axonLength += r;
+    }
+    // Sort by index so a reverse edge can be found with a binary search.
+    for (let a = 1; a < filled; a++) {
+      const j = picked[a];
+      let b = a;
+      while (b > 0 && picked[b - 1] > j) {
+        picked[b] = picked[b - 1];
+        b--;
+      }
+      picked[b] = j;
+    }
+    const base = i * kUse;
+    for (let t = 0; t < filled; t++) neighbors[base + t] = picked[t];
+    counts[i] = filled;
+  }
+  // The network is a disc as wide as the span.
+  const axonDensity = axonLength / (Math.PI * span * span / 4);
+  return { neighbors, counts, kUse, axonDensity };
+}
+
 function listsNeighbor(neighbors, counts, kUse, neuron, target) {
   let lo = 0;
   let hi = counts[neuron];
@@ -1023,6 +1240,33 @@ function buildPick(xs, ys, rad) {
         }
       }
       return best;
+    },
+    // Appends every cell within maxDist of the point.
+    collect(x, y, maxDist, into) {
+      const maxD2 = maxDist * maxDist;
+      const cx = Math.floor(x / cell);
+      const cy = Math.floor(y / cell);
+      const reach = Math.max(1, Math.ceil(maxDist / cell));
+      const y0 = Math.max(0, cy - reach);
+      const y1 = cy + reach;
+      const x0 = Math.max(0, cx - reach);
+      const x1 = cx + reach;
+      for (let yb = y0; yb <= y1; yb++) {
+        const row = yb * cols;
+        if (row >= cellStart.length - 1) break;
+        for (let xb = x0; xb <= x1; xb++) {
+          const id = row + xb;
+          if (id < 0 || id + 1 >= cellStart.length) continue;
+          const a = cellStart[id];
+          const b = cellStart[id + 1];
+          for (let t = a; t < b; t++) {
+            const i = items[t];
+            const dx = xs[i] - x;
+            const dy = ys[i] - y;
+            if (dx * dx + dy * dy <= maxD2) into.push(i);
+          }
+        }
+      }
     }
   };
 }
@@ -1050,7 +1294,9 @@ function makeStorage(size, mapped) {
 function uploadNetwork(xs, ys, k) {
   const n = xs.length;
   console.time('wire network');
-  const linked = connectNearest(xs, ys, k);
+  const linked = scaleInvariant
+    ? connectScaleInvariant(xs, ys, k, radius / RADIUS_PER_GAP)
+    : connectNearest(xs, ys, k);
   const { neighbors, counts, kUse } = linked;
   const outStart = new Uint32Array(n);
   const outCount = new Uint32Array(n);
@@ -1128,6 +1374,7 @@ function uploadNetwork(xs, ys, k) {
   destroyLater(old);
   nNeurons = n;
   nSynapses = nSyn;
+  axonDensity = linked.axonDensity || 0;
   cpuX = xs;
   cpuY = ys;
   pick = buildPick(xs, ys, radius);
@@ -1167,7 +1414,7 @@ function writeParams(stepDt) {
   paramsView.setFloat32(96, view.panX, true);
   paramsView.setFloat32(100, view.panY, true);
   paramsView.setUint32(104, viewChoices.cullMask, true);
-  paramsView.setUint32(108, 0, true);
+  paramsView.setUint32(108, viewChoices.edgeSkip, true);
   speedSlider.dataset.refractory = refractory.toFixed(2);
   document.getElementById('speed-label').textContent = `${velocity} px/s`;
   document.getElementById('speed-note').textContent = `refractory ${refractory.toFixed(2)}s`;
@@ -1224,7 +1471,10 @@ function chooseView() {
   if (zoomedIn) cullMask |= 1;
   if (showNeurons && zoomedIn) cullMask |= 2;
   if (cullPulses) cullMask |= 4;
-  viewChoices = { zoomedIn, cullPulses, quads, showNeurons, cullMask, edgeStride: quads ? 6 : 2 };
+  // Average number of 1px axons stacked on each pixel of the network.
+  const depth = axonDensity / Math.max(z, 0.001);
+  const edgeSkip = !quads && depth > MAX_AXON_DEPTH ? Math.floor(depth / MAX_AXON_DEPTH) : 1;
+  viewChoices = { zoomedIn, cullPulses, quads, showNeurons, cullMask, edgeStride: quads ? 6 : 2, edgeSkip };
 }
 
 function bindGroups() {
@@ -1286,10 +1536,32 @@ function rebuildNetwork() {
   document.getElementById('neighbors-label').textContent = String(k);
 }
 
+// Fills every cell under the right-click brush up to threshold. Cells still
+// in their refractory period hold the charge and fire on the step it ends.
+function gatherBrush() {
+  const world = screenToWorld(pointer.x, pointer.y);
+  stimList.length = 0;
+  pick.collect(world.x, world.y, (canvas.width * STIM_RADIUS) / view.zoom, stimList);
+  const n = stimList.length;
+  if (!n) return 0;
+  const count = Math.min(n, MAX_STIM);
+  const start = n <= MAX_STIM ? 0 : stimCursor % n;
+  for (let k = 0; k < count; k++) {
+    const o = k * 4;
+    stimU32[o] = stimList[(start + k) % n];
+    stimF32[o + 1] = 1;
+  }
+  stimCursor = start + count;
+  device.queue.writeBuffer(stimBuffer, 0, stimCPU, 0, count * 16);
+  return count;
+}
+
 function gatherStim(stepDt) {
   const click = pointer.click;
   pointer.click = false;
-  if (!running || !pick || pointer.dragging || !pointer.inside) return 0;
+  if (!running || !pick || !pointer.inside) return 0;
+  if (pointer.stimulating) return gatherBrush();
+  if (pointer.dragging) return 0;
   const world = screenToWorld(pointer.x, pointer.y);
   const maxDist = Math.max(radius * 2.4, 16 / view.zoom);
   const index = pick.nearest(world.x, world.y, maxDist);
@@ -1335,6 +1607,9 @@ function render(encoder) {
     } else if (choice.quads) {
       pass.setPipeline(pipelines.edge);
       pass.draw(nSynapses * 6);
+    } else if (choice.edgeSkip > 1) {
+      pass.setPipeline(pipelines.lineSampled);
+      pass.draw(Math.floor(nSynapses / choice.edgeSkip) * 2);
     } else {
       pass.setPipeline(pipelines.line);
       pass.draw(nSynapses * 2);
@@ -1359,26 +1634,116 @@ function render(encoder) {
   pass.end();
 }
 
-function maybeReadStats(now) {
-  if (statsPending || now - statsSnapshot.t < 1000) return;
+// Fills graphRates from the ring and returns the index of the first entry
+// that this network has filled; earlier ones are left at zero.
+function collectRates() {
+  const ring = graphBins.length;
+  const filling = Math.floor(Math.max(graphTime, 0) * GRAPH_BINS_PER_SECOND);
+  const oldest = filling - GRAPH_BINS;
+  const start = Math.min(GRAPH_BINS, Math.max(0, graphStart - oldest));
+  graphRates.fill(0, 0, start);
+  for (let i = start; i < GRAPH_BINS; i++) {
+    graphRates[i] = graphBins[(oldest + i) % ring] * GRAPH_BINS_PER_SECOND;
+  }
+  return start;
+}
+
+function drawFiringGraph() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(graphSize.w * dpr));
+  const h = Math.max(1, Math.round(graphSize.h * dpr));
+  if (graphCanvas.width !== w || graphCanvas.height !== h) {
+    graphCanvas.width = w;
+    graphCanvas.height = h;
+  }
+  const start = collectRates();
+  graphCtx.clearRect(0, 0, w, h);
+  if (start >= GRAPH_BINS) {
+    graphRange.textContent = '';
+    return;
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = start; i < GRAPH_BINS; i++) {
+    const rate = graphRates[i];
+    if (rate < lo) lo = rate;
+    if (rate > hi) hi = rate;
+  }
+  // The axis spans the lowest to the highest rate in view rather than
+  // starting at zero, so a ripple on a busy network fills the height.
+  const pad = 3 * dpr;
+  const scale = hi > lo ? (h - 2 * pad) / (hi - lo) : 0;
+  const step = w / GRAPH_BINS;
+  graphCtx.beginPath();
+  for (let i = start; i < GRAPH_BINS; i++) {
+    const x = (i + 0.5) * step;
+    const y = h - pad - (graphRates[i] - lo) * scale;
+    if (i === start) graphCtx.moveTo(x, y);
+    else graphCtx.lineTo(x, y);
+  }
+  graphCtx.strokeStyle = '#4d9be6';
+  graphCtx.lineWidth = 1.25 * dpr;
+  graphCtx.lineJoin = 'round';
+  graphCtx.stroke();
+  const low = Math.round(lo).toLocaleString();
+  const high = Math.round(hi).toLocaleString();
+  graphRange.textContent = low === high ? `${high}/s` : `${low} – ${high}/s`;
+}
+
+// Adds the fires counted up to simulation time t, spread over the bins that
+// have passed since the last reading.
+function plotFires(fires, t) {
+  if (graphTime < 0 || t < graphTime) {
+    // The first reading, or the first from a rebuilt network. The bin it
+    // lands in is only part counted, so the graph starts with the next one.
+    graphBins.fill(0);
+    graphFires = fires;
+    graphTime = t;
+    graphStart = Math.floor(t * GRAPH_BINS_PER_SECOND) + 1;
+    drawFiringGraph();
+    return;
+  }
+  const dt = t - graphTime;
+  if (dt <= 0) return;
+  const count = (fires - graphFires) >>> 0; // the counter wraps at 2^32
+  const ring = graphBins.length;
+  const first = Math.floor(graphTime * GRAPH_BINS_PER_SECOND);
+  const last = Math.floor(t * GRAPH_BINS_PER_SECOND);
+  for (let bin = Math.max(first, last - GRAPH_BINS); bin <= last; bin++) {
+    if (bin > first) graphBins[bin % ring] = 0;
+    const from = Math.max(graphTime, bin / GRAPH_BINS_PER_SECOND);
+    const to = Math.min(t, (bin + 1) / GRAPH_BINS_PER_SECOND);
+    graphBins[bin % ring] += count * Math.max(0, to - from) / dt;
+  }
+  graphFires = fires;
+  graphTime = t;
+  if (last !== first) drawFiringGraph();
+}
+
+// The counters were copied out in the frame's own command buffer, so they
+// hold exactly the fires up to that frame's simulation time.
+function readStats(sampleTime) {
   statsPending = true;
-  const encoder = device.createCommandEncoder();
-  encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, 16);
-  device.queue.submit([encoder.finish()]);
   stagingBuffer.mapAsync(GPUMapMode.READ).then(() => {
-    const raw = new Uint32Array(stagingBuffer.getMappedRange().slice(0));
+    const raw = new Uint32Array(stagingBuffer.getMappedRange());
+    const fires = raw[0];
+    const strengthen = raw[1];
+    const weaken = raw[2];
     stagingBuffer.unmap();
+    statsPending = false;
+    plotFires(fires, sampleTime);
+    // The numbers in the readout stay averaged over a second.
     const t = performance.now();
-    const dt = Math.max(0.001, (t - statsSnapshot.t) / 1000);
+    if (t - statsSnapshot.t < 1000) return;
+    const dt = (t - statsSnapshot.t) / 1000;
     const delta = (next, prev) => {
       const d = next >= prev ? next - prev : (next + 2 ** 32) - prev;
       return d / dt;
     };
-    measured.fires = delta(raw[0], statsSnapshot.fires);
-    measured.strengthen = delta(raw[1], statsSnapshot.strengthen);
-    measured.weaken = delta(raw[2], statsSnapshot.weaken);
-    statsSnapshot = { fires: raw[0], strengthen: raw[1], weaken: raw[2], t };
-    statsPending = false;
+    measured.fires = delta(fires, statsSnapshot.fires);
+    measured.strengthen = delta(strengthen, statsSnapshot.strengthen);
+    measured.weaken = delta(weaken, statsSnapshot.weaken);
+    statsSnapshot = { fires, strengthen, weaken, t };
   }).catch((error) => {
     statsPending = false;
     console.warn(error);
@@ -1430,6 +1795,7 @@ function frameBody(now) {
     const sx = canvas.width / resize.oldW;
     const sy = canvas.height / resize.oldH;
     radius *= Math.sqrt(Math.abs(sx * sy));
+    axonDensity /= Math.sqrt(Math.abs(sx * sy));
     for (let i = 0; i < cpuX.length; i++) {
       cpuX[i] *= sx;
       cpuY[i] *= sy;
@@ -1479,7 +1845,12 @@ function frameBody(now) {
   if (viewChoices.cullMask) dispatch(pass, pipelines.finalizeIndirect, 1);
   pass.end();
   render(encoder);
+  // The graph wants a reading every step; a paused net only needs the
+  // once-a-second readout.
+  const sampling = !statsPending && (doStep || now - statsSnapshot.t >= 1000);
+  if (sampling) encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, 16);
   device.queue.submit([encoder.finish()]);
+  if (sampling) readStats(simTime);
 
   const perNeuron = nNeurons > 0 ? measured.fires / nNeurons : 0;
   statFps.textContent = String(fps);
@@ -1489,8 +1860,6 @@ function frameBody(now) {
   statFiring.textContent = `${Math.round(measured.fires).toLocaleString()}/s`;
   statTime.textContent = `${simTime.toFixed(1)}s`;
   statFiring.title = `${perNeuron.toFixed(3)} per neuron`;
-
-  maybeReadStats(now);
 }
 
 function shaderErrorText(info) {
@@ -1598,6 +1967,7 @@ async function init() {
   pipelines.edgeCulled = makeRenderPipeline(renderModule, 'vsEdgeCulled', 'fsEdge');
   pipelines.line = makeRenderPipeline(renderModule, 'vsLine', 'fsEdge', 'line-list');
   pipelines.lineCulled = makeRenderPipeline(renderModule, 'vsLineCulled', 'fsEdge', 'line-list');
+  pipelines.lineSampled = makeRenderPipeline(renderModule, 'vsLineSampled', 'fsEdge', 'line-list');
   pipelines.pulse = makeRenderPipeline(renderModule, 'vsPulse', 'fsDisc');
   pipelines.pulseCulled = makeRenderPipeline(renderModule, 'vsPulseCulled', 'fsDisc');
   pipelines.neuron = makeRenderPipeline(renderModule, 'vsNeuron', 'fsDisc');
@@ -1665,6 +2035,12 @@ function pointerPos(event) {
 }
 
 canvas.addEventListener('pointerdown', (event) => {
+  if (event.button === 2) {
+    pointerPos(event);
+    pointer.stimulating = true;
+    try { canvas.setPointerCapture(event.pointerId); } catch (error) {}
+    return;
+  }
   if (event.button !== 0) return;
   pointerPos(event);
   pointer.down = true;
@@ -1675,6 +2051,11 @@ canvas.addEventListener('pointerdown', (event) => {
 canvas.addEventListener('pointermove', pointerPos);
 canvas.addEventListener('pointerup', (event) => {
   pointerPos(event);
+  if (event.button === 2) {
+    pointer.stimulating = false;
+    canvas.style.cursor = 'crosshair';
+    return;
+  }
   if (pointer.down && !pointer.dragging) pointer.click = true;
   pointer.down = false;
   pointer.dragging = false;
@@ -1684,6 +2065,7 @@ canvas.addEventListener('pointerleave', () => {
   pointer.inside = false;
   pointer.down = false;
   pointer.dragging = false;
+  pointer.stimulating = false;
   canvas.style.cursor = 'crosshair';
 });
 canvas.addEventListener('wheel', (event) => {
@@ -1715,6 +2097,14 @@ document.getElementById('sleep').addEventListener('click', () => { sleepRequeste
 document.getElementById('reset').addEventListener('click', () => { rebuildRequested = true; });
 document.getElementById('fit').addEventListener('click', () => fitView());
 
+scaleBox.addEventListener('change', () => {
+  scaleInvariant = scaleBox.checked;
+  wiringNote.textContent = scaleInvariant
+    ? 'partners drawn at random, p ∝ 1/d²'
+    : 'Nearest neighbors';
+  rebuildRequested = true;
+});
+
 neuronSlider.addEventListener('input', updateNeuronLabel);
 neighborSlider.addEventListener('input', () => {
   document.getElementById('neighbors-label').textContent = neighborSlider.value;
@@ -1722,12 +2112,21 @@ neighborSlider.addEventListener('input', () => {
 });
 neuronSlider.addEventListener('change', () => { rebuildRequested = true; });
 neighborSlider.addEventListener('change', () => { rebuildRequested = true; });
+new ResizeObserver((entries) => {
+  const box = entries[0].contentRect;
+  graphSize.w = box.width;
+  graphSize.h = box.height;
+  drawFiringGraph();
+}).observe(graphCanvas);
 window.addEventListener('resize', () => {});
 
 window.__gpuNeurons = {
   get neurons() { return nNeurons; },
   get synapses() { return nSynapses; },
+  get scaleInvariant() { return scaleInvariant; },
+  get edgeSkip() { return viewChoices.edgeSkip; },
   get firing() { return nNeurons ? measured.fires / nNeurons : 0; },
+  get firingHistory() { collectRates(); return Array.from(graphRates); },
   get learning() { return measured; },
   get fps() { return fps; },
   get time() { return simTime; },

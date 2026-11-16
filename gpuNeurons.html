@@ -135,8 +135,9 @@
     <input id="neighbors" type="range" min="1" max="16" step="1" value="8">
   </div>
   <div class="row">
-    <label class="check" for="scale-invariant"><input type="checkbox" id="scale-invariant" checked>Scale invariant</label>
-    <div class="note" id="wiring-note">partners drawn at random, p ∝ 1/d²</div>
+    <div class="top"><label for="scale-invariant">Scale invariant</label><span class="val" id="scale-invariant-label">10%</span></div>
+    <input id="scale-invariant" type="range" min="0" max="100" step="1" value="10">
+    <div class="note">these cells draw partners at random, p ∝ 1/d²; the rest wire to nearest neighbors</div>
   </div>
   <div class="row">
     <div class="top"><label for="speed">Conduction speed</label><span class="val" id="speed-label">200 px/s</span></div>
@@ -168,8 +169,8 @@
 //   * STDP: a spike that arrives just before the postsynaptic cell fires
 //     strengthens the synapse (LTP); one that arrives just after weakens it (LTD)
 //
-// Each cell connects to its k nearest neighbors or, with scale-invariant
-// wiring, to k partners drawn at random with probability 1/d^2. Cells sit on
+// Each cell connects to its k nearest neighbors or, for the scale-invariant
+// fraction of cells, to k partners drawn at random with probability 1/d^2. Cells sit on
 // concentric rings, matching the CPU page. The compute step is one dispatch
 // over cells and one over synapses. An axon is drawn only while a pulse is
 // travelling on it, and every cell is drawn at least 2 pixels in radius.
@@ -210,8 +211,8 @@ const neighborSlider = document.getElementById('neighbors');
 const speedSlider = document.getElementById('speed');
 const runButton = document.getElementById('run');
 const learnButton = document.getElementById('learn');
-const scaleBox = document.getElementById('scale-invariant');
-const wiringNote = document.getElementById('wiring-note');
+const scaleSlider = document.getElementById('scale-invariant');
+const scaleLabel = document.getElementById('scale-invariant-label');
 
 let device, context, format;
 let computeBindGroup, renderBindGroup;
@@ -232,7 +233,7 @@ let radius = 8;
 let simTime = 0;
 let running = true;
 let learning = true;
-let scaleInvariant = true;
+let scaleFraction = 0.1;
 let weightDelta = 0;
 let sleepRequested = false;
 let rebuildRequested = false;
@@ -939,7 +940,8 @@ function layoutNeurons(n, w, h, rad) {
 
 // k nearest neighbors via a uniform grid. The search stops once the kth
 // neighbor is closer than every cell that has not been visited yet.
-function connectNearest(xs, ys, k) {
+// Only cells with only[i] set are wired; the rest are left with no partners.
+function connectNearest(xs, ys, k, only) {
   const n = xs.length;
   const kUse = Math.max(0, Math.min(k, n - 1));
   const neighbors = new Int32Array(Math.max(1, n * kUse));
@@ -985,6 +987,7 @@ function connectNearest(xs, ys, k) {
   const bestJ = new Int32Array(kUse);
   const bestD = new Float32Array(kUse);
   for (let i = 0; i < n; i++) {
+    if (!only[i]) continue;
     const px = xs[i], py = ys[i];
     const ix = ixOf[i], iy = iyOf[i];
     let filled = 0;
@@ -1054,8 +1057,9 @@ function connectNearest(xs, ys, k) {
 // the cell spacing up to the width of the network, with no preferred scale.
 // A partner is drawn by picking a log-uniform distance and a uniform
 // direction, then taking the cell that owns that point, so each connection
-// costs the same however large the network is.
-function connectScaleInvariant(xs, ys, k, spacing) {
+// costs the same however large the network is. Only cells with only[i] set
+// are wired.
+function connectScaleInvariant(xs, ys, k, spacing, only) {
   const n = xs.length;
   const kUse = Math.max(0, Math.min(k, n - 1));
   const neighbors = new Int32Array(Math.max(1, n * kUse));
@@ -1109,6 +1113,7 @@ function connectScaleInvariant(xs, ys, k, spacing) {
   const maxTries = 40 * kUse;
   const picked = new Int32Array(kUse);
   for (let i = 0; i < n; i++) {
+    if (!only[i]) continue;
     const px = xs[i], py = ys[i];
     let filled = 0;
     for (let tries = 0; filled < kUse && tries < maxTries; tries++) {
@@ -1289,10 +1294,21 @@ function makeStorage(size, mapped) {
 function uploadNetwork(xs, ys, k) {
   const n = xs.length;
   console.time('wire network');
-  const linked = scaleInvariant
-    ? connectScaleInvariant(xs, ys, k, radius / RADIUS_PER_GAP)
-    : connectNearest(xs, ys, k);
-  const { neighbors, counts, kUse } = linked;
+  const longRange = new Uint8Array(n);
+  const local = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (Math.random() < scaleFraction) longRange[i] = 1;
+    else local[i] = 1;
+  }
+  const near = connectNearest(xs, ys, k, local);
+  const far = connectScaleInvariant(xs, ys, k, radius / RADIUS_PER_GAP, longRange);
+  const { neighbors, counts, kUse } = near;
+  for (let i = 0; i < n; i++) {
+    if (!longRange[i]) continue;
+    const base = i * kUse;
+    for (let t = 0; t < far.counts[i]; t++) neighbors[base + t] = far.neighbors[base + t];
+    counts[i] = far.counts[i];
+  }
   const outStart = new Uint32Array(n);
   const outCount = new Uint32Array(n);
   const inCount = new Uint32Array(n);
@@ -2071,13 +2087,11 @@ document.getElementById('sleep').addEventListener('click', () => { sleepRequeste
 document.getElementById('reset').addEventListener('click', () => { rebuildRequested = true; });
 document.getElementById('fit').addEventListener('click', () => fitView());
 
-scaleBox.addEventListener('change', () => {
-  scaleInvariant = scaleBox.checked;
-  wiringNote.textContent = scaleInvariant
-    ? 'partners drawn at random, p ∝ 1/d²'
-    : 'Nearest neighbors';
-  rebuildRequested = true;
+scaleSlider.addEventListener('input', () => {
+  scaleFraction = Number(scaleSlider.value) / 100;
+  scaleLabel.textContent = `${scaleSlider.value}%`;
 });
+scaleSlider.addEventListener('change', () => { rebuildRequested = true; });
 
 neuronSlider.addEventListener('input', updateNeuronLabel);
 neighborSlider.addEventListener('input', () => {
@@ -2097,7 +2111,7 @@ window.addEventListener('resize', () => {});
 window.__gpuNeurons = {
   get neurons() { return nNeurons; },
   get synapses() { return nSynapses; },
-  get scaleInvariant() { return scaleInvariant; },
+  get scaleFraction() { return scaleFraction; },
   get firing() { return nNeurons ? measured.fires / nNeurons : 0; },
   get firingHistory() { collectRates(); return Array.from(graphRates); },
   get learning() { return measured; },

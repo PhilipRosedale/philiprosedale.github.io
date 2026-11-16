@@ -1904,7 +1904,10 @@ async function init() {
     maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage
   };
   device = await adapter.requestDevice({ requiredLimits });
-  maxSynapses = Math.floor(Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize) / 32);
+  // Chrome refuses to map a buffer near 2 GiB at creation, even when the
+  // device limits allow it, so the synapse buffer stays at or under 1 GiB.
+  const synapseBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 2 ** 30);
+  maxSynapses = Math.floor(synapseBytes / 32);
   neuronSlider.value = String(neuronsToSlider(50000));
   updateNeuronLabel();
   device.addEventListener('uncapturederror', (event) => {

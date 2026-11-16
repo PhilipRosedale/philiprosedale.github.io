@@ -141,7 +141,7 @@
   </div>
   <div class="row">
     <div class="top"><label for="speed">Conduction speed</label><span class="val" id="speed-label">200 px/s</span></div>
-    <input id="speed" type="range" min="50" max="800" step="10" value="200">
+    <input id="speed" type="range" min="10" max="500" step="10" value="200">
     <div class="note" id="speed-note">refractory 0.75s</div>
   </div>
   <div class="group">Readout</div>
@@ -164,7 +164,8 @@
 // canvas can hold thousands of cells instead of a couple of hundred:
 //
 //   * leaky integrate-and-fire (charge leaks; a cell fires at threshold)
-//   * absolute refractory period, scaled inversely with conduction speed
+//   * absolute refractory period
+//   * every time constant scales with conduction speed
 //   * one pulse in flight per axon, moving at a fixed speed in pixels/sec
 //   * STDP: a spike that arrives just before the postsynaptic cell fires
 //     strengthens the synapse (LTP); one that arrives just after weakens it (LTD)
@@ -176,11 +177,15 @@
 // travelling on it, and every cell is drawn at least 2 pixels in radius.
 
 const THRESHOLD = 0.9;
+// Times and rates below hold at BASE_VELOCITY. The speed slider scales all of
+// them by the same factor, so a faster network is the same network sped up.
+const BASE_VELOCITY = 200;           // px/s
 const LEAKAGE = 0.1;                 // charge per second
-const REFRACTORY_CONSTANT = 0.75 * 200; // refractory * velocity, in pixels
+const REFRACTORY = 0.75;
 const STDP_WINDOW = 0.050;
 const TAU_PLUS = 0.020;
 const TAU_MINUS = 0.020;
+const LEARNED_FLASH = 0.15;          // how long a changed synapse shows gray
 const A_PLUS = 0.15;
 const A_MINUS = 0.10;
 // One frame can name this many cells. A brush that holds more is covered
@@ -298,7 +303,7 @@ struct Params {
   oldRes: vec2<f32>,
   res: vec2<f32>,
   zoom: f32,
-  padZ: f32,
+  flash: f32,
   pan: vec2<f32>,
   cullMask: u32,
   hoverNeuron: u32,
@@ -363,7 +368,7 @@ fn bumpWeight(s: u32, delta: f32, strengthen: bool) {
   let w = clamp(oldW + delta, -1.0, 1.0);
   if (w != oldW) {
     syn.weight = w;
-    syn.learned = 0.15;
+    syn.learned = params.flash;
     synapses[s] = syn;
     if (strengthen) { atomicAdd(&stats.strengthen, 1u); }
     else { atomicAdd(&stats.weaken, 1u); }
@@ -586,7 +591,7 @@ struct Params {
   oldRes: vec2<f32>,
   res: vec2<f32>,
   zoom: f32,
-  padZ: f32,
+  flash: f32,
   pan: vec2<f32>,
   cullMask: u32,
   hoverNeuron: u32,
@@ -1398,16 +1403,17 @@ function uploadNetwork(xs, ys, k) {
 
 function writeParams(stepDt) {
   const velocity = Number(speedSlider.value);
-  const refractory = REFRACTORY_CONSTANT / velocity;
+  const speedup = velocity / BASE_VELOCITY;
+  const refractory = REFRACTORY / speedup;
   paramsView.setFloat32(0, stepDt, true);
   paramsView.setFloat32(4, simTime, true);
   paramsView.setFloat32(8, THRESHOLD, true);
-  paramsView.setFloat32(12, LEAKAGE, true);
+  paramsView.setFloat32(12, LEAKAGE * speedup, true);
   paramsView.setFloat32(16, velocity, true);
   paramsView.setFloat32(20, refractory, true);
-  paramsView.setFloat32(24, STDP_WINDOW, true);
-  paramsView.setFloat32(28, TAU_PLUS, true);
-  paramsView.setFloat32(32, TAU_MINUS, true);
+  paramsView.setFloat32(24, STDP_WINDOW / speedup, true);
+  paramsView.setFloat32(28, TAU_PLUS / speedup, true);
+  paramsView.setFloat32(32, TAU_MINUS / speedup, true);
   paramsView.setFloat32(36, A_PLUS, true);
   paramsView.setFloat32(40, A_MINUS, true);
   paramsView.setFloat32(44, learning ? 1 : 0, true);
@@ -1422,7 +1428,7 @@ function writeParams(stepDt) {
   paramsView.setFloat32(80, canvas.width, true);
   paramsView.setFloat32(84, canvas.height, true);
   paramsView.setFloat32(88, view.zoom, true);
-  paramsView.setFloat32(92, 0, true);
+  paramsView.setFloat32(92, LEARNED_FLASH / speedup, true);
   paramsView.setFloat32(96, view.panX, true);
   paramsView.setFloat32(100, view.panY, true);
   paramsView.setUint32(104, viewChoices.cullMask, true);

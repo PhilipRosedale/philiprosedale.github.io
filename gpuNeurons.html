@@ -36,6 +36,7 @@
   #panel .hint .excite { color: #5e8f88; }
   #panel .hint .inhibit { color: #8d7aaa; }
   #panel .hint .fire { color: #f0bf52; }
+  #panel .hint .tired { color: #6f8fd8; }
   .group {
     margin: 16px 0 8px;
     font-size: 10.5px;
@@ -107,13 +108,30 @@
     font-variant-numeric: tabular-nums;
   }
   #status { margin-top: 10px; color: #ff9a9a; font-size: 11px; line-height: 1.35; word-break: break-word; }
+  select {
+    width: 100%;
+    margin: 5px 0 0;
+    background: #212b38;
+    border: 1px solid #2f3c4d;
+    color: #d5e0ee;
+    border-radius: 5px;
+    padding: 5px 6px;
+    font: 12px/1.2 inherit;
+  }
+  #results {
+    margin: 8px 0 0;
+    color: #9fb0c4;
+    font: 10.5px/1.45 ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+  }
+  #results:empty { display: none; }
 </style>
 </head>
 <body>
 <aside id="panel">
   <h1>GPU Neurons</h1>
   <p class="sub"><a href="interactiveNeurons.html">CPU version</a></p>
-  <p class="hint">Scroll to zoom, drag to pan, click a neuron to fire it. Hover a neuron to show its dendrites. Right-click stimulates every cell in a small patch, and each fires again as soon as it recovers. <span class="excite">Teal</span> axons excite, <span class="inhibit">violet</span> inhibit, and an axon is drawn only while a pulse travels on it. White just changed weight. A cell flashes <span class="fire">gold</span> when it fires.</p>
+  <p class="hint">Scroll to zoom, drag to pan, click a neuron to fire it. Hover a neuron to show its dendrites. Right-click stimulates every cell in a small patch, and each fires again as soon as it recovers. <span class="excite">Teal</span> axons excite, <span class="inhibit">violet</span> inhibit, and an axon is drawn only while a pulse travels on it. White just changed weight. A cell flashes <span class="fire">gold</span> when it fires and turns <span class="tired">blue</span> as it tires.</p>
   <div class="group">Run</div>
   <div class="buttons">
     <button type="button" id="run" class="on">Stop</button>
@@ -144,15 +162,42 @@
     <input id="speed" type="range" min="10" max="500" step="10" value="200">
     <div class="note" id="speed-note">refractory 0.75s</div>
   </div>
+  <div class="group">Homeostasis</div>
+  <div class="buttons">
+    <button type="button" id="fatigue" class="on">Fatigue</button>
+    <button type="button" id="inhib-learning" class="on">Inhib. learning</button>
+    <button type="button" id="compensate">Compensate</button>
+  </div>
+  <p class="hint">Fatigue raises a cell's threshold and drains its charge each time it fires, and fades over about 15 seconds. Inhibitory learning strengthens the inhibition onto any cell firing faster than 0.05/s and weakens it onto quieter ones. Compensate raises a cell's threshold whenever one of its inputs strengthens.</p>
+  <div class="group">Stimulus</div>
+  <div class="row">
+    <div class="top"><label for="ring-pattern">Outer ring</label></div>
+    <select id="ring-pattern">
+      <option value="">Off</option>
+      <option value="cw">Clockwise sweep</option>
+      <option value="ccw">Counter-clockwise sweep</option>
+      <option value="fast">Fast clockwise sweep</option>
+      <option value="quadA">Quadrants 1 + 3</option>
+      <option value="quadB">Quadrants 2 + 4</option>
+    </select>
+    <div class="note">repeats every 2s at 200 px/s</div>
+  </div>
+  <div class="buttons">
+    <button type="button" id="novelty-test">Novelty test</button>
+  </div>
+  <div class="row"><div class="note">teaches a pattern, then a new one, then the first again; add ?familiar=quadA&amp;novel=quadB to the URL to use separate cells</div></div>
+  <pre id="results"></pre>
   <div class="group">Readout</div>
   <div class="stat"><span>Fps</span><b id="stat-fps">—</b></div>
   <div class="stat"><span>Synapses</span><b id="stat-synapses">—</b></div>
   <div class="stat"><span>Zoom</span><b id="stat-zoom">—</b></div>
   <div class="stat"><span>Learning</span><b id="stat-learning">—</b></div>
+  <div class="stat"><span>Inhibition</span><b id="stat-inhibition">—</b></div>
   <div class="stat"><span>Firing</span><b id="stat-firing">—</b></div>
   <canvas id="firing-graph" role="img" aria-label="Firing rate over the last 10 seconds"></canvas>
   <div id="firing-scale"><span>last 10s</span><span id="firing-range"></span></div>
   <div class="stat"><span>Time</span><b id="stat-time">—</b></div>
+  <div class="stat"><span>Seed</span><b id="stat-seed">—</b></div>
   <div id="status"></div>
 </aside>
 <div id="stage"><canvas id="c"></canvas></div>
@@ -169,6 +214,12 @@
 //   * one pulse in flight per axon, moving at a fixed speed in pixels/sec
 //   * STDP: a spike that arrives just before the postsynaptic cell fires
 //     strengthens the synapse (LTP); one that arrives just after weakens it (LTD)
+//   * each synapse keeps the sign it was wired with; STDP acts on excitatory ones
+//   * fatigue: every spike raises the cell's threshold and drains its charge,
+//     decaying back over seconds
+//   * inhibitory plasticity (Vogels-Sprekeler): inhibition onto a cell grows
+//     while it fires above a target rate and shrinks while it fires below
+//   * compensation (optional): LTP onto a cell raises its threshold
 //
 // Each cell connects to its k nearest neighbors or, for the scale-invariant
 // fraction of cells, to k partners drawn at random with probability 1/d^2. Cells sit on
@@ -188,12 +239,66 @@ const TAU_MINUS = 0.020;
 const LEARNED_FLASH = 0.15;          // how long a changed synapse shows gray
 const A_PLUS = 0.15;
 const A_MINUS = 0.10;
+// Fatigue raises a cell's threshold by the same amount it drains, per second,
+// from its charge. The raised threshold is what stops a synchronous wave,
+// whose coincident input no drain can outrun. The drain outpaces the
+// threshold's own decay (1/tau), so a cell held near threshold does not fire
+// just because its fatigue fades. A cell at the refractory ceiling settles
+// near fatigueStep * rate * fatigueTau.
+// Inhibitory plasticity settles each cell at targetRate spikes per second.
+// A cell has about a quarter as many inhibitory inputs as excitatory ones, so
+// learned inhibition may grow past the unit bound excitation is held to.
+// Any of these can be set from the URL, for example ?fatigueStep=0.8.
+const query = new URLSearchParams(location.search);
+const tuning = {
+  fatigueStep: 0.5,
+  // Long enough that the network cannot settle into slow reverberation; a
+  // short one finds an equilibrium near 0.3 spikes per cell per second.
+  fatigueTau: 15,
+  fatigueMax: 3.0,
+  fatigueDrain: 1.0,
+  inhibEta: 0.2,
+  inhibTau: 0.1,
+  targetRate: 0.05,
+  inhibMax: 3.0,
+  compGain: 0.5,
+  compTau: 30,
+  compMax: 1.0
+};
+for (const key of Object.keys(tuning)) {
+  const value = Number(query.get(key));
+  if (query.has(key) && Number.isFinite(value)) tuning[key] = value;
+}
+// The shader adds net inhibitory change into an integer counter at this scale.
+const INHIB_SCALE = 10000;
+const FLAG_FATIGUE = 1;
+const FLAG_INHIB = 2;
+const FLAG_COMPENSATE = 4;
 // One frame can name this many cells. A brush that holds more is covered
 // over successive frames, well within one refractory period.
 const MAX_STIM = 8192;
+// A stimulus fills a cell to its own threshold, however tired it is.
+const STIM_FORCE = 8;
 // Right-click stimulates every cell inside this fraction of the canvas width.
 const STIM_RADIUS = 0.01;
-const PARAMS_BYTES = 112;
+const PARAMS_BYTES = 160;
+// Fires and LTP+LTD are also counted per band: band 0 is the outer ring and
+// bands 1-7 split the rest from the outside in.
+const BANDS = 8;
+const STATS_BYTES = 32 + BANDS * 8;
+// Outer-ring patterns repeat with this period at BASE_VELOCITY.
+const RING_PERIOD = 2.0;
+const PATTERNS = {
+  cw: { sweep: true, dir: 1, rate: 1 },
+  ccw: { sweep: true, dir: -1, rate: 1 },
+  fast: { sweep: true, dir: 1, rate: 1.5 },
+  quadA: { sweep: false, quadrants: [0, 2] },
+  quadB: { sweep: false, quadrants: [1, 3] }
+};
+// The novelty test steps at a fixed dt and records the counters every bin.
+const EXP_DT = 1 / 120;
+const STEPS_PER_BIN = 6;
+const BIN_SECONDS = EXP_DT * STEPS_PER_BIN;
 const NEURON_MIN = 100;
 // Cells are drawn at least this big, so a zoomed-out network stays visible.
 const MIN_CELL_PX = 2;
@@ -208,6 +313,11 @@ const statZoom = document.getElementById('stat-zoom');
 const statLearning = document.getElementById('stat-learning');
 const statFiring = document.getElementById('stat-firing');
 const statTime = document.getElementById('stat-time');
+const statInhibition = document.getElementById('stat-inhibition');
+const statSeed = document.getElementById('stat-seed');
+const resultsEl = document.getElementById('results');
+const ringSelect = document.getElementById('ring-pattern');
+const testButton = document.getElementById('novelty-test');
 const graphCanvas = document.getElementById('firing-graph');
 const graphCtx = graphCanvas.getContext('2d');
 const graphRange = document.getElementById('firing-range');
@@ -230,7 +340,30 @@ const stimCPU = new ArrayBuffer(MAX_STIM * 16);
 const stimU32 = new Uint32Array(stimCPU);
 const stimF32 = new Float32Array(stimCPU);
 const stimList = [];
+const stimCells = [];
 let stimCursor = 0;
+
+// Wiring and starting charges come from a seeded generator, so a seed names a network.
+function mulberry32(a) {
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const newSeed = () => Math.floor(Math.random() * 1e9);
+let seed = query.has('seed') ? Number(query.get('seed')) : newSeed();
+let rand = mulberry32(seed);
+
+const homeostasis = { fatigue: true, inhibition: true, compensate: false };
+let ringPattern = '';
+let ringPatternStart = 0;
+// The outer ring is the last run of cells; within it, index order is clockwise.
+let outerRing = { start: 0, count: 0 };
+let bandCells = new Uint32Array(BANDS);
+let experiment = null;
+let pendingExperiment = null;
 
 let nNeurons = 0;
 let nSynapses = 0;
@@ -262,24 +395,25 @@ let hoverNeuron = 0xffffffff;
 let rebuildPainted = false;
 
 let statsPending = false;
-let statsSnapshot = { fires: 0, strengthen: 0, weaken: 0, t: performance.now() };
-let measured = { fires: 0, strengthen: 0, weaken: 0 };
+let statsSnapshot = { fires: 0, strengthen: 0, weaken: 0, inhibition: 0, t: performance.now() };
+let measured = { fires: 0, strengthen: 0, weaken: 0, inhibition: 0 };
 
 // The firing graph counts fires into fixed bins of simulation time, short
 // enough to show the network pulsing where the once-a-second number cannot.
 const GRAPH_SECONDS = 10;
 const GRAPH_BINS_PER_SECOND = 20;
 const GRAPH_BINS = GRAPH_SECONDS * GRAPH_BINS_PER_SECOND;
-// A ring indexed by bin number. The spare slot is the bin still filling.
-const graphBins = new Float32Array(GRAPH_BINS + 1);
-// The finished bins, oldest first, in fires per second.
-const graphRates = new Float32Array(GRAPH_BINS);
+// Each series is a ring indexed by bin number, the spare slot being the bin
+// still filling, and its finished bins, oldest first, in events per second.
+const makeSeries = () => ({ bins: new Float32Array(GRAPH_BINS + 1), rates: new Float32Array(GRAPH_BINS), last: 0 });
+const fireSeries = makeSeries();
+const learnSeries = makeSeries();
 const graphSize = { w: 190, h: 46 };
-let graphFires = 0;
 let graphTime = -1;
 let graphStart = 0;
 
-const COMPUTE = /* wgsl */`
+// Shared by the compute and render shaders. Offsets match writeParams.
+const STRUCTS = /* wgsl */`
 struct Params {
   // Uniform buffers require the struct alignment to be 16.
   @align(16) dt: f32,
@@ -307,6 +441,18 @@ struct Params {
   pan: vec2<f32>,
   cullMask: u32,
   hoverNeuron: u32,
+  flags: u32,
+  fatigueStep: f32,
+  fatigueDecay: f32,
+  fatigueMax: f32,
+  inhibEta: f32,
+  inhibTau: f32,
+  inhibAlpha: f32,
+  compGain: f32,
+  compDecay: f32,
+  compMax: f32,
+  inhibMax: f32,
+  fatigueDrain: f32,
 }
 struct Neuron {
   pos: vec2<f32>,
@@ -317,9 +463,11 @@ struct Neuron {
   inCount: u32,
   outStart: u32,
   outCount: u32,
-  pad0: u32,
-  pad1: u32,
-  pad2: u32,
+  // Raises the threshold, and drains charge at fatigueDrain times this per second.
+  fatigue: f32,
+  // Threshold raised by compensation for strengthened inputs.
+  offset: f32,
+  band: u32,
 }
 struct Synapse {
   src: u32,
@@ -329,9 +477,18 @@ struct Synapse {
   lastArrival: f32,
   learned: f32,
   delivered: f32,
-  pad: f32,
+  // +1 excitatory or -1 inhibitory, fixed at wiring.
+  sign: f32,
 }
 struct Pulse { pos: f32, amp: f32, pad0: f32, pad1: f32 }
+
+fn cellThreshold(n: Neuron) -> f32 {
+  return params.threshold + n.fatigue + n.offset;
+}
+`;
+
+const COMPUTE = /* wgsl */`
+${STRUCTS}
 struct Stim { index: u32, amount: f32, pad0: u32, pad1: u32 }
 // Firing totals and the cull counters share one buffer. A separate counter
 // buffer would make 11 storage buffers in this stage, and MacOS allows 10.
@@ -339,12 +496,20 @@ struct Stats {
   fires: atomic<u32>,
   strengthen: atomic<u32>,
   weaken: atomic<u32>,
-  pad: u32,
+  // Net strengthening of inhibition, in units of 1/INHIB_SCALE.
+  inhibition: atomic<i32>,
   edges: atomic<u32>,
   pulses: atomic<u32>,
   neurons: atomic<u32>,
   pad2: atomic<u32>,
+  bandFires: array<atomic<u32>, ${BANDS}>,
+  bandLearn: array<atomic<u32>, ${BANDS}>,
 }
+
+const FLAG_FATIGUE: u32 = ${FLAG_FATIGUE}u;
+const FLAG_INHIB: u32 = ${FLAG_INHIB}u;
+const FLAG_COMPENSATE: u32 = ${FLAG_COMPENSATE}u;
+const INHIB_SCALE: f32 = ${INHIB_SCALE}.0;
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> neurons: array<Neuron>;
@@ -362,17 +527,27 @@ fn linearId(gid: vec3<u32>) -> u32 {
   return gid.x + gid.y * DISPATCH_SPAN;
 }
 
-fn bumpWeight(s: u32, delta: f32, strengthen: bool) {
+// STDP only reaches excitatory synapses, which stay in [0, 1]. Returns the change.
+fn bumpWeight(s: u32, delta: f32, strengthen: bool) -> f32 {
   var syn = synapses[s];
   let oldW = syn.weight;
-  let w = clamp(oldW + delta, -1.0, 1.0);
+  let w = clamp(oldW + delta, 0.0, 1.0);
   if (w != oldW) {
     syn.weight = w;
     syn.learned = params.flash;
     synapses[s] = syn;
     if (strengthen) { atomicAdd(&stats.strengthen, 1u); }
     else { atomicAdd(&stats.weaken, 1u); }
+    atomicAdd(&stats.bandLearn[neurons[syn.to].band], 1u);
   }
+  return w - oldW;
+}
+
+// Inhibitory weights stay in [-inhibMax, 0]; growing one makes it more negative.
+fn grownInhibition(w: f32, grow: f32) -> f32 {
+  let next = clamp(w - grow, -params.inhibMax, 0.0);
+  atomicAdd(&stats.inhibition, i32(round((w - next) * INHIB_SCALE)));
+  return next;
 }
 
 @compute @workgroup_size(64)
@@ -382,7 +557,7 @@ fn applyStim(@builtin(global_invocation_id) gid: vec3<u32>) {
   let stim = stims[i];
   if (stim.index >= params.nNeurons) { return; }
   var n = neurons[stim.index];
-  n.charge = min(n.charge + stim.amount, 1.0);
+  n.charge = min(n.charge + stim.amount, cellThreshold(n));
   neurons[stim.index] = n;
 }
 
@@ -391,6 +566,9 @@ fn updateNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = linearId(gid);
   if (i >= params.nNeurons) { return; }
   var n = neurons[i];
+  n.fatigue = n.fatigue * params.fatigueDecay;
+  n.offset = n.offset * params.compDecay;
+  let th = cellThreshold(n);
 
   var c = n.charge;
   for (var k = 0u; k < n.inCount; k = k + 1u) {
@@ -398,24 +576,33 @@ fn updateNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
     c = c + synapses[s].delivered;
     synapses[s].delivered = 0.0;
   }
-  // Synaptic current is clipped into [0, threshold], matching the CPU model.
-  c = clamp(c, 0.0, params.threshold);
+  // Synaptic current is clipped into [0, threshold], matching the CPU model,
+  // where fatigue and compensation raise this cell's threshold.
+  c = clamp(c, 0.0, th);
 
   n.recovering = max(n.recovering - params.dt, 0.0);
-  if (n.recovering <= 0.0 && c >= params.threshold) {
+  if (n.recovering <= 0.0 && c >= th) {
     if (params.learning > 0.5) {
       for (var k = 0u; k < n.inCount; k = k + 1u) {
         let s = incoming[n.inStart + k];
         let arrived = synapses[s].lastArrival;
         if (arrived < 0.0) { continue; }
         let dt = params.time - arrived;
-        // Arrival was recorded on an earlier step, so dt > 0 means pre-before-post.
-        if (dt > 0.0 && dt < params.stdpWindow) {
-          bumpWeight(s, params.aPlus * exp(-dt / params.tauPlus), true);
+        if (synapses[s].sign > 0.0) {
+          // Arrival was recorded on an earlier step, so dt > 0 means pre-before-post.
+          if (dt > 0.0 && dt < params.stdpWindow) {
+            let grown = bumpWeight(s, params.aPlus * exp(-dt / params.tauPlus), true);
+            if ((params.flags & FLAG_COMPENSATE) != 0u) {
+              n.offset = min(n.offset + params.compGain * grown, params.compMax);
+            }
+          }
+        } else if ((params.flags & FLAG_INHIB) != 0u && dt < 5.0 * params.inhibTau) {
+          synapses[s].weight = grownInhibition(synapses[s].weight, params.inhibEta * exp(-dt / params.inhibTau));
         }
       }
     }
-    let amp = c;
+    // A spike carries the base threshold, so a tired cell sends no more than a fresh one.
+    let amp = params.threshold;
     let end = n.outStart + n.outCount;
     for (var s = n.outStart; s < end; s = s + 1u) {
       pulses[s].pos = 0.0;
@@ -424,9 +611,13 @@ fn updateNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
     n.lastFired = params.time;
     n.recovering = params.refractory;
     n.charge = 0.0;
+    if ((params.flags & FLAG_FATIGUE) != 0u) {
+      n.fatigue = min(n.fatigue + params.fatigueStep, params.fatigueMax);
+    }
     atomicAdd(&stats.fires, 1u);
+    atomicAdd(&stats.bandFires[n.band], 1u);
   } else {
-    n.charge = clamp(c - params.leakage * params.dt, 0.0, 1.0);
+    n.charge = clamp(c - (params.leakage + n.fatigue * params.fatigueDrain) * params.dt, 0.0, th);
   }
   neurons[i] = n;
 }
@@ -448,7 +639,7 @@ fn advanceSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
       syn.delivered = syn.weight * p.amp;
       syn.lastArrival = params.time;
       let postFired = neurons[syn.to].lastFired;
-      if (params.learning > 0.5 && postFired >= 0.0) {
+      if (params.learning > 0.5 && syn.sign > 0.0 && postFired >= 0.0) {
         let dt = params.time - postFired;
         // updateNeurons already ran this step, so dt == 0 means the postsynaptic
         // cell fired earlier in this same step: the spike is arriving just after.
@@ -457,6 +648,12 @@ fn advanceSynapses(@builtin(global_invocation_id) gid: vec3<u32>) {
           bumpWeight(i, -params.aMinus * exp(-dt / params.tauMinus), false);
           syn = synapses[i];
         }
+      } else if (params.learning > 0.5 && syn.sign < 0.0 && (params.flags & FLAG_INHIB) != 0u) {
+        // Onto a cell that fired recently the arrival strengthens inhibition, onto a
+        // quiet one it weakens it by inhibAlpha, so the cell settles at the target rate.
+        var trace = 0.0;
+        if (postFired >= 0.0) { trace = exp(-(params.time - postFired) / params.inhibTau); }
+        syn.weight = grownInhibition(syn.weight, params.inhibEta * (trace - params.inhibAlpha));
       }
       p.amp = 0.0;
       p.pos = 0.0;
@@ -471,7 +668,8 @@ fn adjustWeights(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = linearId(gid);
   if (i >= params.nSynapses) { return; }
   var syn = synapses[i];
-  syn.weight = clamp(syn.weight + params.weightDelta, -1.0, 1.0);
+  let w = syn.weight + params.weightDelta;
+  syn.weight = select(clamp(w, -params.inhibMax, 0.0), clamp(w, 0.0, 1.0), syn.sign > 0.0);
   synapses[i] = syn;
 }
 
@@ -483,6 +681,7 @@ fn sleepNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
   n.charge = 0.0;
   n.recovering = 0.0;
   n.lastFired = -1.0;
+  n.fatigue = 0.0;
   neurons[i] = n;
 }
 
@@ -568,58 +767,7 @@ fn finalizeIndirect(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 
 const RENDER = /* wgsl */`
-struct Params {
-  // Uniform buffers require the struct alignment to be 16.
-  @align(16) dt: f32,
-  time: f32,
-  threshold: f32,
-  leakage: f32,
-  velocity: f32,
-  refractory: f32,
-  stdpWindow: f32,
-  tauPlus: f32,
-  tauMinus: f32,
-  aPlus: f32,
-  aMinus: f32,
-  learning: f32,
-  radius: f32,
-  weightDelta: f32,
-  stimCount: u32,
-  nNeurons: u32,
-  nSynapses: u32,
-  edgeStride: u32,
-  oldRes: vec2<f32>,
-  res: vec2<f32>,
-  zoom: f32,
-  flash: f32,
-  pan: vec2<f32>,
-  cullMask: u32,
-  hoverNeuron: u32,
-}
-struct Neuron {
-  pos: vec2<f32>,
-  charge: f32,
-  recovering: f32,
-  lastFired: f32,
-  inStart: u32,
-  inCount: u32,
-  outStart: u32,
-  outCount: u32,
-  pad0: u32,
-  pad1: u32,
-  pad2: u32,
-}
-struct Synapse {
-  src: u32,
-  to: u32,
-  weight: f32,
-  lateral: f32,
-  lastArrival: f32,
-  learned: f32,
-  delivered: f32,
-  pad: f32,
-}
-struct Pulse { pos: f32, amp: f32, pad0: f32, pad1: f32 }
+${STRUCTS}
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> neurons: array<Neuron>;
@@ -638,6 +786,7 @@ const PULSE_EXCITE = vec3<f32>(0.32, 0.50, 0.47);
 const PULSE_INHIBIT = vec3<f32>(0.44, 0.38, 0.56);
 const FIRE = vec3<f32>(1.0, 0.78, 0.30);
 const CHARGE = vec3<f32>(0.05, 0.58, 0.55);
+const TIRED = vec3<f32>(0.20, 0.32, 0.66);
 
 fn isHovered(syn: Synapse) -> bool {
   return params.hoverNeuron != 0xffffffffu && syn.src == params.hoverNeuron;
@@ -645,14 +794,14 @@ fn isHovered(syn: Synapse) -> bool {
 
 fn edgeColor(syn: Synapse, line: bool) -> vec4<f32> {
   if (isHovered(syn)) {
-    let rgb = select(HOVER_INHIBIT, HOVER_EXCITE, syn.weight >= 0.0);
+    let rgb = select(HOVER_INHIBIT, HOVER_EXCITE, syn.sign > 0.0);
     return vec4<f32>(rgb, 0.95);
   }
   if (syn.learned > 0.0) {
     return vec4<f32>(0.55, 0.55, 0.55, select(0.40, 0.55, line));
   }
-  let rgb = select(INHIBIT, EXCITE, syn.weight >= 0.0);
-  let alpha = mix(select(0.16, 0.26, line), select(0.38, 0.50, line), abs(syn.weight));
+  let rgb = select(INHIBIT, EXCITE, syn.sign > 0.0);
+  let alpha = mix(select(0.16, 0.26, line), select(0.38, 0.50, line), min(abs(syn.weight), 1.0));
   return vec4<f32>(rgb, alpha);
 }
 
@@ -666,6 +815,7 @@ struct DiscOut {
   @location(1) uv: vec2<f32>,
   @location(2) charge: f32,
   @location(3) recover: f32,
+  @location(4) fatigue: f32,
 }
 
 fn worldToScreen(p: vec2<f32>) -> vec2<f32> {
@@ -688,7 +838,7 @@ fn drawnRadius() -> f32 {
 // a quad that tracks the cell and never passes two pixels.
 fn dendriteWidth(weight: f32, rad: f32) -> f32 {
   if (params.edgeStride == 2u) { return 1.0; }
-  let scaled = rad * mix(0.08, 0.22, abs(weight));
+  let scaled = rad * mix(0.08, 0.22, min(abs(weight), 1.0));
   return 2.0 * min(1.0, max(0.35, scaled));
 }
 
@@ -802,7 +952,7 @@ fn emitPulse(synIndex: u32, corner: u32) -> DiscOut {
   out.clip = toClip(center + uv * pr);
   out.uv = uv;
   var rgb = PULSE_INHIBIT;
-  if (syn.weight >= 0.0) { rgb = PULSE_EXCITE; }
+  if (syn.sign > 0.0) { rgb = PULSE_EXCITE; }
   out.color = vec4<f32>(rgb, 1.0);
   out.charge = 0.0;
   out.recover = 0.0;
@@ -827,9 +977,10 @@ fn emitNeuron(index: u32, corner: u32) -> DiscOut {
   out.clip = toClip(worldToScreen(n.pos) + uv * rad);
   out.uv = uv;
   out.color = vec4<f32>(0.0);
-  out.charge = n.charge / max(params.threshold, 0.001);
+  out.charge = n.charge / max(cellThreshold(n), 0.001);
   out.recover = 0.0;
   if (params.refractory > 0.0) { out.recover = n.recovering / params.refractory; }
+  out.fatigue = n.fatigue;
   return out;
 }
 
@@ -858,7 +1009,8 @@ fn fsDisc(in: DiscOut) -> @location(0) vec4<f32> {
   }
 
   let rim = smoothstep(0.74, 0.90, d);
-  var fill = vec3<f32>(0.22, 0.22, 0.22);
+  // Full blue at a threshold raised by one more base threshold.
+  var fill = mix(vec3<f32>(0.22, 0.22, 0.22), TIRED, clamp(in.fatigue / max(params.threshold, 0.001), 0.0, 1.0));
   if (in.recover > 0.001) {
     // Gold at the moment of firing, deepening to amber and then dark as the
     // cell recovers.
@@ -914,6 +1066,26 @@ function layoutScale(n, w, h) {
 
 function computeRadius(n, w, h) {
   return layoutScale(n, w, h).gap * RADIUS_PER_GAP;
+}
+
+// Band 0 is the outer ring; bands 1 to BANDS-1 split the rest by depth from
+// the outside, the center cell landing in the last. Also records the outer
+// ring's index range and the cells in each band.
+function ringBands(n) {
+  const counts = ringNeuronCounts(n);
+  const rings = counts.length;
+  const bands = new Uint32Array(n);
+  bandCells = new Uint32Array(BANDS);
+  outerRing = { start: n - (rings ? counts[rings - 1] : 0), count: rings ? counts[rings - 1] : 0 };
+  let idx = 0;
+  for (let ring = -1; ring < rings; ring++) {
+    const size = ring < 0 ? 1 : counts[ring];
+    const depth = rings - 1 - ring;
+    const band = depth === 0 ? 0 : Math.min(BANDS - 1, 1 + Math.floor(((depth - 1) * (BANDS - 1)) / Math.max(rings, 1)));
+    for (let t = 0; t < size && idx < n; t++) bands[idx++] = band;
+    bandCells[band] += size;
+  }
+  return bands;
 }
 
 function layoutNeurons(n, w, h, rad) {
@@ -1122,8 +1294,8 @@ function connectScaleInvariant(xs, ys, k, spacing, only) {
     const px = xs[i], py = ys[i];
     let filled = 0;
     for (let tries = 0; filled < kUse && tries < maxTries; tries++) {
-      const r = rMin * Math.exp(Math.random() * logRange);
-      const angle = Math.random() * TAU;
+      const r = rMin * Math.exp(rand() * logRange);
+      const angle = rand() * TAU;
       const tx = px + r * Math.cos(angle);
       const ty = py + r * Math.sin(angle);
       const cx = Math.floor((tx - minX) * inv);
@@ -1291,7 +1463,7 @@ function destroyLater(buffers) {
 function makeStorage(size, mapped) {
   return device.createBuffer({
     size: alignBytes(Math.max(16, size)),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     mappedAtCreation: mapped
   });
 }
@@ -1302,7 +1474,7 @@ function uploadNetwork(xs, ys, k) {
   const longRange = new Uint8Array(n);
   const local = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    if (Math.random() < scaleFraction) longRange[i] = 1;
+    if (rand() < scaleFraction) longRange[i] = 1;
     else local[i] = 1;
   }
   const near = connectNearest(xs, ys, k, local);
@@ -1351,29 +1523,34 @@ function uploadNetwork(xs, ys, k) {
   const incoming = new Uint32Array(incomingBuffer.getMappedRange());
 
   const lateralPx = radius * 0.35;
+  const bands = ringBands(n);
   s = 0;
   for (let i = 0; i < n; i++) {
     const o = i * 12;
     nF[o + 0] = xs[i];
     nF[o + 1] = ys[i];
-    nF[o + 2] = Math.random() * 0.99;
+    nF[o + 2] = rand() * 0.99;
     nF[o + 3] = 0;
     nF[o + 4] = -1;
     nU[o + 5] = inStart[i];
     nU[o + 6] = inCount[i];
     nU[o + 7] = outStart[i];
     nU[o + 8] = outCount[i];
+    nF[o + 9] = 0;
+    nF[o + 10] = 0;
+    nU[o + 11] = bands[i];
     const base = i * kUse;
     for (let t = 0; t < counts[i]; t++) {
       const to = neighbors[base + t];
       const so = s * 8;
       sU[so + 0] = i;
       sU[so + 1] = to;
-      const excitatory = Math.random() < 0.8;
-      sF[so + 2] = excitatory ? Math.random() : -Math.random();
+      const excitatory = rand() < 0.8;
+      sF[so + 2] = excitatory ? rand() : -rand();
       const reverse = listsNeighbor(neighbors, counts, kUse, to, i);
       sF[so + 3] = reverse ? (i < to ? 1 : -1) * lateralPx : 0;
       sF[so + 4] = -1;
+      sF[so + 7] = excitatory ? 1 : -1;
       const po = s * 4;
       pF[po + 0] = 0;
       pF[po + 1] = 0;
@@ -1433,6 +1610,22 @@ function writeParams(stepDt) {
   paramsView.setFloat32(100, view.panY, true);
   paramsView.setUint32(104, viewChoices.cullMask, true);
   paramsView.setUint32(108, hoverNeuron, true);
+  const flags = (homeostasis.fatigue ? FLAG_FATIGUE : 0)
+    | (homeostasis.inhibition ? FLAG_INHIB : 0)
+    | (homeostasis.compensate ? FLAG_COMPENSATE : 0);
+  paramsView.setUint32(112, flags, true);
+  paramsView.setFloat32(116, tuning.fatigueStep, true);
+  paramsView.setFloat32(120, Math.exp((-stepDt * speedup) / tuning.fatigueTau), true);
+  paramsView.setFloat32(124, tuning.fatigueMax, true);
+  paramsView.setFloat32(128, tuning.inhibEta, true);
+  paramsView.setFloat32(132, tuning.inhibTau / speedup, true);
+  // Vogels-Sprekeler alpha = 2 * rate * tau; speed scales rate and tau inversely.
+  paramsView.setFloat32(136, 2 * tuning.targetRate * tuning.inhibTau, true);
+  paramsView.setFloat32(140, tuning.compGain, true);
+  paramsView.setFloat32(144, Math.exp((-stepDt * speedup) / tuning.compTau), true);
+  paramsView.setFloat32(148, tuning.compMax, true);
+  paramsView.setFloat32(152, tuning.inhibMax, true);
+  paramsView.setFloat32(156, tuning.fatigueDrain * speedup, true);
   speedSlider.dataset.refractory = refractory.toFixed(2);
   document.getElementById('speed-label').textContent = `${velocity} px/s`;
   document.getElementById('speed-note').textContent = `refractory ${refractory.toFixed(2)}s`;
@@ -1540,7 +1733,10 @@ function rebuildNetwork() {
   const k = Number(neighborSlider.value);
   radius = computeRadius(n, w, h);
   const laid = layoutNeurons(n, w, h, radius);
+  rand = mulberry32(seed);
   uploadNetwork(laid.xs, laid.ys, k);
+  statSeed.textContent = String(seed);
+  ringPatternStart = 0;
   bindGroups();
   updateNeuronLabel();
   document.getElementById('neighbors-label').textContent = String(k);
@@ -1548,22 +1744,58 @@ function rebuildNetwork() {
 
 // Fills every cell under the right-click brush up to threshold. Cells still
 // in their refractory period hold the charge and fire on the step it ends.
-function gatherBrush() {
+function gatherBrush(into) {
   const world = screenToWorld(pointer.x, pointer.y);
   stimList.length = 0;
   pick.collect(world.x, world.y, (canvas.width * STIM_RADIUS) / view.zoom, stimList);
   const n = stimList.length;
-  if (!n) return 0;
-  const count = Math.min(n, MAX_STIM);
-  const start = n <= MAX_STIM ? 0 : stimCursor % n;
-  for (let k = 0; k < count; k++) {
-    const o = k * 4;
-    stimU32[o] = stimList[(start + k) % n];
-    stimF32[o + 1] = 1;
-  }
+  const room = MAX_STIM - into.length;
+  if (!n || room <= 0) return;
+  const count = Math.min(n, room);
+  const start = n <= room ? 0 : stimCursor % n;
+  for (let k = 0; k < count; k++) into.push(stimList[(start + k) % n]);
   stimCursor = start + count;
-  device.queue.writeBuffer(stimBuffer, 0, stimCPU, 0, count * 16);
+}
+
+function writeStims(cells) {
+  const count = Math.min(cells.length, MAX_STIM);
+  for (let k = 0; k < count; k++) {
+    stimU32[k * 4] = cells[k];
+    stimF32[k * 4 + 1] = STIM_FORCE;
+  }
+  if (count) device.queue.writeBuffer(stimBuffer, 0, stimCPU, 0, count * 16);
   return count;
+}
+
+function speedup() {
+  return Number(speedSlider.value) / BASE_VELOCITY;
+}
+
+// Outer-ring cells a pattern fires over the pattern time (from, to]. A sweep
+// fires each cell once per revolution, in angle order; a flash fires its
+// quadrants together at the start of every period.
+function ringPatternCells(name, from, to, into) {
+  const pattern = PATTERNS[name];
+  const count = outerRing.count;
+  if (!pattern || !count) return;
+  const period = patternPeriod(name);
+  if (pattern.sweep) {
+    const first = Math.floor((from / period) * count) + 1;
+    const last = Math.min(Math.floor((to / period) * count), first + count - 1);
+    for (let g = first; g <= last; g++) {
+      const j = ((g % count) + count) % count;
+      into.push(outerRing.start + (pattern.dir > 0 ? j : count - 1 - j));
+    }
+  } else if (Math.floor(to / period) > Math.floor(from / period)) {
+    for (let j = 0; j < count; j++) {
+      if (pattern.quadrants.includes(Math.floor((4 * j) / count))) into.push(outerRing.start + j);
+    }
+  }
+}
+
+function patternPeriod(name) {
+  const pattern = PATTERNS[name];
+  return pattern ? RING_PERIOD / speedup() / (pattern.rate || 1) : 0;
 }
 
 function updateHover() {
@@ -1575,18 +1807,20 @@ function updateHover() {
   if (index >= 0) hoverNeuron = index;
 }
 
-function gatherStim() {
+function gatherStim(stepDt) {
   const click = pointer.click;
   pointer.click = false;
-  if (!running || !pick || !pointer.inside) return 0;
-  if (pointer.stimulating) return gatherBrush();
-  if (pointer.dragging || hoverNeuron === 0xffffffff) return 0;
-  // Hover only reveals dendrites. A click or a held button still fires the cell.
-  if (!(click || pointer.down)) return 0;
-  stimU32[0] = hoverNeuron;
-  stimF32[1] = 1;
-  device.queue.writeBuffer(stimBuffer, 0, stimCPU, 0, 16);
-  return 1;
+  stimCells.length = 0;
+  if (ringPattern) {
+    const t = simTime - ringPatternStart;
+    ringPatternCells(ringPattern, t - stepDt, t, stimCells);
+  }
+  if (pick && pointer.inside) {
+    if (pointer.stimulating) gatherBrush(stimCells);
+    // Hover only reveals dendrites. A click or a held button still fires the cell.
+    else if (!pointer.dragging && hoverNeuron !== 0xffffffff && (click || pointer.down)) stimCells.push(hoverNeuron);
+  }
+  return writeStims(stimCells);
 }
 
 function dispatch(pass, pipeline, count) {
@@ -1638,18 +1872,35 @@ function render(encoder) {
   pass.end();
 }
 
-// Fills graphRates from the ring and returns the index of the first entry
-// that this network has filled; earlier ones are left at zero.
-function collectRates() {
-  const ring = graphBins.length;
+// Fills a series' rates from its ring and returns the index of the first
+// entry that this network has filled; earlier ones are left at zero.
+function collectRates(series) {
+  const ring = series.bins.length;
   const filling = Math.floor(Math.max(graphTime, 0) * GRAPH_BINS_PER_SECOND);
   const oldest = filling - GRAPH_BINS;
   const start = Math.min(GRAPH_BINS, Math.max(0, graphStart - oldest));
-  graphRates.fill(0, 0, start);
+  series.rates.fill(0, 0, start);
   for (let i = start; i < GRAPH_BINS; i++) {
-    graphRates[i] = graphBins[(oldest + i) % ring] * GRAPH_BINS_PER_SECOND;
+    series.rates[i] = series.bins[(oldest + i) % ring] * GRAPH_BINS_PER_SECOND;
   }
   return start;
+}
+
+function strokeSeries(rates, start, lo, hi, color, w, h, dpr) {
+  const pad = 3 * dpr;
+  const scale = hi > lo ? (h - 2 * pad) / (hi - lo) : 0;
+  const step = w / GRAPH_BINS;
+  graphCtx.beginPath();
+  for (let i = start; i < GRAPH_BINS; i++) {
+    const x = (i + 0.5) * step;
+    const y = h - pad - (rates[i] - lo) * scale;
+    if (i === start) graphCtx.moveTo(x, y);
+    else graphCtx.lineTo(x, y);
+  }
+  graphCtx.strokeStyle = color;
+  graphCtx.lineWidth = 1.25 * dpr;
+  graphCtx.lineJoin = 'round';
+  graphCtx.stroke();
 }
 
 function drawFiringGraph() {
@@ -1660,7 +1911,8 @@ function drawFiringGraph() {
     graphCanvas.width = w;
     graphCanvas.height = h;
   }
-  const start = collectRates();
+  const start = collectRates(fireSeries);
+  collectRates(learnSeries);
   graphCtx.clearRect(0, 0, w, h);
   if (start >= GRAPH_BINS) {
     graphRange.textContent = '';
@@ -1668,40 +1920,33 @@ function drawFiringGraph() {
   }
   let lo = Infinity;
   let hi = -Infinity;
+  let learnHi = 0;
   for (let i = start; i < GRAPH_BINS; i++) {
-    const rate = graphRates[i];
+    const rate = fireSeries.rates[i];
     if (rate < lo) lo = rate;
     if (rate > hi) hi = rate;
+    learnHi = Math.max(learnHi, learnSeries.rates[i]);
   }
-  // The axis spans the lowest to the highest rate in view rather than
-  // starting at zero, so a ripple on a busy network fills the height.
-  const pad = 3 * dpr;
-  const scale = hi > lo ? (h - 2 * pad) / (hi - lo) : 0;
-  const step = w / GRAPH_BINS;
-  graphCtx.beginPath();
-  for (let i = start; i < GRAPH_BINS; i++) {
-    const x = (i + 0.5) * step;
-    const y = h - pad - (graphRates[i] - lo) * scale;
-    if (i === start) graphCtx.moveTo(x, y);
-    else graphCtx.lineTo(x, y);
-  }
-  graphCtx.strokeStyle = '#4d9be6';
-  graphCtx.lineWidth = 1.25 * dpr;
-  graphCtx.lineJoin = 'round';
-  graphCtx.stroke();
+  // Learning is drawn from zero so a burst reads against quiet. The firing
+  // axis spans the lowest to the highest rate in view rather than starting
+  // at zero, so a ripple on a busy network fills the height.
+  strokeSeries(learnSeries.rates, start, 0, learnHi, 'rgba(240, 191, 82, 0.6)', w, h, dpr);
+  strokeSeries(fireSeries.rates, start, lo, hi, '#4d9be6', w, h, dpr);
   const low = Math.round(lo).toLocaleString();
   const high = Math.round(hi).toLocaleString();
   graphRange.textContent = low === high ? `${high}/s` : `${low} – ${high}/s`;
 }
 
-// Adds the fires counted up to simulation time t, spread over the bins that
-// have passed since the last reading.
-function plotFires(fires, t) {
+// Adds the fires and weight changes counted up to simulation time t, spread
+// over the bins that have passed since the last reading.
+function plotFires(fires, learns, t) {
   if (graphTime < 0 || t < graphTime) {
     // The first reading, or the first from a rebuilt network. The bin it
     // lands in is only part counted, so the graph starts with the next one.
-    graphBins.fill(0);
-    graphFires = fires;
+    fireSeries.bins.fill(0);
+    learnSeries.bins.fill(0);
+    fireSeries.last = fires;
+    learnSeries.last = learns;
     graphTime = t;
     graphStart = Math.floor(t * GRAPH_BINS_PER_SECOND) + 1;
     drawFiringGraph();
@@ -1709,17 +1954,19 @@ function plotFires(fires, t) {
   }
   const dt = t - graphTime;
   if (dt <= 0) return;
-  const count = (fires - graphFires) >>> 0; // the counter wraps at 2^32
-  const ring = graphBins.length;
   const first = Math.floor(graphTime * GRAPH_BINS_PER_SECOND);
   const last = Math.floor(t * GRAPH_BINS_PER_SECOND);
-  for (let bin = Math.max(first, last - GRAPH_BINS); bin <= last; bin++) {
-    if (bin > first) graphBins[bin % ring] = 0;
-    const from = Math.max(graphTime, bin / GRAPH_BINS_PER_SECOND);
-    const to = Math.min(t, (bin + 1) / GRAPH_BINS_PER_SECOND);
-    graphBins[bin % ring] += count * Math.max(0, to - from) / dt;
+  for (const [series, value] of [[fireSeries, fires], [learnSeries, learns]]) {
+    const count = (value - series.last) >>> 0; // the counter wraps at 2^32
+    const ring = series.bins.length;
+    for (let bin = Math.max(first, last - GRAPH_BINS); bin <= last; bin++) {
+      if (bin > first) series.bins[bin % ring] = 0;
+      const from = Math.max(graphTime, bin / GRAPH_BINS_PER_SECOND);
+      const to = Math.min(t, (bin + 1) / GRAPH_BINS_PER_SECOND);
+      series.bins[bin % ring] += count * Math.max(0, to - from) / dt;
+    }
+    series.last = value;
   }
-  graphFires = fires;
   graphTime = t;
   if (last !== first) drawFiringGraph();
 }
@@ -1733,9 +1980,10 @@ function readStats(sampleTime) {
     const fires = raw[0];
     const strengthen = raw[1];
     const weaken = raw[2];
+    const inhibition = raw[3];
     stagingBuffer.unmap();
     statsPending = false;
-    plotFires(fires, sampleTime);
+    plotFires(fires, (strengthen + weaken) >>> 0, sampleTime);
     // The numbers in the readout stay averaged over a second.
     const t = performance.now();
     if (t - statsSnapshot.t < 1000) return;
@@ -1747,11 +1995,328 @@ function readStats(sampleTime) {
     measured.fires = delta(fires, statsSnapshot.fires);
     measured.strengthen = delta(strengthen, statsSnapshot.strengthen);
     measured.weaken = delta(weaken, statsSnapshot.weaken);
-    statsSnapshot = { fires, strengthen, weaken, t };
+    // A signed counter, so the wrapped difference is read back as an int.
+    measured.inhibition = ((inhibition - statsSnapshot.inhibition) | 0) / INHIB_SCALE / dt;
+    statsSnapshot = { fires, strengthen, weaken, inhibition, t };
   }).catch((error) => {
     statsPending = false;
     console.warn(error);
   });
+}
+
+// The novelty test. The familiar pattern A is taught until the network
+// habituates, then a novel pattern B, then A again, silence, and A once more
+// after the silence has let fatigue wear off. Lengths hold at BASE_VELOCITY
+// and scale with speed like every other time.
+function noveltyPhases(familiar, novel) {
+  return [
+    { name: 'baseline', pattern: '', seconds: 20 },
+    { name: 'learn A', pattern: familiar, seconds: 60 },
+    { name: 'novel B', pattern: novel, seconds: 30 },
+    { name: 'return A', pattern: familiar, seconds: 30 },
+    { name: 'quiet', pattern: '', seconds: 60 },
+    { name: 'recall A', pattern: familiar, seconds: 20 }
+  ];
+}
+
+function experimentOptions() {
+  return {
+    familiar: query.get('familiar') || 'cw',
+    novel: query.get('novel') || 'ccw',
+    stepsPerFrame: Number(query.get('steps')) || 24
+  };
+}
+
+// Rebuilds the network from the current seed, so the test starts from the
+// wiring and charges that seed names.
+function startExperiment(options = {}) {
+  pendingExperiment = { ...experimentOptions(), ...options };
+  rebuildRequested = true;
+}
+
+function beginExperiment(options) {
+  if (!PATTERNS[options.familiar]) options.familiar = 'cw';
+  if (!PATTERNS[options.novel]) options.novel = 'ccw';
+  const scale = 1 / speedup();
+  // Phases end on bin boundaries so every bin belongs to one phase.
+  const phases = noveltyPhases(options.familiar, options.novel).map((p) => ({
+    ...p,
+    steps: Math.max(1, Math.round((p.seconds * scale) / BIN_SECONDS)) * STEPS_PER_BIN
+  }));
+  const bins = phases.reduce((sum, p) => sum + p.steps, 0) / STEPS_PER_BIN;
+  const history = device.createBuffer({
+    size: (bins + 1) * STATS_BYTES,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyBufferToBuffer(statsBuffer, 0, history, 0, STATS_BYTES);
+  device.queue.submit([encoder.finish()]);
+  const names = Object.keys(homeostasis).filter((key) => homeostasis[key]);
+  experiment = {
+    options, phases, history, bins,
+    phase: 0, phaseStep: 0, step: 0, waiting: false, snapshots: [],
+    conditions: {
+      seed, homeostasis: names.length ? names.join('+') : 'none', learning,
+      familiar: options.familiar, novel: options.novel, neurons: nNeurons, synapses: nSynapses,
+      speed: Number(speedSlider.value), outerRing: outerRing.count, tuning: { ...tuning }
+    }
+  };
+  ringPattern = '';
+  ringSelect.value = '';
+  testButton.textContent = 'Stop test';
+  testButton.classList.add('on');
+  window.__gpuNeurons.results = null;
+  showProgress();
+}
+
+function stopExperiment() {
+  if (experiment && !experiment.waiting) experiment.history.destroy();
+  experiment = null;
+  pendingExperiment = null;
+  testButton.textContent = 'Novelty test';
+  testButton.classList.remove('on');
+}
+
+function showProgress() {
+  const exp = experiment;
+  const phase = exp.phases[Math.min(exp.phase, exp.phases.length - 1)];
+  const done = Math.round(exp.phaseStep * EXP_DT);
+  const total = Math.round(phase.steps * EXP_DT);
+  resultsEl.textContent = `test ${exp.phase + 1}/${exp.phases.length}: ${phase.name} ${done}/${total}s`;
+}
+
+function experimentSteps() {
+  const exp = experiment;
+  if (exp.waiting || !running) return;
+  for (let k = 0; k < exp.options.stepsPerFrame; k++) {
+    const phase = exp.phases[exp.phase];
+    if (exp.phaseStep >= phase.steps) {
+      endPhase(exp);
+      break;
+    }
+    stimCells.length = 0;
+    if (phase.pattern) ringPatternCells(phase.pattern, (exp.phaseStep - 1) * EXP_DT, exp.phaseStep * EXP_DT, stimCells);
+    const stimCount = writeStims(stimCells);
+    simTime += EXP_DT;
+    writeParams(EXP_DT);
+    paramsView.setUint32(56, stimCount, true);
+    device.queue.writeBuffer(paramsBuffer, 0, paramsCPU);
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    dispatch(pass, pipelines.stim, stimCount);
+    dispatch(pass, pipelines.update, nNeurons);
+    dispatch(pass, pipelines.advance, nSynapses);
+    pass.end();
+    exp.step++;
+    exp.phaseStep++;
+    if (exp.step % STEPS_PER_BIN === 0) {
+      encoder.copyBufferToBuffer(statsBuffer, 0, exp.history, (exp.step / STEPS_PER_BIN) * STATS_BYTES, STATS_BYTES);
+    }
+    device.queue.submit([encoder.finish()]);
+  }
+  if (experiment === exp) showProgress();
+}
+
+function endPhase(exp) {
+  exp.waiting = true;
+  snapshotNetwork().then((snapshot) => {
+    if (experiment !== exp) return;
+    exp.snapshots.push(snapshot);
+    exp.phase++;
+    exp.phaseStep = 0;
+    if (exp.phase < exp.phases.length) {
+      exp.waiting = false;
+      return;
+    }
+    return finishExperiment(exp);
+  }).catch((error) => {
+    console.error(error);
+    statusEl.textContent = error.message;
+    stopExperiment();
+  });
+}
+
+// Weight and threshold state at the end of a phase, read back from the GPU.
+async function snapshotNetwork() {
+  const synBytes = alignBytes(nSynapses * 32);
+  const neuronBytes = nNeurons * 48;
+  const buffer = device.createBuffer({
+    size: synBytes + alignBytes(neuronBytes),
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyBufferToBuffer(synapseBuffer, 0, buffer, 0, nSynapses * 32);
+  encoder.copyBufferToBuffer(neuronBuffer, 0, buffer, synBytes, neuronBytes);
+  device.queue.submit([encoder.finish()]);
+  await buffer.mapAsync(GPUMapMode.READ);
+  const syn = new Float32Array(buffer.getMappedRange(0, nSynapses * 32));
+  let exc = 0, excSum = 0, excPinned = 0, inh = 0, inhSum = 0, inhPinned = 0;
+  for (let s = 0; s < nSynapses; s++) {
+    const w = syn[s * 8 + 2];
+    if (syn[s * 8 + 7] > 0) {
+      exc++;
+      excSum += w;
+      if (w >= 0.99) excPinned++;
+    } else {
+      inh++;
+      inhSum -= w;
+      if (w <= -0.99) inhPinned++;
+    }
+  }
+  const cells = new Float32Array(buffer.getMappedRange(synBytes, neuronBytes));
+  let fatigue = 0, offset = 0;
+  for (let i = 0; i < nNeurons; i++) {
+    fatigue += cells[i * 12 + 9];
+    offset += cells[i * 12 + 10];
+  }
+  buffer.unmap();
+  buffer.destroy();
+  return {
+    excitatoryMean: excSum / Math.max(exc, 1),
+    excitatoryPinned: excPinned / Math.max(exc, 1),
+    inhibitoryMean: inhSum / Math.max(inh, 1),
+    inhibitoryPinned: inhPinned / Math.max(inh, 1),
+    fatigueMean: fatigue / Math.max(nNeurons, 1),
+    offsetMean: offset / Math.max(nNeurons, 1)
+  };
+}
+
+async function finishExperiment(exp) {
+  await exp.history.mapAsync(GPUMapMode.READ);
+  const raw = new Uint32Array(exp.history.getMappedRange()).slice();
+  exp.history.unmap();
+  exp.history.destroy();
+  const results = analyzeExperiment(exp, raw);
+  experiment = null;
+  testButton.textContent = 'Novelty test';
+  testButton.classList.remove('on');
+  window.__gpuNeurons.results = results;
+  resultsEl.textContent = formatResults(results);
+  console.log('novelty test: ' + JSON.stringify(results));
+}
+
+const sum = (values, from = 0, to = values.length) => {
+  let total = 0;
+  for (let i = Math.max(0, from); i < Math.min(to, values.length); i++) total += values[i];
+  return total;
+};
+const mean = (values, from = 0, to = values.length) => {
+  const n = Math.min(to, values.length) - Math.max(0, from);
+  return n > 0 ? sum(values, from, to) / n : 0;
+};
+// Responses are spike counts; one spike is added to each side so a silent
+// denominator gives a large finite ratio instead of infinity.
+const ratio = (num, den) => (num + 1) / (den + 1);
+
+function analyzeExperiment(exp, raw) {
+  const words = STATS_BYTES / 4;
+  const bins = exp.bins;
+  const interior = new Float64Array(bins);
+  const learnBins = new Float64Array(bins);
+  const inhibBins = new Float64Array(bins);
+  for (let b = 0; b < bins; b++) {
+    const a = b * words;
+    const z = a + words;
+    const d = (i) => (raw[z + i] - raw[a + i]) >>> 0;
+    for (let band = 1; band < BANDS; band++) interior[b] += d(8 + band);
+    learnBins[b] = d(1) + d(2);
+    inhibBins[b] = ((raw[z + 3] - raw[a + 3]) | 0) / INHIB_SCALE;
+  }
+  const interiorCells = Math.max(1, nNeurons - bandCells[0]);
+  // The most a cell can fire, set by the refractory period.
+  const ceiling = speedup() / REFRACTORY;
+  const basePeriod = RING_PERIOD / speedup();
+  const phases = [];
+  let b0 = 0;
+  exp.phases.forEach((phase, index) => {
+    const b1 = b0 + phase.steps / STEPS_PER_BIN;
+    const seconds = (b1 - b0) * BIN_SECONDS;
+    // A presentation is one period of the pattern; silent phases use the base period.
+    const perBins = (phase.pattern ? patternPeriod(phase.pattern) : basePeriod) / BIN_SECONDS;
+    const count = Math.max(1, Math.floor((b1 - b0) / perBins));
+    const responses = [];
+    const learnings = [];
+    for (let k = 0; k < count; k++) {
+      const from = b0 + Math.round(k * perBins);
+      const to = Math.min(b1, b0 + Math.round((k + 1) * perBins));
+      responses.push(sum(interior, from, to));
+      learnings.push(sum(learnBins, from, to));
+    }
+    const learnTotal = sum(learnBins, b0, b1);
+    const half = Math.floor((b0 + b1) / 2);
+    phases.push({
+      name: phase.name,
+      pattern: phase.pattern || null,
+      seconds,
+      rate: sum(interior, b0, b1) / interiorCells / seconds,
+      lateRate: sum(interior, half, b1) / interiorCells / (seconds - (half - b0) * BIN_SECONDS),
+      learnPerSecond: learnTotal / seconds,
+      learnFirstQuarter: learnTotal > 0 ? sum(learnBins, b0, b0 + Math.ceil((b1 - b0) / 4)) / learnTotal : 0,
+      inhibitionPerSecond: sum(inhibBins, b0, b1) / seconds,
+      responses,
+      learnings,
+      end: exp.snapshots[index]
+    });
+    b0 = b1;
+  });
+  let busy = 0;
+  let peak = 0;
+  for (let b = 0; b < bins; b++) {
+    const load = interior[b] / interiorCells / BIN_SECONDS / ceiling;
+    if (load > 0.5) busy++;
+    peak = Math.max(peak, load);
+  }
+  const [base, learnA, novelB, returnA, quiet, recallA] = phases;
+  const tailA = mean(learnA.responses, learnA.responses.length - 5);
+  const metrics = {
+    // Habituation is over within a few presentations, so the burst is the first two.
+    habituation: ratio(mean(learnA.responses, learnA.responses.length - 5), mean(learnA.responses, 0, 2)),
+    novelty: ratio(mean(novelB.responses, 0, 3), tailA),
+    returnA: ratio(mean(returnA.responses, 0, 3), tailA),
+    recallA: ratio(mean(recallA.responses, 0, 3), tailA),
+    learnBurstA: learnA.learnFirstQuarter,
+    learnBurstB: novelB.learnFirstQuarter,
+    quietRate: quiet.lateRate,
+    baselineRate: base.lateRate,
+    // The quiet phase against the strongest response while learning A.
+    quietVsResponse: quiet.lateRate / Math.max(Math.max(...learnA.responses) / interiorCells / basePeriod, 1e-9),
+    seizureBins: busy / Math.max(bins, 1),
+    peakLoad: peak
+  };
+  const pass = {
+    habituation: metrics.habituation < 0.3,
+    novelty: metrics.novelty > 3,
+    learnBurst: metrics.learnBurstA > 0.5 && metrics.learnBurstB > 0.5,
+    quiescence: metrics.quietVsResponse < 0.1,
+    noSeizure: metrics.seizureBins < 0.05,
+    noRunaway: learnA.end.excitatoryPinned <= base.end.excitatoryPinned + 0.05
+  };
+  return { conditions: exp.conditions, metrics, pass, phases };
+}
+
+function formatResults(r) {
+  const c = r.conditions;
+  const m = r.metrics;
+  const mark = (ok) => (ok ? '✓' : '✗');
+  const f = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
+  const lines = [
+    `seed ${c.seed} · ${c.homeostasis}`,
+    `learning ${c.learning ? 'on' : 'off'} · ${c.familiar} then ${c.novel}`,
+    `habituation ${f(m.habituation)} ${mark(r.pass.habituation)} <0.3`,
+    `novelty     ${f(m.novelty)} ${mark(r.pass.novelty)} >3`,
+    `return A    ${f(m.returnA)}`,
+    `recall A    ${f(m.recallA)}`,
+    `learn burst ${Math.round(m.learnBurstA * 100)}/${Math.round(m.learnBurstB * 100)}% ${mark(r.pass.learnBurst)}`,
+    `quiet       ${f(m.quietVsResponse)} ${mark(r.pass.quiescence)} <0.1`,
+    `seizure     ${Math.round(m.seizureBins * 100)}% ${mark(r.pass.noSeizure)}`,
+    `runaway     ${mark(r.pass.noRunaway)}`,
+    '',
+    'phase     /cell/s learn/s  w+'
+  ];
+  for (const p of r.phases) {
+    lines.push(`${p.name.padEnd(9)} ${f(p.rate, 3).padStart(6)} ${String(Math.round(p.learnPerSecond)).padStart(7)} ${f(p.end.excitatoryMean)}`);
+  }
+  return lines.join('\n');
 }
 
 function frame(now) {
@@ -1790,7 +2355,12 @@ function frameBody(now) {
     } catch (error) {
       statusEl.textContent = error.message;
       console.error(error);
+      pendingExperiment = null;
       return;
+    }
+    if (pendingExperiment) {
+      beginExperiment(pendingExperiment);
+      pendingExperiment = null;
     }
   }
 
@@ -1807,12 +2377,14 @@ function frameBody(now) {
     view.panY *= sy;
     pick = buildPick(cpuX, cpuY, radius);
   }
-  const doStep = running && frameDt > 0;
+  // The novelty test owns the clock; the frame only draws.
+  if (experiment) experimentSteps();
+  const doStep = running && frameDt > 0 && !experiment;
   if (doStep) simTime += frameDt;
 
   updateHover();
   let stimCount = 0;
-  if (doStep) stimCount = gatherStim();
+  if (doStep) stimCount = gatherStim(frameDt);
 
   chooseView();
   writeParams(doStep ? frameDt : 0);
@@ -1852,7 +2424,7 @@ function frameBody(now) {
   render(encoder);
   // The graph wants a reading every step; a paused net only needs the
   // once-a-second readout.
-  const sampling = !statsPending && (doStep || now - statsSnapshot.t >= 1000);
+  const sampling = !statsPending && (doStep || experiment || now - statsSnapshot.t >= 1000);
   if (sampling) encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, 16);
   device.queue.submit([encoder.finish()]);
   if (sampling) readStats(simTime);
@@ -1863,6 +2435,8 @@ function frameBody(now) {
   statZoom.textContent = `${view.zoom.toFixed(2)}×`;
   statLearning.textContent = `${Math.round(measured.strengthen).toLocaleString()} / ${Math.round(measured.weaken).toLocaleString()}`;
   statFiring.textContent = `${Math.round(measured.fires).toLocaleString()}/s`;
+  statInhibition.textContent = `${measured.inhibition >= 0 ? '+' : ''}${measured.inhibition.toFixed(2)}/s`;
+  statInhibition.title = 'net strengthening of all inhibitory weights per second';
   statTime.textContent = `${simTime.toFixed(1)}s`;
   statFiring.title = `${perNeuron.toFixed(3)} per neuron`;
 }
@@ -1908,7 +2482,7 @@ async function init() {
   // device limits allow it, so the synapse buffer stays at or under 1 GiB.
   const synapseBytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize, 2 ** 30);
   maxSynapses = Math.floor(synapseBytes / 32);
-  neuronSlider.value = String(neuronsToSlider(50000));
+  applyQuery();
   updateNeuronLabel();
   device.addEventListener('uncapturederror', (event) => {
     console.error(event.error);
@@ -1989,10 +2563,10 @@ async function init() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
   });
   statsBuffer = device.createBuffer({
-    size: 32,
+    size: STATS_BYTES,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
   });
-  device.queue.writeBuffer(statsBuffer, 0, new Uint32Array(8));
+  device.queue.writeBuffer(statsBuffer, 0, new Uint32Array(STATS_BYTES / 4));
   stagingBuffer = device.createBuffer({
     size: 16,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
@@ -2005,12 +2579,40 @@ async function init() {
   rebuildNetwork();
   ready = true;
   statusEl.textContent = '';
+  if (query.get('experiment') === 'novelty') beginExperiment(experimentOptions());
   requestAnimationFrame((t) => {
     lastFrame = t;
     fpsStamp = t;
     statsSnapshot.t = t;
     frame(t);
   });
+}
+
+// URL options, for scripted runs: neurons, neighbors, scale (percent), speed,
+// seed, learning=0, homeostasis=none or a comma list of fatigue, inhibition,
+// compensate, and experiment=novelty with novel=<pattern> and steps=<per frame>.
+function applyQuery() {
+  if (query.has('neighbors')) neighborSlider.value = query.get('neighbors');
+  if (query.has('scale')) {
+    scaleSlider.value = query.get('scale');
+    scaleFraction = Number(scaleSlider.value) / 100;
+    scaleLabel.textContent = `${scaleSlider.value}%`;
+  }
+  if (query.has('speed')) speedSlider.value = query.get('speed');
+  neuronSlider.value = String(neuronsToSlider(Number(query.get('neurons')) || 50000));
+  if (query.get('learning') === '0') learning = false;
+  if (query.has('homeostasis')) {
+    const chosen = query.get('homeostasis').split(',');
+    for (const key of Object.keys(homeostasis)) homeostasis[key] = chosen.includes(key);
+  }
+  learnButton.classList.toggle('on', learning);
+  syncHomeostasisButtons();
+}
+
+function syncHomeostasisButtons() {
+  document.getElementById('fatigue').classList.toggle('on', homeostasis.fatigue);
+  document.getElementById('inhib-learning').classList.toggle('on', homeostasis.inhibition);
+  document.getElementById('compensate').classList.toggle('on', homeostasis.compensate);
 }
 
 function pointerPos(event) {
@@ -2093,7 +2695,24 @@ learnButton.addEventListener('click', () => {
 document.getElementById('inhibit').addEventListener('click', () => { weightDelta = -0.1; });
 document.getElementById('excite').addEventListener('click', () => { weightDelta = 0.1; });
 document.getElementById('sleep').addEventListener('click', () => { sleepRequested = true; });
-document.getElementById('reset').addEventListener('click', () => { rebuildRequested = true; });
+document.getElementById('reset').addEventListener('click', () => {
+  seed = newSeed();
+  rebuildRequested = true;
+});
+for (const [id, key] of [['fatigue', 'fatigue'], ['inhib-learning', 'inhibition'], ['compensate', 'compensate']]) {
+  document.getElementById(id).addEventListener('click', () => {
+    homeostasis[key] = !homeostasis[key];
+    syncHomeostasisButtons();
+  });
+}
+ringSelect.addEventListener('change', () => {
+  ringPattern = ringSelect.value;
+  ringPatternStart = simTime;
+});
+testButton.addEventListener('click', () => {
+  if (experiment || pendingExperiment) stopExperiment();
+  else startExperiment();
+});
 document.getElementById('fit').addEventListener('click', () => fitView());
 
 scaleSlider.addEventListener('input', () => {
@@ -2122,7 +2741,23 @@ window.__gpuNeurons = {
   get synapses() { return nSynapses; },
   get scaleFraction() { return scaleFraction; },
   get firing() { return nNeurons ? measured.fires / nNeurons : 0; },
-  get firingHistory() { collectRates(); return Array.from(graphRates); },
+  get firingHistory() { collectRates(fireSeries); return Array.from(fireSeries.rates); },
+  get learningHistory() { collectRates(learnSeries); return Array.from(learnSeries.rates); },
+  get seed() { return seed; },
+  get homeostasis() { return { ...homeostasis }; },
+  get outerRing() { return { ...outerRing }; },
+  get bandCells() { return Array.from(bandCells); },
+  get experiment() {
+    return experiment && { phase: experiment.phases[experiment.phase]?.name, step: experiment.step, bins: experiment.bins };
+  },
+  results: null,
+  startExperiment,
+  stopExperiment,
+  setRingPattern(name) {
+    ringPattern = PATTERNS[name] ? name : '';
+    ringSelect.value = ringPattern;
+    ringPatternStart = simTime;
+  },
   get learning() { return measured; },
   get fps() { return fps; },
   get time() { return simTime; },

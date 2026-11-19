@@ -27,6 +27,9 @@
   }
   #stage { flex: 1; min-width: 0; position: relative; }
   canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #labels { position: absolute; inset: 0; pointer-events: none; }
+  #add-controls { margin-bottom: 6px; }
+  #add-controls[hidden] { display: none; }
   #panel h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
   #panel .sub { margin: 3px 0 0; }
   #panel .sub a { color: #6d8eb0; font-size: 11px; text-decoration: none; }
@@ -179,8 +182,12 @@
       <option value="fast">Fast clockwise sweep</option>
       <option value="quadA">Quadrants 1 + 3</option>
       <option value="quadB">Quadrants 2 + 4</option>
+      <option value="add">Learn to Add</option>
     </select>
-    <div class="note">repeats every 2s at 200 px/s</div>
+    <div class="note" id="ring-note">repeats every 2s at 200 px/s</div>
+  </div>
+  <div class="buttons" id="add-controls" hidden>
+    <button type="button" id="teach">Teach</button>
   </div>
   <div class="buttons">
     <button type="button" id="novelty-test">Novelty test</button>
@@ -200,7 +207,7 @@
   <div class="stat"><span>Seed</span><b id="stat-seed">—</b></div>
   <div id="status"></div>
 </aside>
-<div id="stage"><canvas id="c"></canvas></div>
+<div id="stage"><canvas id="c"></canvas><canvas id="labels"></canvas></div>
 
 <script type="module">
 // GPU Neurons
@@ -285,7 +292,17 @@ const PARAMS_BYTES = 160;
 // Fires and LTP+LTD are also counted per band: band 0 is the outer ring and
 // bands 1-7 split the rest from the outside in.
 const BANDS = 8;
-const STATS_BYTES = 32 + BANDS * 8;
+// In Learn to Add the outer ring is split into one arc per digit, 0 at the
+// top and counting clockwise. Each frame counts the arc's cells fired within
+// the last refractory period; past DIGIT_LIT of the arc, the digit lights.
+const DIGITS = 10;
+const DIGIT_LIT = 0.5;
+const STATS_BYTES = 32 + BANDS * 8 + DIGITS * 4;
+const DIGITS_OFFSET = 32 + BANDS * 8;
+// The network is drawn this much smaller in Learn to Add, leaving room for the digits.
+const ADD_ZOOM = 0.82;
+// Between taught sums the teacher rests this many refractory periods.
+const SUM_REST = 3;
 // Outer-ring patterns repeat with this period at BASE_VELOCITY.
 const RING_PERIOD = 2.0;
 const PATTERNS = {
@@ -362,6 +379,21 @@ let ringPatternStart = 0;
 // The outer ring is the last run of cells; within it, index order is clockwise.
 let outerRing = { start: 0, count: 0 };
 let bandCells = new Uint32Array(BANDS);
+// Outer-ring cells of each digit's arc.
+let digitCells = Array.from({ length: DIGITS }, () => []);
+const add = {
+  on: false,
+  teaching: false,
+  // Digits waiting to be fired, each at a simulation time; -1 is a rest.
+  queue: [],
+  sum: '',
+  clicked: -1,
+  // Simulation time each digit was last fired as input, and wall time it last lit as output.
+  inputAt: new Float64Array(DIGITS).fill(-Infinity),
+  litAt: new Float64Array(DIGITS).fill(-Infinity)
+};
+const labelCanvas = document.getElementById('labels');
+const labelCtx = labelCanvas.getContext('2d');
 let experiment = null;
 let pendingExperiment = null;
 
@@ -467,6 +499,7 @@ struct Neuron {
   fatigue: f32,
   // Threshold raised by compensation for strengthened inputs.
   offset: f32,
+  // Low byte is the band; the next is 1 + the digit arc of an outer-ring cell, or 0.
   band: u32,
 }
 struct Synapse {
@@ -504,6 +537,8 @@ struct Stats {
   pad2: atomic<u32>,
   bandFires: array<atomic<u32>, ${BANDS}>,
   bandLearn: array<atomic<u32>, ${BANDS}>,
+  // Reset every frame: cells of each digit arc still recovering from a spike.
+  digits: array<atomic<u32>, ${DIGITS}>,
 }
 
 const FLAG_FATIGUE: u32 = ${FLAG_FATIGUE}u;
@@ -538,7 +573,7 @@ fn bumpWeight(s: u32, delta: f32, strengthen: bool) -> f32 {
     synapses[s] = syn;
     if (strengthen) { atomicAdd(&stats.strengthen, 1u); }
     else { atomicAdd(&stats.weaken, 1u); }
-    atomicAdd(&stats.bandLearn[neurons[syn.to].band], 1u);
+    atomicAdd(&stats.bandLearn[neurons[syn.to].band & 0xffu], 1u);
   }
   return w - oldW;
 }
@@ -615,10 +650,12 @@ fn updateNeurons(@builtin(global_invocation_id) gid: vec3<u32>) {
       n.fatigue = min(n.fatigue + params.fatigueStep, params.fatigueMax);
     }
     atomicAdd(&stats.fires, 1u);
-    atomicAdd(&stats.bandFires[n.band], 1u);
+    atomicAdd(&stats.bandFires[n.band & 0xffu], 1u);
   } else {
     n.charge = clamp(c - (params.leakage + n.fatigue * params.fatigueDrain) * params.dt, 0.0, th);
   }
+  let digit = n.band >> 8u;
+  if (digit > 0u && n.recovering > 0.0) { atomicAdd(&stats.digits[digit - 1u], 1u); }
   neurons[i] = n;
 }
 
@@ -1084,6 +1121,18 @@ function ringBands(n) {
     const band = depth === 0 ? 0 : Math.min(BANDS - 1, 1 + Math.floor(((depth - 1) * (BANDS - 1)) / Math.max(rings, 1)));
     for (let t = 0; t < size && idx < n; t++) bands[idx++] = band;
     bandCells[band] += size;
+  }
+  digitCells = Array.from({ length: DIGITS }, () => []);
+  const count = outerRing.count;
+  if (count) {
+    // The same angles layoutNeurons gives the outer ring, turned so 0 is at the top.
+    const angleOffset = ((rings - 1) % 2) * (Math.PI / count);
+    for (let j = 0; j < count; j++) {
+      const turn = (angleOffset + (Math.PI * 2 * j) / count + Math.PI / 2) / (Math.PI * 2);
+      const digit = Math.min(DIGITS - 1, Math.floor((turn - Math.floor(turn)) * DIGITS));
+      bands[outerRing.start + j] |= (digit + 1) << 8;
+      digitCells[digit].push(outerRing.start + j);
+    }
   }
   return bands;
 }
@@ -1659,7 +1708,7 @@ function updateNeuronLabel() {
 function fitView() {
   view.panX = canvas.width / 2;
   view.panY = canvas.height / 2;
-  view.zoom = 1;
+  view.zoom = add.on ? ADD_ZOOM : 1;
 }
 
 function screenToWorld(sx, sy) {
@@ -1798,9 +1847,139 @@ function patternPeriod(name) {
   return pattern ? RING_PERIOD / speedup() / (pattern.rate || 1) : 0;
 }
 
+function toScreen(p) {
+  return {
+    x: (p.x - view.panX) * view.zoom + canvas.width * 0.5,
+    y: (p.y - view.panY) * view.zoom + canvas.height * 0.5
+  };
+}
+
+// Screen position of each digit, a fixed distance outside the middle of its arc.
+function labelPositions() {
+  const dpr = window.devicePixelRatio || 1;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  return digitCells.map((cells) => {
+    let sx = 0, sy = 0, r = 0;
+    for (const i of cells) {
+      const dx = cpuX[i] - cx;
+      const dy = cpuY[i] - cy;
+      sx += dx;
+      sy += dy;
+      r += Math.hypot(dx, dy);
+    }
+    const len = Math.hypot(sx, sy) || 1;
+    const reach = r / Math.max(cells.length, 1) + (24 * dpr) / view.zoom;
+    return toScreen({ x: cx + (sx / len) * reach, y: cy + (sy / len) * reach });
+  });
+}
+
+function labelAt(x, y) {
+  if (!add.on || !cpuX) return -1;
+  const reach = 16 * (window.devicePixelRatio || 1);
+  const positions = labelPositions();
+  for (let d = 0; d < DIGITS; d++) {
+    if (Math.hypot(positions[d].x - x, positions[d].y - y) <= reach) return d;
+  }
+  return -1;
+}
+
+function setAddMode(on) {
+  if (add.on === on) return;
+  add.on = on;
+  if (!on) setTeaching(false);
+  document.getElementById('add-controls').hidden = !on;
+  document.getElementById('ring-note').textContent = on
+    ? 'click a digit to fire its arc; a digit lights gold when over half its arc fires within a refractory period'
+    : 'repeats every 2s at 200 px/s';
+  fitView();
+}
+
+function setTeaching(on) {
+  add.teaching = on;
+  add.queue = [];
+  add.sum = '';
+  document.getElementById('teach').classList.toggle('on', on);
+}
+
+// Queues a random sum: both addends and then each digit of the answer, one
+// refractory period apart, followed by a rest.
+function scheduleSum() {
+  const a = Math.floor(Math.random() * DIGITS);
+  const b = Math.floor(Math.random() * DIGITS);
+  const gap = REFRACTORY / speedup();
+  const digits = [a, b, ...String(a + b)].map(Number);
+  digits.forEach((digit, k) => add.queue.push({ digit, at: simTime + k * gap }));
+  add.queue.push({ digit: -1, at: simTime + (digits.length - 1 + SUM_REST) * gap });
+  add.sum = `${a} + ${b} = ${a + b}`;
+}
+
+function fireDigit(digit, into) {
+  for (const i of digitCells[digit]) into.push(i);
+  add.inputAt[digit] = simTime;
+}
+
+function gatherAdd(into) {
+  if (add.teaching && !add.queue.length) scheduleSum();
+  while (add.queue.length && add.queue[0].at <= simTime) {
+    const { digit } = add.queue.shift();
+    if (digit >= 0) fireDigit(digit, into);
+  }
+  if (add.clicked >= 0) {
+    fireDigit(add.clicked, into);
+    add.clicked = -1;
+  }
+}
+
+// Digits are faint until used. A teal ring marks a digit just fired as input,
+// fading over a refractory period; gold marks one the network is firing.
+function drawLabels() {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (labelCanvas.width !== w || labelCanvas.height !== h) {
+    labelCanvas.width = w;
+    labelCanvas.height = h;
+  }
+  labelCtx.clearRect(0, 0, w, h);
+  if (!add.on || !cpuX) return;
+  const dpr = window.devicePixelRatio || 1;
+  const now = performance.now();
+  const refractory = REFRACTORY / speedup();
+  labelCtx.textAlign = 'center';
+  labelCtx.textBaseline = 'middle';
+  labelCtx.font = `600 ${Math.round(18 * dpr)}px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif`;
+  labelPositions().forEach((p, d) => {
+    const input = Math.max(0, 1 - (simTime - add.inputAt[d]) / refractory);
+    const lit = Math.max(0, 1 - (now - add.litAt[d]) / 400);
+    if (input > 0) {
+      labelCtx.beginPath();
+      labelCtx.arc(p.x, p.y, 14 * dpr, 0, Math.PI * 2);
+      labelCtx.strokeStyle = `rgba(94, 200, 190, ${0.85 * input})`;
+      labelCtx.lineWidth = 2 * dpr;
+      labelCtx.stroke();
+    }
+    labelCtx.shadowBlur = 14 * dpr * lit;
+    labelCtx.shadowColor = 'rgba(240, 191, 82, 0.9)';
+    labelCtx.fillStyle = lit > 0
+      ? `rgba(240, 191, 82, ${0.3 + 0.7 * lit})`
+      : 'rgba(200, 215, 235, 0.3)';
+    labelCtx.fillText(String(d), p.x, p.y);
+    labelCtx.shadowBlur = 0;
+  });
+  if (add.sum) {
+    labelCtx.font = `500 ${Math.round(16 * dpr)}px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif`;
+    labelCtx.fillStyle = 'rgba(200, 215, 235, 0.55)';
+    labelCtx.fillText(add.sum, w / 2, 22 * dpr);
+  }
+}
+
 function updateHover() {
   hoverNeuron = 0xffffffff;
-  if (!pick || !pointer.inside || pointer.dragging) return;
+  // A digit takes the pointer, so its click fires the arc rather than a cell.
+  const overLabel = pointer.inside && !pointer.dragging && labelAt(pointer.x, pointer.y) >= 0;
+  if (overLabel) canvas.style.cursor = 'pointer';
+  else if (canvas.style.cursor === 'pointer') canvas.style.cursor = 'crosshair';
+  if (!pick || !pointer.inside || pointer.dragging || overLabel) return;
   const world = screenToWorld(pointer.x, pointer.y);
   const maxDist = Math.max(radius * 2.4, MIN_CELL_PX / view.zoom, 16 / view.zoom);
   const index = pick.nearest(world.x, world.y, maxDist);
@@ -1815,7 +1994,10 @@ function gatherStim(stepDt) {
     const t = simTime - ringPatternStart;
     ringPatternCells(ringPattern, t - stepDt, t, stimCells);
   }
-  if (pick && pointer.inside) {
+  const label = pointer.inside && !pointer.dragging ? labelAt(pointer.x, pointer.y) : -1;
+  if (label >= 0 && click) add.clicked = label;
+  if (add.on) gatherAdd(stimCells);
+  if (pick && pointer.inside && label < 0) {
     if (pointer.stimulating) gatherBrush(stimCells);
     // Hover only reveals dendrites. A click or a held button still fires the cell.
     else if (!pointer.dragging && hoverNeuron !== 0xffffffff && (click || pointer.down)) stimCells.push(hoverNeuron);
@@ -1981,6 +2163,11 @@ function readStats(sampleTime) {
     const strengthen = raw[1];
     const weaken = raw[2];
     const inhibition = raw[3];
+    const now = performance.now();
+    for (let d = 0; d < DIGITS; d++) {
+      const active = raw[DIGITS_OFFSET / 4 + d];
+      if (digitCells[d].length && active > DIGIT_LIT * digitCells[d].length) add.litAt[d] = now;
+    }
     stagingBuffer.unmap();
     statsPending = false;
     plotFires(fires, (strengthen + weaken) >>> 0, sampleTime);
@@ -2063,6 +2250,7 @@ function beginExperiment(options) {
   };
   ringPattern = '';
   ringSelect.value = '';
+  setAddMode(false);
   testButton.textContent = 'Stop test';
   testButton.classList.add('on');
   window.__gpuNeurons.results = null;
@@ -2399,6 +2587,7 @@ function frameBody(now) {
   device.queue.writeBuffer(paramsBuffer, 0, paramsCPU);
   // The first 16 bytes are the firing totals. Only the cull counters are reset.
   device.queue.writeBuffer(statsBuffer, 16, new Uint32Array(4));
+  device.queue.writeBuffer(statsBuffer, DIGITS_OFFSET, new Uint32Array(DIGITS));
 
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginComputePass();
@@ -2425,7 +2614,7 @@ function frameBody(now) {
   // The graph wants a reading every step; a paused net only needs the
   // once-a-second readout.
   const sampling = !statsPending && (doStep || experiment || now - statsSnapshot.t >= 1000);
-  if (sampling) encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, 16);
+  if (sampling) encoder.copyBufferToBuffer(statsBuffer, 0, stagingBuffer, 0, STATS_BYTES);
   device.queue.submit([encoder.finish()]);
   if (sampling) readStats(simTime);
 
@@ -2439,6 +2628,7 @@ function frameBody(now) {
   statInhibition.title = 'net strengthening of all inhibitory weights per second';
   statTime.textContent = `${simTime.toFixed(1)}s`;
   statFiring.title = `${perNeuron.toFixed(3)} per neuron`;
+  drawLabels();
 }
 
 function shaderErrorText(info) {
@@ -2568,7 +2758,7 @@ async function init() {
   });
   device.queue.writeBuffer(statsBuffer, 0, new Uint32Array(STATS_BYTES / 4));
   stagingBuffer = device.createBuffer({
-    size: 16,
+    size: STATS_BYTES,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
   });
   indirectBuffer = device.createBuffer({
@@ -2706,9 +2896,11 @@ for (const [id, key] of [['fatigue', 'fatigue'], ['inhib-learning', 'inhibition'
   });
 }
 ringSelect.addEventListener('change', () => {
-  ringPattern = ringSelect.value;
+  setAddMode(ringSelect.value === 'add');
+  ringPattern = PATTERNS[ringSelect.value] ? ringSelect.value : '';
   ringPatternStart = simTime;
 });
+document.getElementById('teach').addEventListener('click', () => setTeaching(!add.teaching));
 testButton.addEventListener('click', () => {
   if (experiment || pendingExperiment) stopExperiment();
   else startExperiment();
@@ -2754,10 +2946,21 @@ window.__gpuNeurons = {
   startExperiment,
   stopExperiment,
   setRingPattern(name) {
+    setAddMode(name === 'add');
     ringPattern = PATTERNS[name] ? name : '';
-    ringSelect.value = ringPattern;
+    ringSelect.value = add.on ? 'add' : ringPattern;
     ringPatternStart = simTime;
   },
+  get add() {
+    const now = performance.now();
+    return {
+      on: add.on, teaching: add.teaching, sum: add.sum,
+      arcCells: digitCells.map((cells) => cells.length),
+      lit: Array.from(add.litAt, (t) => now - t < 400)
+    };
+  },
+  teach(on) { setTeaching(!!on); },
+  fireDigit(digit) { add.clicked = digit; },
   get learning() { return measured; },
   get fps() { return fps; },
   get time() { return simTime; },
